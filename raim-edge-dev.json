@@ -1,6 +1,6 @@
 {
   "AWSTemplateFormatVersion": "2010-09-09",
-  "Description": "RAiM edge resources template v4. This version is aligned with the current imported resources after drift detection. It manages the existing API Gateway REST API, /chat resource, Cognito authorizer, POST method, API key, and usage plan.",
+  "Description": "RAiM edge resources template v5. This version adds the existing API Gateway UsagePlanKey association between the imported API key and usage plan.",
   "Parameters": {
     "ProjectName": {
       "Type": "String",
@@ -192,6 +192,20 @@
         "Quota": {
           "Limit": 10000,
           "Period": "MONTH"
+        }
+      }
+    },
+    "UsagePlanKey": {
+      "Type": "AWS::ApiGateway::UsagePlanKey",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "KeyId": {
+          "Ref": "EdgeOriginApiKey"
+        },
+        "KeyType": "API_KEY",
+        "UsagePlanId": {
+          "Ref": "UsagePlan"
         }
       }
     }
