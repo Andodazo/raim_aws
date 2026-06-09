@@ -1,0 +1,250 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "RAiM edge resources import template v3. This template is intended for CloudFormation resource import of existing API Gateway REST API, /chat resource, Cognito authorizer, POST method, API key, and usage plan. Outputs are intentionally omitted because CloudFormation resource import does not allow adding or modifying Outputs.",
+  "Parameters": {
+    "ProjectName": {
+      "Type": "String",
+      "Default": "RAiM"
+    },
+    "TeamName": {
+      "Type": "String",
+      "Default": "Sign"
+    },
+    "Environment": {
+      "Type": "String",
+      "Default": "dev",
+      "AllowedValues": [
+        "dev",
+        "stg",
+        "prod"
+      ]
+    },
+    "StageName": {
+      "Type": "String",
+      "Default": "dev"
+    },
+    "UserPoolArn": {
+      "Type": "String",
+      "Default": "arn:aws:cognito-idp:ap-northeast-1:990442281360:userpool/ap-northeast-1_OMFV9fgsG",
+      "Description": "Existing Cognito User Pool ARN used by the API Gateway authorizer."
+    }
+  },
+  "Resources": {
+    "RaimRestApi": {
+      "Type": "AWS::ApiGateway::RestApi",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "Name": "raim-api-dev",
+        "Description": "タイムアウトの延長を申請予定",
+        "EndpointConfiguration": {
+          "Types": [
+            "REGIONAL"
+          ],
+          "IpAddressType": "ipv4"
+        },
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": {
+              "Ref": "ProjectName"
+            }
+          },
+          {
+            "Key": "Team",
+            "Value": {
+              "Ref": "TeamName"
+            }
+          },
+          {
+            "Key": "Environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "manual"
+          },
+          {
+            "Key": "Purpose",
+            "Value": "api"
+          }
+        ]
+      }
+    },
+    "ChatResource": {
+      "Type": "AWS::ApiGateway::Resource",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "RestApiId": {
+          "Ref": "RaimRestApi"
+        },
+        "ParentId": {
+          "Fn::GetAtt": [
+            "RaimRestApi",
+            "RootResourceId"
+          ]
+        },
+        "PathPart": "chat"
+      }
+    },
+    "CognitoAuthorizer": {
+      "Type": "AWS::ApiGateway::Authorizer",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "Name": "raim-cognito-authorizer",
+        "RestApiId": {
+          "Ref": "RaimRestApi"
+        },
+        "Type": "COGNITO_USER_POOLS",
+        "IdentitySource": "method.request.header.Authorization",
+        "ProviderARNs": [
+          {
+            "Ref": "UserPoolArn"
+          }
+        ]
+      }
+    },
+    "ChatPostMethod": {
+      "Type": "AWS::ApiGateway::Method",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "RestApiId": {
+          "Ref": "RaimRestApi"
+        },
+        "ResourceId": {
+          "Ref": "ChatResource"
+        },
+        "HttpMethod": "POST",
+        "AuthorizationType": "COGNITO_USER_POOLS",
+        "AuthorizerId": {
+          "Ref": "CognitoAuthorizer"
+        },
+        "AuthorizationScopes": [
+          "openid"
+        ],
+        "ApiKeyRequired": true,
+        "OperationName": "PostChat",
+        "Integration": {
+          "Type": "MOCK",
+          "RequestTemplates": {
+            "application/json": "{\"statusCode\": 200}"
+          },
+          "IntegrationResponses": [
+            {
+              "StatusCode": 200,
+              "ResponseTemplates": {
+                "application/json": ""
+              }
+            }
+          ]
+        },
+        "MethodResponses": [
+          {
+            "StatusCode": 200,
+            "ResponseModels": {
+              "application/json": "Empty"
+            }
+          }
+        ]
+      }
+    },
+    "EdgeOriginApiKey": {
+      "Type": "AWS::ApiGateway::ApiKey",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "Name": "raim-key-dev",
+        "Description": "API key for CloudFront origin custom header to RAiM dev API",
+        "Enabled": true,
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": {
+              "Ref": "ProjectName"
+            }
+          },
+          {
+            "Key": "Team",
+            "Value": {
+              "Ref": "TeamName"
+            }
+          },
+          {
+            "Key": "Environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "manual"
+          },
+          {
+            "Key": "Purpose",
+            "Value": "edge-origin-auth"
+          }
+        ]
+      }
+    },
+    "UsagePlan": {
+      "Type": "AWS::ApiGateway::UsagePlan",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "UsagePlanName": "raim-usage-plan-dev",
+        "Description": "Usage plan for RAiM dev API through CloudFront",
+        "ApiStages": [
+          {
+            "ApiId": {
+              "Ref": "RaimRestApi"
+            },
+            "Stage": {
+              "Ref": "StageName"
+            }
+          }
+        ],
+        "Throttle": {
+          "RateLimit": 10,
+          "BurstLimit": 20
+        },
+        "Quota": {
+          "Limit": 10000,
+          "Period": "MONTH"
+        },
+        "Tags": [
+          {
+            "Key": "Project",
+            "Value": {
+              "Ref": "ProjectName"
+            }
+          },
+          {
+            "Key": "Team",
+            "Value": {
+              "Ref": "TeamName"
+            }
+          },
+          {
+            "Key": "Environment",
+            "Value": {
+              "Ref": "Environment"
+            }
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "manual"
+          },
+          {
+            "Key": "Purpose",
+            "Value": "api-usage-plan"
+          }
+        ]
+      }
+    }
+  }
+}
