@@ -234,6 +234,461 @@
           "Ref": "CurrentDeployment"
         }
       }
+    },
+    "CloudFrontDistribution": {
+      "UpdateReplacePolicy": "Retain",
+      "Type": "AWS::CloudFront::Distribution",
+      "DeletionPolicy": "Retain",
+      "Properties": {
+        "DistributionConfig": {
+          "Logging": {
+            "IncludeCookies": false,
+            "Bucket": "",
+            "Prefix": ""
+          },
+          "Comment": "for RAiM",
+          "DefaultRootObject": "",
+          "Origins": [
+            {
+              "ConnectionTimeout": 10,
+              "OriginAccessControlId": "",
+              "ConnectionAttempts": 3,
+              "OriginCustomHeaders": [
+                {
+                  "HeaderName": "x-api-key",
+                  "HeaderValue": "{{resolve:secretsmanager:raim/dev/cloudfront-origin:SecretString:CloudFrontOriginApiKey}}"
+                }
+              ],
+              "DomainName": "nqa57ts4di.execute-api.ap-northeast-1.amazonaws.com",
+              "OriginShield": {
+                "Enabled": false
+              },
+              "OriginPath": "/dev",
+              "Id": "nqa57ts4di.execute-api.ap-northeast-1.amazonaws.com-mpwafk0az4k",
+              "CustomOriginConfig": {
+                "IpAddressType": "ipv4",
+                "OriginReadTimeout": 30,
+                "HTTPSPort": 443,
+                "OriginKeepaliveTimeout": 5,
+                "OriginSSLProtocols": [
+                  "TLSv1.2"
+                ],
+                "HTTPPort": 80,
+                "OriginProtocolPolicy": "https-only"
+              }
+            }
+          ],
+          "ViewerCertificate": {
+            "CloudFrontDefaultCertificate": true
+          },
+          "PriceClass": "PriceClass_All",
+          "DefaultCacheBehavior": {
+            "Compress": true,
+            "FunctionAssociations": [],
+            "LambdaFunctionAssociations": [],
+            "TargetOriginId": "nqa57ts4di.execute-api.ap-northeast-1.amazonaws.com-mpwafk0az4k",
+            "ViewerProtocolPolicy": "redirect-to-https",
+            "GrpcConfig": {
+              "Enabled": false
+            },
+            "TrustedSigners": [],
+            "FieldLevelEncryptionId": "",
+            "TrustedKeyGroups": [],
+            "AllowedMethods": [
+              "HEAD",
+              "DELETE",
+              "POST",
+              "GET",
+              "OPTIONS",
+              "PUT",
+              "PATCH"
+            ],
+            "CachedMethods": [
+              "HEAD",
+              "GET"
+            ],
+            "SmoothStreaming": false,
+            "OriginRequestPolicyId": "b689b0a8-53d0-40ab-baf2-68738e2966ac",
+            "CachePolicyId": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad"
+          },
+          "Staging": false,
+          "CustomErrorResponses": [],
+          "ContinuousDeploymentPolicyId": "",
+          "OriginGroups": {
+            "Quantity": 0,
+            "Items": []
+          },
+          "Enabled": true,
+          "Aliases": [],
+          "IPV6Enabled": true,
+          "WebACLId": "arn:aws:wafv2:us-east-1:990442281360:global/webacl/CreatedByCloudFront-0551704e/4ae51ded-2520-428e-bc93-ab4ef2f082ad",
+          "HttpVersion": "http2",
+          "Restrictions": {
+            "GeoRestriction": {
+              "Locations": [],
+              "RestrictionType": "none"
+            }
+          },
+          "CacheBehaviors": []
+        },
+        "Tags": [
+          {
+            "Value": "Sign",
+            "Key": "Team"
+          },
+          {
+            "Value": "raim-cloudfront-dev",
+            "Key": "Name"
+          }
+        ]
+      }
+    },
+    "CognitoUserPool": {
+      "UpdateReplacePolicy": "Retain",
+      "Type": "AWS::Cognito::UserPool",
+      "DeletionPolicy": "Retain",
+      "Properties": {
+        "UserPoolTags": {
+          "Team": "Sign"
+        },
+        "Policies": {
+          "PasswordPolicy": {
+            "TemporaryPasswordValidityDays": 7,
+            "RequireUppercase": true,
+            "RequireNumbers": true,
+            "RequireLowercase": true,
+            "MinimumLength": 8,
+            "RequireSymbols": true
+          },
+          "SignInPolicy": {
+            "AllowedFirstAuthFactors": [
+              "PASSWORD"
+            ]
+          }
+        },
+        "VerificationMessageTemplate": {
+          "DefaultEmailOption": "CONFIRM_WITH_CODE"
+        },
+        "MfaConfiguration": "OFF",
+        "Schema": [
+          {
+            "DeveloperOnlyAttribute": false,
+            "Mutable": true,
+            "AttributeDataType": "String",
+            "StringAttributeConstraints": {
+              "MaxLength": "2048",
+              "MinLength": "0"
+            },
+            "Required": false,
+            "Name": "profile"
+          },
+          {
+            "DeveloperOnlyAttribute": false,
+            "Mutable": true,
+            "AttributeDataType": "String",
+            "StringAttributeConstraints": {
+              "MaxLength": "2048",
+              "MinLength": "0"
+            },
+            "Required": false,
+            "Name": "address"
+          },
+          {
+            "DeveloperOnlyAttribute": false,
+            "Mutable": true,
+            "AttributeDataType": "String",
+            "StringAttributeConstraints": {
+              "MaxLength": "10",
+              "MinLength": "10"
+            },
+            "Required": false,
+            "Name": "birthdate"
+          },
+          {
+            "DeveloperOnlyAttribute": false,
+            "Mutable": true,
+            "AttributeDataType": "String",
+            "StringAttributeConstraints": {
+              "MaxLength": "2048",
+              "MinLength": "0"
+            },
+            "Required": false,
+            "Name": "gender"
+          },
+          {
+            "DeveloperOnlyAttribute": false,
+            "Mutable": true,
+            "AttributeDataType": "String",
+            "StringAttributeConstraints": {
+              "MaxLength": "2048",
+              "MinLength": "0"
+            },
+            "Required": false,
+            "Name": "preferred_username"
+          },
+          {
+            "DeveloperOnlyAttribute": false,
+            "Mutable": true,
+            "AttributeDataType": "Number",
+            "Required": false,
+            "NumberAttributeConstraints": {
+              "MinValue": "0"
+            },
+            "Name": "updated_at"
+          },
+          {
+            "DeveloperOnlyAttribute": false,
+            "Mutable": true,
+            "AttributeDataType": "String",
+            "StringAttributeConstraints": {
+              "MaxLength": "2048",
+              "MinLength": "0"
+            },
+            "Required": false,
+            "Name": "website"
+          },
+          {
+            "DeveloperOnlyAttribute": false,
+            "Mutable": true,
+            "AttributeDataType": "String",
+            "StringAttributeConstraints": {
+              "MaxLength": "2048",
+              "MinLength": "0"
+            },
+            "Required": false,
+            "Name": "picture"
+          },
+          {
+            "DeveloperOnlyAttribute": false,
+            "Mutable": true,
+            "AttributeDataType": "String",
+            "StringAttributeConstraints": {},
+            "Required": false,
+            "Name": "identities"
+          },
+          {
+            "DeveloperOnlyAttribute": false,
+            "Mutable": false,
+            "AttributeDataType": "String",
+            "StringAttributeConstraints": {
+              "MaxLength": "2048",
+              "MinLength": "1"
+            },
+            "Required": true,
+            "Name": "sub"
+          },
+          {
+            "DeveloperOnlyAttribute": false,
+            "Mutable": true,
+            "AttributeDataType": "String",
+            "StringAttributeConstraints": {
+              "MaxLength": "2048",
+              "MinLength": "0"
+            },
+            "Required": false,
+            "Name": "phone_number"
+          },
+          {
+            "DeveloperOnlyAttribute": false,
+            "Mutable": true,
+            "AttributeDataType": "Boolean",
+            "Required": false,
+            "Name": "phone_number_verified"
+          },
+          {
+            "DeveloperOnlyAttribute": false,
+            "Mutable": true,
+            "AttributeDataType": "String",
+            "StringAttributeConstraints": {
+              "MaxLength": "2048",
+              "MinLength": "0"
+            },
+            "Required": false,
+            "Name": "zoneinfo"
+          },
+          {
+            "DeveloperOnlyAttribute": false,
+            "Mutable": true,
+            "AttributeDataType": "String",
+            "StringAttributeConstraints": {
+              "MaxLength": "2048",
+              "MinLength": "0"
+            },
+            "Required": false,
+            "Name": "locale"
+          },
+          {
+            "DeveloperOnlyAttribute": false,
+            "Mutable": true,
+            "AttributeDataType": "String",
+            "StringAttributeConstraints": {
+              "MaxLength": "2048",
+              "MinLength": "0"
+            },
+            "Required": false,
+            "Name": "email"
+          },
+          {
+            "DeveloperOnlyAttribute": false,
+            "Mutable": true,
+            "AttributeDataType": "Boolean",
+            "Required": false,
+            "Name": "email_verified"
+          },
+          {
+            "DeveloperOnlyAttribute": false,
+            "Mutable": true,
+            "AttributeDataType": "String",
+            "StringAttributeConstraints": {
+              "MaxLength": "2048",
+              "MinLength": "0"
+            },
+            "Required": false,
+            "Name": "given_name"
+          },
+          {
+            "DeveloperOnlyAttribute": false,
+            "Mutable": true,
+            "AttributeDataType": "String",
+            "StringAttributeConstraints": {
+              "MaxLength": "2048",
+              "MinLength": "0"
+            },
+            "Required": false,
+            "Name": "family_name"
+          },
+          {
+            "DeveloperOnlyAttribute": false,
+            "Mutable": true,
+            "AttributeDataType": "String",
+            "StringAttributeConstraints": {
+              "MaxLength": "2048",
+              "MinLength": "0"
+            },
+            "Required": false,
+            "Name": "middle_name"
+          },
+          {
+            "DeveloperOnlyAttribute": false,
+            "Mutable": true,
+            "AttributeDataType": "String",
+            "StringAttributeConstraints": {
+              "MaxLength": "2048",
+              "MinLength": "0"
+            },
+            "Required": false,
+            "Name": "name"
+          },
+          {
+            "DeveloperOnlyAttribute": false,
+            "Mutable": true,
+            "AttributeDataType": "String",
+            "StringAttributeConstraints": {
+              "MaxLength": "2048",
+              "MinLength": "0"
+            },
+            "Required": false,
+            "Name": "nickname"
+          }
+        ],
+        "AdminCreateUserConfig": {
+          "UnusedAccountValidityDays": 7,
+          "AllowAdminCreateUserOnly": false
+        },
+        "UserPoolTier": "ESSENTIALS",
+        "DeletionProtection": "ACTIVE",
+        "UsernameConfiguration": {
+          "CaseSensitive": false
+        },
+        "UserPoolName": "raim-userpool-dev",
+        "UserAttributeUpdateSettings": {
+          "AttributesRequireVerificationBeforeUpdate": []
+        },
+        "EmailConfiguration": {
+          "EmailSendingAccount": "COGNITO_DEFAULT"
+        },
+        "AliasAttributes": [],
+        "LambdaConfig": {},
+        "UsernameAttributes": [
+          "email"
+        ],
+        "AutoVerifiedAttributes": [
+          "email"
+        ],
+        "AccountRecoverySetting": {
+          "RecoveryMechanisms": [
+            {
+              "Priority": 1,
+              "Name": "verified_email"
+            },
+            {
+              "Priority": 2,
+              "Name": "verified_phone_number"
+            }
+          ]
+        }
+      }
+    },
+    "CognitoUserPoolClient": {
+      "UpdateReplacePolicy": "Retain",
+      "Type": "AWS::Cognito::UserPoolClient",
+      "DeletionPolicy": "Retain",
+      "Properties": {
+        "GenerateSecret": false,
+        "CallbackURLs": [
+          "http://localhost:3000/callback",
+          "raim://callback"
+        ],
+        "EnablePropagateAdditionalUserContextData": false,
+        "IdTokenValidity": 60,
+        "AuthSessionValidity": 3,
+        "AllowedOAuthScopes": [
+          "email",
+          "openid",
+          "phone"
+        ],
+        "TokenValidityUnits": {
+          "IdToken": "minutes",
+          "AccessToken": "minutes",
+          "RefreshToken": "days"
+        },
+        "ReadAttributes": [],
+        "AllowedOAuthFlowsUserPoolClient": true,
+        "SupportedIdentityProviders": [
+          "COGNITO"
+        ],
+        "ClientName": "RAiM-mobile-dev",
+        "UserPoolId": "ap-northeast-1_OMFV9fgsG",
+        "AllowedOAuthFlows": [
+          "code"
+        ],
+        "ExplicitAuthFlows": [
+          "ALLOW_REFRESH_TOKEN_AUTH",
+          "ALLOW_USER_AUTH",
+          "ALLOW_USER_SRP_AUTH"
+        ],
+        "LogoutURLs": [],
+        "AccessTokenValidity": 60,
+        "RefreshTokenValidity": 5,
+        "WriteAttributes": [],
+        "PreventUserExistenceErrors": "ENABLED",
+        "EnableTokenRevocation": true
+      }
+    },
+    "SecretsManagerSecret": {
+      "UpdateReplacePolicy": "Retain",
+      "Type": "AWS::SecretsManager::Secret",
+      "DeletionPolicy": "Retain",
+      "Properties": {
+        "ReplicaRegions": [],
+        "Tags": [
+          {
+            "Value": "Sign",
+            "Key": "Team"
+          }
+        ],
+        "Name": "raim/dev/cloudfront-origin"
+      }
     }
   }
 }
