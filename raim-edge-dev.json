@@ -1,6 +1,6 @@
 {
   "AWSTemplateFormatVersion": "2010-09-09",
-  "Description": "RAiM edge resources template v6. This version adds the existing API Gateway dev stage and the deployment currently associated with that stage.",
+  "Description": "RAiM edge resources template v10. This version syncs the imported Google IdP and enables Google on the Cognito user pool client.",
   "Parameters": {
     "ProjectName": {
       "Type": "String",
@@ -27,6 +27,15 @@
       "Type": "String",
       "Default": "arn:aws:cognito-idp:ap-northeast-1:990442281360:userpool/ap-northeast-1_OMFV9fgsG",
       "Description": "Existing Cognito User Pool ARN used by the API Gateway authorizer."
+    },
+    "GoogleOAuthClientId": {
+      "Type": "String",
+      "Description": "Existing Google OAuth client ID used by the Cognito Google identity provider."
+    },
+    "GoogleOAuthSecretName": {
+      "Type": "String",
+      "Default": "raim/dev/google-oauth",
+      "Description": "Secrets Manager secret name containing the Google OAuth client secret under key 'client_secret'."
     }
   },
   "Resources": {
@@ -655,7 +664,8 @@
         "ReadAttributes": [],
         "AllowedOAuthFlowsUserPoolClient": true,
         "SupportedIdentityProviders": [
-          "COGNITO"
+          "COGNITO",
+          "Google"
         ],
         "ClientName": "RAiM-mobile-dev",
         "UserPoolId": "ap-northeast-1_OMFV9fgsG",
@@ -688,6 +698,43 @@
           }
         ],
         "Name": "raim/dev/cloudfront-origin"
+      }
+    },
+    "CognitoUserPoolDomain": {
+      "Type": "AWS::Cognito::UserPoolDomain",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "Domain": "ap-northeast-1omfv9fgsg",
+        "ManagedLoginVersion": 2,
+        "UserPoolId": {
+          "Ref": "CognitoUserPool"
+        }
+      }
+    },
+    "CognitoGoogleIdentityProvider": {
+      "Type": "AWS::Cognito::UserPoolIdentityProvider",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "UserPoolId": {
+          "Ref": "CognitoUserPool"
+        },
+        "ProviderName": "Google",
+        "ProviderType": "Google",
+        "ProviderDetails": {
+          "client_id": {
+            "Ref": "GoogleOAuthClientId"
+          },
+          "client_secret": {
+            "Fn::Sub": "{{resolve:secretsmanager:${GoogleOAuthSecretName}:SecretString:client_secret}}"
+          },
+          "authorize_scopes": "openid email profile"
+        },
+        "AttributeMapping": {
+          "email": "email",
+          "name": "name"
+        }
       }
     }
   }
