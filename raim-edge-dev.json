@@ -1,6 +1,6 @@
 {
   "AWSTemplateFormatVersion": "2010-09-09",
-  "Description": "RAiM edge resources template v5. This version adds the existing API Gateway UsagePlanKey association between the imported API key and usage plan.",
+  "Description": "RAiM edge resources template v6. This version adds the existing API Gateway dev stage and the deployment currently associated with that stage.",
   "Parameters": {
     "ProjectName": {
       "Type": "String",
@@ -206,6 +206,32 @@
         "KeyType": "API_KEY",
         "UsagePlanId": {
           "Ref": "UsagePlan"
+        }
+      }
+    },
+    "CurrentDeployment": {
+      "Type": "AWS::ApiGateway::Deployment",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "RestApiId": {
+          "Ref": "RaimRestApi"
+        }
+      }
+    },
+    "DevStage": {
+      "Type": "AWS::ApiGateway::Stage",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "RestApiId": {
+          "Ref": "RaimRestApi"
+        },
+        "StageName": {
+          "Ref": "StageName"
+        },
+        "DeploymentId": {
+          "Ref": "CurrentDeployment"
         }
       }
     }
