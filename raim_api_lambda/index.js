@@ -49,6 +49,32 @@ function createResponse(statusCode, body) {
   };
 }
 
+/**
+ * 保存済みのMantle response_idを使えるか判定する。
+ *
+ * lastResponseId があり、
+ * lastResponseExpiresAt が現在時刻より未来なら true。
+ */
+function canUsePreviousResponseId(session) {
+  if (!session) return false;
+
+  if (!session.lastResponseId) {
+    return false;
+  }
+
+  if (!session.lastResponseExpiresAt) {
+    return false;
+  }
+
+  const expiresAt = new Date(session.lastResponseExpiresAt).getTime();
+
+  if (Number.isNaN(expiresAt)) {
+    return false;
+  }
+
+  return Date.now() < expiresAt;
+}
+
 exports.handler = async (event) => {
   console.log('event:', JSON.stringify(event));
 
@@ -83,14 +109,30 @@ exports.handler = async (event) => {
 
     const session = await getOrCreateUserSession(sub);
 
-    return createResponse(
-      200,
-      createChat({
-        text: `入力チェックOK。UserSessionも取得しました。text: ${validation.message.text}`,
+    const usePreviousResponseId = canUsePreviousResponseId(session);
+
+    return createResponse(200, {
+      ...createChat({
+        text: `入力チェックOK。Mantle用UserSessionを取得しました。text: ${validation.message.text}`,
         emotion: 'neutral',
         intensity: 0.5,
-      })
-    );
+      }),
+      debug: {
+        sub,
+        currentSessionId: session.currentSessionId,
+        isNew: session.isNew,
+
+        // Mantle response_id管理
+        lastResponseId: session.lastResponseId || '',
+        lastResponseCreatedAt: session.lastResponseCreatedAt || '',
+        lastResponseExpiresAt: session.lastResponseExpiresAt || '',
+        usePreviousResponseId,
+
+        // response_idが使えないときにMantleへ渡す予定
+        hasSessionSummary: Boolean(session.sessionSummary),
+        promptVersion: session.promptVersion || '',
+      },
+    });
   } catch (error) {
     console.error('error:', error);
 

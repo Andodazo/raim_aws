@@ -10,7 +10,7 @@
 // 現在の主な用途:
 // - クライアントからの上りリクエスト { text, images } の検証
 // - Lambdaからクライアントへ返す chat / error JSON の作成
-// - Bedrock Agent / LLM が返したJSON文字列の正規化
+// - Mantle / LLM が返したJSON文字列の正規化
 //
 // 【現在のLambda REST APIで使う主な関数】
 // - validateUpstream()
@@ -83,13 +83,13 @@ const EMOTIONS = Object.freeze({
 //
 // Lambda内で発生したエラーを、クライアントが扱いやすい形に分類する。
 // 現時点では INVALID_INPUT / INTERNAL_ERROR を主に使用する。
-// Bedrock Agent / Embedding 実装後に LLM_ERROR / EMBED_ERROR を使用する。
+// Mantle / Embedding 実装後に LLM_ERROR / EMBED_ERROR を使用する。
 
 const ERROR_CODES = Object.freeze({
   INVALID_INPUT: 'INVALID_INPUT',
   INTERNAL_ERROR: 'INTERNAL_ERROR',
 
-  // Bedrock / Embedding 実装後に使用予定
+  // Mantle / Embedding 実装後に使用予定
   LLM_TIMEOUT: 'LLM_TIMEOUT',
   LLM_ERROR: 'LLM_ERROR',
   EMBED_ERROR: 'EMBED_ERROR',
@@ -109,9 +109,17 @@ const ERROR_CODES = Object.freeze({
 // マルチモーダル制約値
 // ─────────────────────────────────────────────
 //
-// images は将来的に画像入力を扱うためのフィールド。
-// 現時点では text のみでも動作し、images は省略または空配列でよい。
-// 画像対応時は、Base64文字列と media_type を検証する。
+// images は、ユーザーが送信した画像をMantleへ渡すためのフィールド。
+// 画像Embeddingや画像Scene選択には使用しない。
+// Scene選択は text のEmbeddingのみで行う。
+//
+// Lambdaでは、Mantleへ渡す前に以下を検証する。
+// - Base64文字列か
+// - media_type が対応形式か
+// - 画像枚数が上限以内か
+// - 画像合計サイズが上限以内か
+//
+// textのみでも動作し、images は省略または空配列でもよい。
 
 const SUPPORTED_IMAGE_TYPES = Object.freeze([
   'image/jpeg',
@@ -239,11 +247,11 @@ function createSessionStart({ sessionId }) {
 */
 
 // ─────────────────────────────────────────────
-// LLM / Bedrock Agent 応答の正規化ユーティリティ
+// Mantle / LLM 応答の正規化ユーティリティ
 // ─────────────────────────────────────────────
 
 /**
- * Bedrock Agent / LLM が返す生の応答文字列を chat メッセージに整える。
+ * Mantle / LLM が返す生の応答文字列を chat メッセージに整える。
  *
  * 想定するLLM応答:
  * {
@@ -322,7 +330,11 @@ function normalizeLLMOutput(rawLLMOutput) {
  *
  * images は省略可能。
  * textのみのリクエストはOK。
- * 画像のみのリクエストも将来的に許容する。
+ * 画像のみのリクエストも許容する。
+ *
+ * 画像が含まれる場合、Lambdaでは画像Embeddingを行わない。
+ * 画像は validateUpstream() で形式・サイズを検証した後、
+ * prompt-builder / mantle-client 側でMantleへ渡す。
  *
  * ただし、以下はNG:
  * - bodyがオブジェクトではない
