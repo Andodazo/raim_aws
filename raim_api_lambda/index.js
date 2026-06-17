@@ -16,23 +16,28 @@
 // 6. DynamoDB の Scene / Few-shot 定義を取得する
 // 7. Titanなしの仮実装として、キーワードベースでSceneを選択する
 // 8. prompt-builder.js でMantleへ渡すinputを組み立てる
-// 9. 現時点では Mantle にはまだアクセスせず、debug情報を返す
+// 9. mantle-client.js のmock実装を呼び出す
+// 10. response-validator.js でMantle想定返答を chat JSON に正規化する
+// 11. mock response_id をDynamoDBへ保存する
+// 12. クライアントへ chat JSON を返す
 //
 // 今後追加する予定:
-// - Mantle Clientの実装
-// - Mantle Responses API 呼び出し
-// - Mantleから返った response_id のDynamoDB保存
-// - Mantle返答の正規化
+// - Mantle Clientをmockからrealに差し替え
+// - Mantle Responses API 本番呼び出し
+// - Titan Embedding によるScene選択
 // - 本番向けにdebugを削除
 //
 // ==============================================================================
 
-const { getOrCreateUserSession } = require('./lib/user-session-store');
+const {
+  getOrCreateUserSession,
+  updateMantleResponseState,
+} = require('./lib/user-session-store');
 
 const {
-  createChat,
   createError,
   ERROR_CODES,
+  MESSAGE_TYPES,
   validateUpstream,
 } = require('./lib/types');
 
@@ -54,6 +59,16 @@ const {
   buildMantleInput,
   summarizeMantleInput,
 } = require('./lib/prompt-builder');
+
+const {
+  createMantleResponse,
+  summarizeMantleResponse,
+} = require('./lib/mantle-client');
+
+const {
+  normalizeMantleOutput,
+  summarizeValidatedResponse,
+} = require('./lib/response-validator');
 
 // ─────────────────────────────────────────────
 // Cognito sub 取得
@@ -144,6 +159,33 @@ function createResponse(statusCode, body) {
 }
 
 // ─────────────────────────────────────────────
+// クライアント返却用の出力整形
+// ─────────────────────────────────────────────
+//
+// response-validator.js は、将来の履歴保存用に _imageDescription などの
+// 内部フィールドを持つ可能性がある。
+//
+// ただし、Flutter / Unity クライアントへ返すJSONには、
+// 原則として内部フィールドを含めない。
+// そのため、レスポンス直前で _ から始まる内部フィールドを削除する。
+
+function removeInternalFields(output) {
+  if (!output || typeof output !== 'object') {
+    return output;
+  }
+
+  const result = { ...output };
+
+  for (const key of Object.keys(result)) {
+    if (key.startsWith('_')) {
+      delete result[key];
+    }
+  }
+
+  return result;
+}
+
+// ─────────────────────────────────────────────
 // Lambda Handler
 // ─────────────────────────────────────────────
 //
@@ -167,10 +209,16 @@ function createResponse(statusCode, body) {
 // ↓
 // prompt-builder.js で Mantle input を構築
 // ↓
+// mantle-client.js のmockを呼ぶ
+// ↓
+// response-validator.js で Mantle想定返答を chat JSON に整える
+// ↓
+// mock response_id をDynamoDBへ保存
+// ↓
 // chat JSON + debug情報を返却
 //
-// Mantle本体にはまだアクセスしない。
-// 次の段階で mantle-client.js を追加する。
+// 本物のMantleにはまだアクセスしない。
+// mantle-client.js の MANTLE_MODE=mock が前提。
 
 exports.handler = async (event) => {
   console.log('event:', JSON.stringify(event));
@@ -326,10 +374,6 @@ exports.handler = async (event) => {
     //
     // 画像がある場合:
     //   画像Embeddingは行わず、input_image としてMantleへ渡すための形に整える。
-    //
-    // この段階ではMantleへ送信せず、debugに概要だけ出す。
-    // Base64画像やプロンプト全文をdebugに返すと大きすぎるため、
-    // summarizeMantleInput() で件数やmodeだけを返す。
 
     const mantleInput = buildMantleInput({
       userText,
@@ -342,36 +386,124 @@ exports.handler = async (event) => {
     const mantleInputSummary = summarizeMantleInput(mantleInput);
 
     // ─────────────────────────────────────────
-    // 9. 現時点ではMantle未接続のため、確認用レスポンスを返す
+    // 9. Mantle Client 呼び出し
     // ─────────────────────────────────────────
     //
-    // 本来はこの後に以下を行う予定:
-    // - mantle-clientでMantle Responses API呼び出し
-    // - Mantle返答をnormalize
-    // - response_idをDynamoDBへ保存
+    // 現時点では MANTLE_MODE=mock のため、本物のMantleにはアクセスしない。
     //
-    // 今は、UserSession / response_id判定 / Scene読み取り / Scene選択 /
-    // Mantle input構築確認のため debug を返す。
+    // createMantleResponse() は以下を返す:
+    // - responseId: mock-resp-...
+    // - rawText: Mantleが返す想定のJSON文字列
+    // - createdAt: response_idを受け取った時刻
     //
-    // 本番ではdebugは返さない。
+    // previousResponseId:
+    //   保存済みresponse_idが有効な場合だけ渡す。
+    //   無効な場合は空文字にする。
+
+    const previousResponseId = mantleSessionState.usePreviousResponseId
+      ? mantleSessionState.previousResponseId
+      : '';
+
+    const mantleResponse = await createMantleResponse({
+      mantleInput,
+      previousResponseId,
+      store: true,
+    });
+
+    const mantleResponseSummary = summarizeMantleResponse(mantleResponse);
+
+    // ─────────────────────────────────────────
+    // 10. Mantle返答の正規化
+    // ─────────────────────────────────────────
+    //
+    // mantleResponse.rawText は、Mantleが返した想定の文字列。
+    //
+    // 期待形式:
+    // {
+    //   "text": "返答本文",
+    //   "emotion": "neutral",
+    //   "intensity": 0.5
+    // }
+    //
+    // response-validator.js の normalizeMantleOutput() で、
+    // クライアント向けの chat JSON に整える。
+    //
+    // normalizeMantleOutput() は、以下も補正する。
+    // - Markdownコードフェンス
+    // - JSON前後の余分な文章
+    // - 不正なemotion
+    // - 文字列のintensity
+    // - 範囲外のintensity
+    // - 空text
+
+    const validatedOutput = normalizeMantleOutput(mantleResponse.rawText);
+    const validatedOutputSummary = summarizeValidatedResponse(validatedOutput);
+
+    if (validatedOutput.type === MESSAGE_TYPES.ERROR) {
+      return createResponse(502, {
+        ...validatedOutput,
+        debug: {
+          mantleResponse: mantleResponseSummary,
+          validatedResponse: validatedOutputSummary,
+        },
+      });
+    }
+
+    // ─────────────────────────────────────────
+    // 11. response_id をDynamoDBへ保存
+    // ─────────────────────────────────────────
+    //
+    // 本物のMantleでは、response_id はMantle側が生成する。
+    // 現在はmockなので mock-resp-... が入る。
+    //
+    // updateMantleResponseState() は以下を保存する。
+    // - lastResponseId
+    // - lastResponseCreatedAt
+    // - lastResponseExpiresAt
+    //
+    // lastResponseExpiresAt は user-session-store.js 側で
+    // createdAt + 29日として計算する。
+    //
+    // 注意:
+    //   Mantle出力が壊れていて validatedOutput が error だった場合は、
+    //   上で502を返しているため response_id は保存しない。
+
+    const updatedSession = await updateMantleResponseState(sub, {
+      responseId: mantleResponse.responseId,
+      createdAt: mantleResponse.createdAt,
+    });
+
+    // ─────────────────────────────────────────
+    // 12. クライアントへレスポンス返却
+    // ─────────────────────────────────────────
+    //
+    // 本来クライアントに必要なのは clientOutput のみ。
+    //
+    // debug は開発中の確認用。
+    // 本番ではdebugを返さないようにする。
+    //
+    // _imageDescription などの内部フィールドは、
+    // 将来の履歴保存用であり、クライアントには返さない。
+
+    const clientOutput = removeInternalFields(validatedOutput);
 
     return createResponse(200, {
-      ...createChat({
-        text: `入力チェックOK。Scene「${sceneSelection.sceneId}」でMantle inputを作成しました。text: ${userText}`,
-        emotion: 'neutral',
-        intensity: 0.5,
-      }),
+      ...clientOutput,
       debug: {
         sub,
         currentSessionId: session.currentSessionId,
         isNew: session.isNew,
 
-        // Mantle response_id 管理
-        lastResponseId: mantleSessionState.lastResponseId,
-        lastResponseCreatedAt: mantleSessionState.lastResponseCreatedAt,
-        lastResponseExpiresAt: mantleSessionState.lastResponseExpiresAt,
+        // Mantle response_id 管理: 呼び出し前の状態
+        previousLastResponseId: mantleSessionState.lastResponseId,
+        previousLastResponseExpiresAt: mantleSessionState.lastResponseExpiresAt,
         usePreviousResponseId: mantleSessionState.usePreviousResponseId,
-        previousResponseId: mantleSessionState.previousResponseId,
+        previousResponseId,
+
+        // Mantle response_id 管理: 今回保存した状態
+        savedLastResponseId: updatedSession.lastResponseId || '',
+        savedLastResponseCreatedAt: updatedSession.lastResponseCreatedAt || '',
+        savedLastResponseExpiresAt: updatedSession.lastResponseExpiresAt || '',
 
         // response_id が使えないときにMantleへ渡す予定の復旧用情報
         hasSessionSummary: mantleSessionState.hasSessionSummary,
@@ -386,6 +518,12 @@ exports.handler = async (event) => {
 
         // Mantle input 構築確認
         mantleInput: mantleInputSummary,
+
+        // Mantle mock response 確認
+        mantleResponse: mantleResponseSummary,
+
+        // response-validator.js による正規化結果
+        validatedResponse: validatedOutputSummary,
       },
     });
   } catch (error) {
@@ -399,6 +537,9 @@ exports.handler = async (event) => {
     // - DynamoDB UserSessionテーブルへのアクセスで例外
     // - DynamoDB Sceneテーブルへのアクセスで例外
     // - prompt-builder.js の実装エラー
+    // - mantle-client.js の実装エラー
+    // - response-validator.js の実装エラー
+    // - response_id保存時のDynamoDBエラー
     // - 想定外の実装エラー
     //
     // createError() は NODE_ENV=production の場合、
