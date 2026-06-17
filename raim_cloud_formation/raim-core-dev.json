@@ -1,0 +1,197 @@
+{
+  "Metadata": {
+    "AWSToolsMetrics": {
+      "IaC_Generator": "arn:aws:cloudformation:ap-northeast-1:990442281360:generatedTemplate/33f71a13-3eba-41b5-a33a-f015f36b7aef"
+    }
+  },
+  "Parameters": {
+    "LambdaFunctionRAiMAPILambdadevCodeS3Key2bAdM": {
+      "NoEcho": "true",
+      "Type": "String",
+      "Description": "The Amazon S3 key of the deployment package."
+    },
+    "LambdaFunctionRAiMAPILambdadevCodeS3BucketIU1DO": {
+      "NoEcho": "true",
+      "Type": "String",
+      "Description": "An Amazon S3 bucket in the same AWS-Region as your function. The bucket can be in a different AWS-account."
+    }
+  },
+  "Resources": {
+    "DynamoDBTableRAiMUserSessiondev": {
+      "UpdateReplacePolicy": "Retain",
+      "Type": "AWS::DynamoDB::Table",
+      "DeletionPolicy": "Retain",
+      "Properties": {
+        "SSESpecification": {
+          "SSEEnabled": false
+        },
+        "TableName": "RAiM-UserSession-dev",
+        "AttributeDefinitions": [
+          {
+            "AttributeType": "S",
+            "AttributeName": "sub"
+          }
+        ],
+        "ContributorInsightsSpecification": {
+          "Enabled": false
+        },
+        "BillingMode": "PAY_PER_REQUEST",
+        "PointInTimeRecoverySpecification": {
+          "PointInTimeRecoveryEnabled": false
+        },
+        "WarmThroughput": {
+          "ReadUnitsPerSecond": 12000,
+          "WriteUnitsPerSecond": 4000
+        },
+        "KeySchema": [
+          {
+            "KeyType": "HASH",
+            "AttributeName": "sub"
+          }
+        ],
+        "DeletionProtectionEnabled": false,
+        "TableClass": "STANDARD",
+        "Tags": [
+          {
+            "Value": "Sign",
+            "Key": "Team"
+          }
+        ],
+        "TimeToLiveSpecification": {
+          "Enabled": false
+        }
+      }
+    },
+    "LambdaFunctionRAiMAPILambdadev": {
+      "UpdateReplacePolicy": "Retain",
+      "Type": "AWS::Lambda::Function",
+      "DeletionPolicy": "Retain",
+      "Properties": {
+        "MemorySize": 128,
+        "Description": "",
+        "TracingConfig": {
+          "Mode": "PassThrough"
+        },
+        "Timeout": 3,
+        "RuntimeManagementConfig": {
+          "UpdateRuntimeOn": "Auto"
+        },
+        "Handler": "index.handler",
+        "Code": {
+          "S3Bucket": {
+            "Ref": "LambdaFunctionRAiMAPILambdadevCodeS3BucketIU1DO"
+          },
+          "S3Key": {
+            "Ref": "LambdaFunctionRAiMAPILambdadevCodeS3Key2bAdM"
+          }
+        },
+        "Role": "arn:aws:iam::990442281360:role/RAiM-ApiLambdaRole",
+        "FileSystemConfigs": [],
+        "FunctionName": "RAiM-API-Lambda-dev",
+        "Runtime": "nodejs24.x",
+        "PackageType": "Zip",
+        "LoggingConfig": {
+          "LogFormat": "Text",
+          "LogGroup": "/aws/lambda/RAiM-API-Lambda-dev"
+        },
+        "RecursiveLoop": "Terminate",
+        "EphemeralStorage": {
+          "Size": 512
+        },
+        "Tags": [
+          {
+            "Value": "Sign",
+            "Key": "Team"
+          }
+        ],
+        "Architectures": [
+          "x86_64"
+        ]
+      }
+    },
+    "LambdaPermissionFunctionRAiMAPILambdadev": {
+      "UpdateReplacePolicy": "Retain",
+      "Type": "AWS::Lambda::Permission",
+      "DeletionPolicy": "Retain",
+      "Properties": {
+        "FunctionName": "arn:aws:lambda:ap-northeast-1:990442281360:function:RAiM-API-Lambda-dev",
+        "Action": "lambda:InvokeFunction",
+        "SourceArn": "arn:aws:execute-api:ap-northeast-1:990442281360:nqa57ts4di/*/POST/chat",
+        "Principal": "apigateway.amazonaws.com"
+      }
+    },
+    "IAMRoleRAiMApiLambdaRole": {
+      "UpdateReplacePolicy": "Retain",
+      "Type": "AWS::IAM::Role",
+      "DeletionPolicy": "Retain",
+      "Properties": {
+        "Path": "/",
+        "ManagedPolicyArns": [
+          "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+          "arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess_v2",
+          "arn:aws:iam::aws:policy/AmazonBedrockFullAccess"
+        ],
+        "MaxSessionDuration": 3600,
+        "RoleName": "RAiM-ApiLambdaRole",
+        "Description": "Allows Lambda functions to call AWS services on your behalf.",
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "DynamoDBTableRAiMFewShotdev": {
+      "UpdateReplacePolicy": "Retain",
+      "Type": "AWS::DynamoDB::Table",
+      "DeletionPolicy": "Retain",
+      "Properties": {
+        "SSESpecification": {
+          "SSEEnabled": false
+        },
+        "TableName": "RAiM-FewShot-dev",
+        "AttributeDefinitions": [
+          {
+            "AttributeType": "S",
+            "AttributeName": "id"
+          }
+        ],
+        "ContributorInsightsSpecification": {
+          "Enabled": false
+        },
+        "BillingMode": "PAY_PER_REQUEST",
+        "PointInTimeRecoverySpecification": {
+          "PointInTimeRecoveryEnabled": false
+        },
+        "WarmThroughput": {
+          "ReadUnitsPerSecond": 12000,
+          "WriteUnitsPerSecond": 4000
+        },
+        "KeySchema": [
+          {
+            "KeyType": "HASH",
+            "AttributeName": "id"
+          }
+        ],
+        "DeletionProtectionEnabled": false,
+        "TableClass": "STANDARD",
+        "Tags": [
+          {
+            "Value": "Sign",
+            "Key": "Team"
+          }
+        ],
+        "TimeToLiveSpecification": {
+          "Enabled": false
+        }
+      }
+    }
+  }
+}
