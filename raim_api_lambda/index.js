@@ -13,14 +13,17 @@
 // 3. Cognito Authorizer の claims からユーザー固有の sub を取得する
 // 4. DynamoDB の UserSession を取得または作成する
 // 5. Mantle の previous_response_id を使える状態か判定する
-// 6. 現時点では Mantle にはまだアクセスせず、debug情報を返す
+// 6. DynamoDB の Scene / Few-shot 定義を取得する
+// 7. Titanなしの仮実装として、キーワードベースでSceneを選択する
+// 8. prompt-builder.js でMantleへ渡すinputを組み立てる
+// 9. 現時点では Mantle にはまだアクセスせず、debug情報を返す
 //
 // 今後追加する予定:
-// - Text Embedding
-// - Scene選択
-// - 固定プロンプト生成
+// - Mantle Clientの実装
 // - Mantle Responses API 呼び出し
 // - Mantleから返った response_id のDynamoDB保存
+// - Mantle返答の正規化
+// - 本番向けにdebugを削除
 //
 // ==============================================================================
 
@@ -36,6 +39,21 @@ const {
 const {
   getMantleSessionState,
 } = require('./lib/mantle-session-policy');
+
+const {
+  listScenes,
+  summarizeScenes,
+} = require('./lib/scene-repository');
+
+const {
+  selectScene,
+  summarizeSceneSelection,
+} = require('./lib/scene-selector');
+
+const {
+  buildMantleInput,
+  summarizeMantleInput,
+} = require('./lib/prompt-builder');
 
 // ─────────────────────────────────────────────
 // Cognito sub 取得
@@ -143,10 +161,16 @@ function createResponse(statusCode, body) {
 // ↓
 // mantle-session-policy.js で previous_response_id 利用可否を判定
 // ↓
+// scene-repository.js で Scene / Few-shot 定義を取得
+// ↓
+// scene-selector.js で仮Scene選択
+// ↓
+// prompt-builder.js で Mantle input を構築
+// ↓
 // chat JSON + debug情報を返却
 //
 // Mantle本体にはまだアクセスしない。
-// 次の段階で mantle-client.js を追加して接続する。
+// 次の段階で mantle-client.js を追加する。
 
 exports.handler = async (event) => {
   console.log('event:', JSON.stringify(event));
@@ -201,15 +225,17 @@ exports.handler = async (event) => {
       );
     }
 
+    const userText = validation.message.text;
+    const images = Array.isArray(validation.message.images)
+      ? validation.message.images
+      : [];
+
     // ─────────────────────────────────────────
     // 3. Cognito sub取得
     // ─────────────────────────────────────────
     //
     // sub はCognitoユーザーを一意に識別するID。
     // DynamoDB UserSessionテーブルのPartition Keyとして使う。
-    //
-    // 例:
-    //   sub = "57b4fa48-20b1-7057-072a-2c120dc03a7f"
 
     const sub = getSubFromEvent(event);
 
@@ -218,12 +244,6 @@ exports.handler = async (event) => {
     // ─────────────────────────────────────────
     //
     // RAiM-UserSession-dev から sub をキーにItemを取得する。
-    //
-    // Itemがない場合:
-    //   新規作成する。
-    //
-    // Itemがある場合:
-    //   lastAccessedAt / updatedAt を更新する。
     //
     // Mantle構成では、ここで以下の情報を管理する。
     // - currentSessionId
@@ -245,34 +265,99 @@ exports.handler = async (event) => {
     //
     // ここでは、保存済みの lastResponseId がまだ使えるかを判定する。
     //
-    // 判定条件:
-    // - lastResponseId が空ではない
-    // - lastResponseExpiresAt が有効な日時
-    // - lastResponseExpiresAt が現在時刻より未来
+    // usePreviousResponseId が true の場合:
+    //   prompt-builder.js は followup mode のinputを作る。
     //
-    // response_id が使えない場合は、今後Mantle呼び出し時に
-    // 固定プロンプト + sessionSummary + user text で新規会話を開始する。
+    // usePreviousResponseId が false の場合:
+    //   prompt-builder.js は initial mode のinputを作る。
+    //   その際、固定プロンプト + sessionSummary + Scene + Few-shot を含める。
 
     const mantleSessionState = getMantleSessionState(session);
 
     // ─────────────────────────────────────────
-    // 6. 現時点ではMantle未接続のため、確認用レスポンスを返す
+    // 6. Scene / Few-shot 定義取得
+    // ─────────────────────────────────────────
+    //
+    // RAiM-FewShot-dev からScene定義を読み取る。
+    //
+    // 今回の仕様では、画像Embeddingや画像Scene選択はしない。
+    // Scene選択はユーザーの text をもとに行う。
+    //
+    // 現時点ではTitanがまだ使えないため、後続の scene-selector.js で
+    // キーワードベースの仮Scene選択を行う。
+
+    const scenes = await listScenes();
+    const sceneSummary = summarizeScenes(scenes);
+
+    // ─────────────────────────────────────────
+    // 7. 仮Scene選択
+    // ─────────────────────────────────────────
+    //
+    // 本来は Titan Text Embeddings V2 でユーザー発話をEmbeddingし、
+    // 各Sceneの textCentroid と類似度比較してSceneを選択する。
+    //
+    // ただし、Bedrock / Titan連携は後回しにするため、
+    // 今は scene-selector.js のキーワード判定で暫定的にSceneを選ぶ。
+    //
+    // 選ばれたSceneの few_shots は、後続の prompt-builder.js で
+    // Mantleへ渡すプロンプト材料として使う。
+
+    const sceneSelection = selectScene({
+      userText,
+      scenes,
+    });
+
+    const selectedSceneSummary = summarizeSceneSelection(sceneSelection);
+
+    // ─────────────────────────────────────────
+    // 8. Mantle input 組み立て
+    // ─────────────────────────────────────────
+    //
+    // prompt-builder.js で、Mantleへ渡す入力構造を作る。
+    //
+    // response_id が使えない場合:
+    //   mode: initial
+    //   固定プロンプト、sessionSummary、Scene情報、Few-shot、今回の入力を含める。
+    //
+    // response_id が使える場合:
+    //   mode: followup
+    //   previous_response_id で会話をつなぐ前提なので、
+    //   固定プロンプト全文やsessionSummaryは基本的に含めない。
+    //
+    // 画像がある場合:
+    //   画像Embeddingは行わず、input_image としてMantleへ渡すための形に整える。
+    //
+    // この段階ではMantleへ送信せず、debugに概要だけ出す。
+    // Base64画像やプロンプト全文をdebugに返すと大きすぎるため、
+    // summarizeMantleInput() で件数やmodeだけを返す。
+
+    const mantleInput = buildMantleInput({
+      userText,
+      images,
+      sessionSummary: session.sessionSummary || '',
+      scene: sceneSelection.scene,
+      usePreviousResponseId: mantleSessionState.usePreviousResponseId,
+    });
+
+    const mantleInputSummary = summarizeMantleInput(mantleInput);
+
+    // ─────────────────────────────────────────
+    // 9. 現時点ではMantle未接続のため、確認用レスポンスを返す
     // ─────────────────────────────────────────
     //
     // 本来はこの後に以下を行う予定:
-    // - text embedding
-    // - Scene選択
-    // - prompt-builderでMantle input作成
     // - mantle-clientでMantle Responses API呼び出し
     // - Mantle返答をnormalize
     // - response_idをDynamoDBへ保存
     //
-    // 今は、UserSessionとresponse_id判定の確認のためdebugを返す。
+    // 今は、UserSession / response_id判定 / Scene読み取り / Scene選択 /
+    // Mantle input構築確認のため debug を返す。
+    //
     // 本番ではdebugは返さない。
 
     return createResponse(200, {
       ...createChat({
-        text: `入力チェックOK。Mantle用UserSessionを取得しました。text: ${validation.message.text}`,
+        text: `入力チェックOK。Scene「${sceneSelection.sceneId}」でMantle inputを作成しました。text: ${userText}`,
         emotion: 'neutral',
         intensity: 0.5,
       }),
@@ -291,6 +376,16 @@ exports.handler = async (event) => {
         // response_id が使えないときにMantleへ渡す予定の復旧用情報
         hasSessionSummary: mantleSessionState.hasSessionSummary,
         promptVersion: session.promptVersion || '',
+
+        // Scene / Few-shot 読み取り確認
+        sceneCount: scenes.length,
+        scenes: sceneSummary,
+
+        // 仮Scene選択結果
+        selectedScene: selectedSceneSummary,
+
+        // Mantle input 構築確認
+        mantleInput: mantleInputSummary,
       },
     });
   } catch (error) {
@@ -301,7 +396,9 @@ exports.handler = async (event) => {
     // ここに来るのは、主に以下のようなケース。
     //
     // - Cognito sub が取得できない
-    // - DynamoDBアクセスで例外
+    // - DynamoDB UserSessionテーブルへのアクセスで例外
+    // - DynamoDB Sceneテーブルへのアクセスで例外
+    // - prompt-builder.js の実装エラー
     // - 想定外の実装エラー
     //
     // createError() は NODE_ENV=production の場合、
