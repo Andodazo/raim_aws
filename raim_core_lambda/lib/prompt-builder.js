@@ -55,6 +55,62 @@ function hasImages(images) {
   return Array.isArray(images) && images.length > 0;
 }
 
+function normalizeEmotionMap(emotions) {
+  if (!emotions || typeof emotions !== 'object' || Array.isArray(emotions)) {
+    return {};
+  }
+
+  const normalized = {};
+
+  for (const [emotion, intensity] of Object.entries(emotions)) {
+    const name = toSafeString(emotion).trim();
+    const value = Number(intensity);
+
+    if (!name || !Number.isFinite(value)) {
+      continue;
+    }
+
+    normalized[name] = Math.min(1, Math.max(0, value));
+  }
+
+  return normalized;
+}
+
+function summarizeEmotionMap(emotions) {
+  const normalized = normalizeEmotionMap(emotions);
+  const entries = Object.entries(normalized);
+
+  if (entries.length === 0) {
+    return 'なし';
+  }
+
+  return entries
+    .map(([emotion, intensity]) => `${emotion}:${intensity}`)
+    .join(', ');
+}
+
+function pickPrimaryEmotion(emotions, fallbackEmotion = 'neutral') {
+  const entries = Object.entries(normalizeEmotionMap(emotions));
+
+  if (entries.length === 0) {
+    return fallbackEmotion;
+  }
+
+  entries.sort((left, right) => right[1] - left[1]);
+  return entries[0][0];
+}
+
+function pickPrimaryIntensity(emotions, fallbackIntensity = 0.5) {
+  const entries = Object.entries(normalizeEmotionMap(emotions));
+
+  if (entries.length === 0) {
+    return fallbackIntensity;
+  }
+
+  entries.sort((left, right) => right[1] - left[1]);
+  return entries[0][1];
+}
+
 /**
  * 画像をMantleへ渡しやすい data URL 形式に変換する。
  *
@@ -104,9 +160,12 @@ function buildSceneContext(scene) {
     '現在選択されているScene情報:',
     `- id: ${scene.id || 'unknown'}`,
     `- description: ${scene.description || ''}`,
+    `- embedding_text: ${scene.embedding_text || ''}`,
+    `- default_emotions: ${summarizeEmotionMap(scene.default_emotions)}`,
     '',
-    'このSceneは、返答の雰囲気や話題の扱い方を調整するための参考情報です。',
-    'Scene情報をそのまま説明するのではなく、自然な会話として反映してください。',
+    'embedding_textは、ユーザー発話に近いSceneを選ぶための検索用テキストです。',
+    'default_emotionsは、このSceneで出やすい感情の目安です。',
+    'どちらもユーザーへそのまま説明せず、返答の雰囲気やemotion選択に自然に反映してください。',
   ].join('\n');
 }
 
@@ -139,6 +198,8 @@ function buildFewShotMessages(scene) {
       continue;
     }
 
+    const emotions = normalizeEmotionMap(fs.emotions);
+
     messages.push({
       role: 'user',
       content: toSafeString(fs.user),
@@ -148,8 +209,17 @@ function buildFewShotMessages(scene) {
       role: 'assistant',
       content: JSON.stringify({
         text: toSafeString(fs.raim),
-        emotion: toSafeString(fs.emotion || 'neutral'),
-        intensity: typeof fs.intensity === 'number' ? fs.intensity : 0.5,
+        // 新形式のfew_shotsでは `emotions` Mapを持つ。
+        // Mantleの出力形式は単一emotion/intensityなので、最も強い感情を代表値として渡す。
+        // 旧形式の `emotion` / `intensity` も残っている場合はfallbackとして扱う。
+        emotion: pickPrimaryEmotion(emotions, toSafeString(fs.emotion || 'neutral')),
+        intensity: pickPrimaryIntensity(
+          emotions,
+          typeof fs.intensity === 'number' ? fs.intensity : 0.5
+        ),
+        // 複数感情の情報も失わないように残す。
+        // System promptでは単一emotion出力を要求しているため、これはあくまで参考情報。
+        emotions,
       }),
     });
   }
@@ -347,9 +417,11 @@ function buildFollowupMantleInput({
         '今回のユーザー発話に対するSceneヒント:',
         `- id: ${scene.id || 'unknown'}`,
         `- description: ${scene.description || ''}`,
+        `- embedding_text: ${scene.embedding_text || ''}`,
+        `- default_emotions: ${summarizeEmotionMap(scene.default_emotions)}`,
         '',
-        'この情報は返答の雰囲気調整用です。',
-        'ユーザーにScene名を説明する必要はありません。',
+        'この情報は返答の雰囲気調整とemotion選択用です。',
+        'ユーザーにScene名やembedding_textを説明する必要はありません。',
       ].join('\n'),
     });
   }
