@@ -1,0 +1,19 @@
+{
+  "name": "raim_edge_lambda",
+  "version": "1.0.0",
+  "description": "RAiM Edge Lambda for API Gateway WebSocket and Core Lambda queues",
+  "main": "index.js",
+  "scripts": {
+    "test": "node --test"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@aws-sdk/client-apigatewaymanagementapi": "^3.1069.0",
+    "@aws-sdk/client-dynamodb": "^3.1069.0",
+    "@aws-sdk/client-sqs": "^3.1069.0",
+    "@aws-sdk/lib-dynamodb": "^3.1069.0"
+  }
+}
