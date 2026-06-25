@@ -1,5 +1,5 @@
 {
-  "name": "raim_api_lambda",
+  "name": "raim_core_lambda",
   "version": "1.0.0",
   "description": "",
   "main": "index.js",
@@ -7,14 +7,17 @@
     "lib": "lib"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node --test"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@aws-sdk/client-bedrock-runtime": "^3.1069.0",
     "@aws-sdk/client-dynamodb": "^3.1069.0",
+    "@aws-sdk/client-secrets-manager": "^3.1069.0",
+    "@aws-sdk/client-sqs": "^3.1069.0",
     "@aws-sdk/lib-dynamodb": "^3.1069.0"
   }
 }
