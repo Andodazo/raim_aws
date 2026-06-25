@@ -27,9 +27,10 @@
 // 使う:
 // - id
 // - description
-// - text_examples
-// - examples
+// - embedding_text
+// - text_examples / examples（旧形式互換）
 // - few_shots
+// - default_emotions
 // - textCentroid
 //
 // 使わない:
@@ -47,28 +48,22 @@
 // {
 //   "id": "gaming",
 //   "description": "ゲーム話・攻略",
-//   "text_examples": [
-//     "LoLで対面に勝てない",
-//     "このビルドどう思う？"
-//   ],
+//   "embedding_text": "ゲーム マイクラ MOD 攻略 ビルド",
 //   "few_shots": [
 //     {
 //       "user": "この試合どう思う？",
 //       "raim": "リザルトを見る限り、かなり頑張ってるね。",
-//       "emotion": "neutral",
-//       "intensity": 0.6
+//       "emotions": { "happy": 0.4 }
 //     }
 //   ],
+//   "default_emotions": { "happy": 0.3 },
 //   "textCentroid": [0.01, 0.02, ...]
 // }
 //
-// 【既存データとの互換性】
-// 以前のDynamoDB Itemには text_examples ではなく examples が入っている可能性がある。
-// そのため、このファイルでは以下の優先順位で扱う:
-//
-// 1. text_examples があればそれを使う
-// 2. text_examples がなければ examples を text_examples 扱いにする
-// 3. どちらもなければ空配列にする
+// 【新形式と旧形式の互換性】
+// 現在のScene判定では `embedding_text` をTitanでEmbeddingした `textCentroid` を使う。
+// 以前のItemに `text_examples` / `examples` が残っていても壊れないよう、
+// normalizeScene() では旧形式の配列も保持する。
 //
 // ==============================================================================
 
@@ -133,8 +128,10 @@ const docClient = DynamoDBDocumentClient.from(ddbClient);
 // {
 //   id: "default",
 //   description: "雑談・基本トーン",
+//   embedding_text: "",
 //   text_examples: [],
 //   few_shots: [],
+//   default_emotions: {},
 //   textCentroid: null or []
 // }
 //
@@ -147,14 +144,30 @@ function normalizeScene(scene) {
     return null;
   }
 
-  // 新仕様では text_examples を基本とする。
-  // ただし、既存Itemに examples しかない場合もあるため、
-  // examples を text_examples として扱えるようにしている。
+  // 現在の新形式では `embedding_text` がScene判定用の代表テキスト。
+  // ただし旧形式のItemには `text_examples` / `examples` が残っている可能性があるため、
+  // 互換用に配列化して保持しておく。
   const textExamples = Array.isArray(scene.text_examples)
     ? scene.text_examples
     : Array.isArray(scene.examples)
       ? scene.examples
       : [];
+
+  // `embedding_text` はTitanで事前Embeddingされ、その結果が `textCentroid` に入る。
+  // Core Lambdaはユーザー発話Embeddingと `textCentroid` を比較してSceneを選ぶため、
+  // この値はデバッグやMantleへのScene説明で参照できるように保持する。
+  const embeddingText = typeof scene.embedding_text === 'string'
+    ? scene.embedding_text
+    : '';
+
+  // 新形式ではSceneに合う感情傾向を `default_emotions` で持つ。
+  // 例: { happy: 0.5, excited: 0.3 }
+  // Mantleへ「このSceneではこの感情が出やすい」という補助情報として渡す。
+  const defaultEmotions = scene.default_emotions &&
+    typeof scene.default_emotions === 'object' &&
+    !Array.isArray(scene.default_emotions)
+    ? scene.default_emotions
+    : {};
 
   // few_shots が未登録のSceneでもエラーにしない。
   // その場合、prompt-builder側ではfew-shotなしのSceneとして扱う。
@@ -169,11 +182,17 @@ function normalizeScene(scene) {
     id: String(scene.id || ''),
     description: String(scene.description || ''),
 
-    // 後続処理では text_examples に統一して参照する。
+    // 新形式のScene判定用代表テキスト。
+    embedding_text: embeddingText,
+
+    // 旧形式互換用。新形式の主経路では `embedding_text` を使う。
     text_examples: textExamples,
 
     // Few-shotはMantleへ渡す応答例として使う。
     few_shots: fewShots,
+
+    // Sceneごとの既定感情。prompt-builderでScene文脈としてMantleへ渡す。
+    default_emotions: defaultEmotions,
 
     // textCentroid はScene選択用の代表ベクトル。
     // 未生成の場合は null にして、後続のscene-selector側で判定しやすくする。
@@ -305,7 +324,11 @@ function summarizeScenes(scenes) {
     id: scene.id,
     description: scene.description || '',
 
-    // text_examples の数。
+    // 新形式のScene判定用代表テキストが登録されているか。
+    hasEmbeddingText: typeof scene.embedding_text === 'string' &&
+      scene.embedding_text.trim().length > 0,
+
+    // 旧形式互換用の text_examples 数。
     // 既存の examples も normalizeScene() によって text_examples に統一される。
     textExamplesCount: Array.isArray(scene.text_examples)
       ? scene.text_examples.length

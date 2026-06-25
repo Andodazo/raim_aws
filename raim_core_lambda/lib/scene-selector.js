@@ -20,8 +20,7 @@
 //   few_shots: [...]
 // }
 //
-// textCentroidは、そのSceneを代表する複数のtext_examplesをTitanでEmbeddingし、
-// 各次元の平均を取った代表ベクトルを想定する。
+// textCentroidは、FewShotテーブルの `embedding_text` をTitanでEmbeddingした代表ベクトル。
 // ユーザー発話も同じmodel/dimensionsでEmbeddingしないと比較できない。
 //
 // 【fallback reason】
@@ -182,6 +181,10 @@ function summarizeSceneSelection(selection) {
     fewShotsCount: Array.isArray(selection.scene?.few_shots)
       ? selection.scene.few_shots.length
       : 0,
+    // 新形式では `embedding_text` をEmbeddingした結果が `textCentroid` に入る。
+    // このフラグで、Scene定義が新形式の代表テキストを持っているか確認できる。
+    hasEmbeddingText: typeof selection.scene?.embedding_text === 'string' &&
+      selection.scene.embedding_text.trim().length > 0,
     textExamplesCount: Array.isArray(selection.scene?.text_examples)
       ? selection.scene.text_examples.length
       : 0,
