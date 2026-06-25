@@ -1,197 +1,461 @@
 {
-  "Metadata": {
-    "AWSToolsMetrics": {
-      "IaC_Generator": "arn:aws:cloudformation:ap-northeast-1:990442281360:generatedTemplate/33f71a13-3eba-41b5-a33a-f015f36b7aef"
-    }
-  },
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "RAiM Core Lambda with FIFO request/response queues, Titan scene selection, Bedrock Mantle streaming, and DynamoDB session state.",
   "Parameters": {
-    "LambdaFunctionRAiMAPILambdadevCodeS3Key2bAdM": {
-      "NoEcho": "true",
+    "DeploymentBucketName": {
       "Type": "String",
-      "Description": "The Amazon S3 key of the deployment package."
+      "Default": "DUMMY_DEPLOYMENT_BUCKET_REPLACE_ME",
+      "Description": "S3 bucket containing function.zip. Replace the dummy value before deployment."
     },
-    "LambdaFunctionRAiMAPILambdadevCodeS3BucketIU1DO": {
-      "NoEcho": "true",
+    "DeploymentObjectKey": {
       "Type": "String",
-      "Description": "An Amazon S3 bucket in the same AWS-Region as your function. The bucket can be in a different AWS-account."
+      "Default": "function.zip",
+      "Description": "S3 object key of the Core Lambda deployment package."
+    },
+    "CoreLambdaFunctionName": {
+      "Type": "String",
+      "Default": "RAiM-API-Lambda-dev"
+    },
+    "CoreLambdaRoleName": {
+      "Type": "String",
+      "Default": "RAiM-ApiLambdaRole"
+    },
+    "UserSessionTableName": {
+      "Type": "String",
+      "Default": "RAiM-UserSession-dev"
+    },
+    "SceneTableName": {
+      "Type": "String",
+      "Default": "RAiM-FewShot-dev"
+    },
+    "RequestStateTableName": {
+      "Type": "String",
+      "Default": "RAiM-CoreRequest-dev"
+    },
+    "RequestQueueName": {
+      "Type": "String",
+      "Default": "raim-core-request-dev.fifo"
+    },
+    "RequestDeadLetterQueueName": {
+      "Type": "String",
+      "Default": "raim-core-request-dlq-dev.fifo"
+    },
+    "ResponseQueueName": {
+      "Type": "String",
+      "Default": "raim-core-response-dev.fifo"
+    },
+    "ResponseDeadLetterQueueName": {
+      "Type": "String",
+      "Default": "raim-core-response-dlq-dev.fifo"
+    },
+    "QueueVisibilityTimeoutSeconds": {
+      "Type": "Number",
+      "Default": 180,
+      "MinValue": 60
+    },
+    "QueueMessageRetentionSeconds": {
+      "Type": "Number",
+      "Default": 86400,
+      "MinValue": 60,
+      "MaxValue": 1209600
+    },
+    "QueueMaxReceiveCount": {
+      "Type": "Number",
+      "Default": 3,
+      "MinValue": 1
+    },
+    "CoreMaximumConcurrency": {
+      "Type": "Number",
+      "Default": 10,
+      "MinValue": 2,
+      "MaxValue": 1000
+    },
+    "MantleApiKeySecretArn": {
+      "Type": "String",
+      "Default": "arn:aws:secretsmanager:ap-northeast-1:123456789012:secret:DUMMY_MANTLE_API_KEY_SECRET_REPLACE_ME",
+      "MinLength": 1,
+      "Description": "ARN of the Secrets Manager secret containing the Bedrock Mantle API key."
+    },
+    "MantleApiKeySecretJsonKey": {
+      "Type": "String",
+      "Default": "apiKey",
+      "MinLength": 1,
+      "Description": "JSON property name containing the API key in SecretString."
+    },
+    "MantleSecretRegion": {
+      "Type": "String",
+      "Default": "ap-northeast-1",
+      "MinLength": 1,
+      "Description": "AWS region where the Mantle API key secret is stored."
+    },
+    "MantleEndpointUrl": {
+      "Type": "String",
+      "Default": "https://bedrock-mantle.us-east-1.api.aws/v1"
+    },
+    "MantleModelId": {
+      "Type": "String",
+      "Default": "DUMMY_GEMMA4_MODEL_ID_REPLACE_ME",
+      "MinLength": 1,
+      "Description": "Gemma 4 model ID returned by the Bedrock Mantle Models API in us-east-1."
+    },
+    "MantleTimeoutMs": {
+      "Type": "Number",
+      "Default": 30000,
+      "MinValue": 1000
+    },
+    "MantleMaxOutputTokens": {
+      "Type": "Number",
+      "Default": 1024,
+      "MinValue": 1
+    },
+    "MantleTemperature": {
+      "Type": "Number",
+      "Default": 0.7,
+      "MinValue": 0,
+      "MaxValue": 2
+    },
+    "TitanRegion": {
+      "Type": "String",
+      "Default": "ap-northeast-1"
+    },
+    "TitanModelId": {
+      "Type": "String",
+      "Default": "amazon.titan-embed-text-v2:0"
+    },
+    "TitanInvokeResourceArn": {
+      "Type": "String",
+      "Default": "arn:aws:bedrock:ap-northeast-1::foundation-model/amazon.titan-embed-text-v2:0",
+      "Description": "IAM resource ARN allowed for bedrock:InvokeModel. Replace when using an inference profile or custom resource."
+    },
+    "TitanEmbeddingDimensions": {
+      "Type": "String",
+      "Default": "1024",
+      "AllowedValues": ["1024", "512", "256"]
+    },
+    "SceneSimilarityThreshold": {
+      "Type": "String",
+      "Default": "0.25"
+    },
+    "StreamChunkMinimumCharacters": {
+      "Type": "String",
+      "Default": "12"
+    },
+    "RequestLeaseSeconds": {
+      "Type": "String",
+      "Default": "120"
+    },
+    "RequestStateTtlSeconds": {
+      "Type": "String",
+      "Default": "86400"
     }
   },
   "Resources": {
-    "DynamoDBTableRAiMUserSessiondev": {
-      "UpdateReplacePolicy": "Retain",
-      "Type": "AWS::DynamoDB::Table",
-      "DeletionPolicy": "Retain",
+    "RequestDeadLetterQueue": {
+      "Type": "AWS::SQS::Queue",
       "Properties": {
-        "SSESpecification": {
-          "SSEEnabled": false
-        },
-        "TableName": "RAiM-UserSession-dev",
-        "AttributeDefinitions": [
-          {
-            "AttributeType": "S",
-            "AttributeName": "sub"
-          }
-        ],
-        "ContributorInsightsSpecification": {
-          "Enabled": false
-        },
-        "BillingMode": "PAY_PER_REQUEST",
-        "PointInTimeRecoverySpecification": {
-          "PointInTimeRecoveryEnabled": false
-        },
-        "WarmThroughput": {
-          "ReadUnitsPerSecond": 12000,
-          "WriteUnitsPerSecond": 4000
-        },
-        "KeySchema": [
-          {
-            "KeyType": "HASH",
-            "AttributeName": "sub"
-          }
-        ],
-        "DeletionProtectionEnabled": false,
-        "TableClass": "STANDARD",
-        "Tags": [
-          {
-            "Value": "Sign",
-            "Key": "Team"
-          }
-        ],
-        "TimeToLiveSpecification": {
-          "Enabled": false
+        "QueueName": { "Ref": "RequestDeadLetterQueueName" },
+        "FifoQueue": true,
+        "ContentBasedDeduplication": false,
+        "MessageRetentionPeriod": { "Ref": "QueueMessageRetentionSeconds" },
+        "SqsManagedSseEnabled": true
+      }
+    },
+    "RequestQueue": {
+      "Type": "AWS::SQS::Queue",
+      "Properties": {
+        "QueueName": { "Ref": "RequestQueueName" },
+        "FifoQueue": true,
+        "ContentBasedDeduplication": false,
+        "ReceiveMessageWaitTimeSeconds": 20,
+        "VisibilityTimeout": { "Ref": "QueueVisibilityTimeoutSeconds" },
+        "MessageRetentionPeriod": { "Ref": "QueueMessageRetentionSeconds" },
+        "SqsManagedSseEnabled": true,
+        "RedrivePolicy": {
+          "deadLetterTargetArn": { "Fn::GetAtt": ["RequestDeadLetterQueue", "Arn"] },
+          "maxReceiveCount": { "Ref": "QueueMaxReceiveCount" }
         }
       }
     },
-    "LambdaFunctionRAiMAPILambdadev": {
-      "UpdateReplacePolicy": "Retain",
-      "Type": "AWS::Lambda::Function",
-      "DeletionPolicy": "Retain",
+    "ResponseDeadLetterQueue": {
+      "Type": "AWS::SQS::Queue",
       "Properties": {
-        "MemorySize": 128,
-        "Description": "",
-        "TracingConfig": {
-          "Mode": "PassThrough"
-        },
-        "Timeout": 3,
-        "RuntimeManagementConfig": {
-          "UpdateRuntimeOn": "Auto"
-        },
-        "Handler": "index.handler",
-        "Code": {
-          "S3Bucket": {
-            "Ref": "LambdaFunctionRAiMAPILambdadevCodeS3BucketIU1DO"
-          },
-          "S3Key": {
-            "Ref": "LambdaFunctionRAiMAPILambdadevCodeS3Key2bAdM"
-          }
-        },
-        "Role": "arn:aws:iam::990442281360:role/RAiM-ApiLambdaRole",
-        "FileSystemConfigs": [],
-        "FunctionName": "RAiM-API-Lambda-dev",
-        "Runtime": "nodejs24.x",
-        "PackageType": "Zip",
-        "LoggingConfig": {
-          "LogFormat": "Text",
-          "LogGroup": "/aws/lambda/RAiM-API-Lambda-dev"
-        },
-        "RecursiveLoop": "Terminate",
-        "EphemeralStorage": {
-          "Size": 512
-        },
-        "Tags": [
-          {
-            "Value": "Sign",
-            "Key": "Team"
-          }
+        "QueueName": { "Ref": "ResponseDeadLetterQueueName" },
+        "FifoQueue": true,
+        "ContentBasedDeduplication": false,
+        "MessageRetentionPeriod": { "Ref": "QueueMessageRetentionSeconds" },
+        "SqsManagedSseEnabled": true
+      }
+    },
+    "ResponseQueue": {
+      "Type": "AWS::SQS::Queue",
+      "Properties": {
+        "QueueName": { "Ref": "ResponseQueueName" },
+        "FifoQueue": true,
+        "ContentBasedDeduplication": false,
+        "ReceiveMessageWaitTimeSeconds": 20,
+        "VisibilityTimeout": { "Ref": "QueueVisibilityTimeoutSeconds" },
+        "MessageRetentionPeriod": { "Ref": "QueueMessageRetentionSeconds" },
+        "SqsManagedSseEnabled": true,
+        "RedrivePolicy": {
+          "deadLetterTargetArn": { "Fn::GetAtt": ["ResponseDeadLetterQueue", "Arn"] },
+          "maxReceiveCount": { "Ref": "QueueMaxReceiveCount" }
+        }
+      }
+    },
+    "DynamoDBTableRAiMUserSessiondev": {
+      "Type": "AWS::DynamoDB::Table",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "TableName": { "Ref": "UserSessionTableName" },
+        "BillingMode": "PAY_PER_REQUEST",
+        "SSESpecification": { "SSEEnabled": true },
+        "PointInTimeRecoverySpecification": { "PointInTimeRecoveryEnabled": true },
+        "AttributeDefinitions": [
+          { "AttributeName": "sub", "AttributeType": "S" }
         ],
-        "Architectures": [
-          "x86_64"
+        "KeySchema": [
+          { "AttributeName": "sub", "KeyType": "HASH" }
         ]
       }
     },
-    "LambdaPermissionFunctionRAiMAPILambdadev": {
-      "UpdateReplacePolicy": "Retain",
-      "Type": "AWS::Lambda::Permission",
+    "DynamoDBTableRAiMFewShotdev": {
+      "Type": "AWS::DynamoDB::Table",
       "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
       "Properties": {
-        "FunctionName": "arn:aws:lambda:ap-northeast-1:990442281360:function:RAiM-API-Lambda-dev",
-        "Action": "lambda:InvokeFunction",
-        "SourceArn": "arn:aws:execute-api:ap-northeast-1:990442281360:nqa57ts4di/*/POST/chat",
-        "Principal": "apigateway.amazonaws.com"
+        "TableName": { "Ref": "SceneTableName" },
+        "BillingMode": "PAY_PER_REQUEST",
+        "SSESpecification": { "SSEEnabled": true },
+        "PointInTimeRecoverySpecification": { "PointInTimeRecoveryEnabled": true },
+        "AttributeDefinitions": [
+          { "AttributeName": "id", "AttributeType": "S" }
+        ],
+        "KeySchema": [
+          { "AttributeName": "id", "KeyType": "HASH" }
+        ]
+      }
+    },
+    "CoreRequestStateTable": {
+      "Type": "AWS::DynamoDB::Table",
+      "Properties": {
+        "TableName": { "Ref": "RequestStateTableName" },
+        "BillingMode": "PAY_PER_REQUEST",
+        "SSESpecification": { "SSEEnabled": true },
+        "PointInTimeRecoverySpecification": { "PointInTimeRecoveryEnabled": true },
+        "AttributeDefinitions": [
+          { "AttributeName": "requestKey", "AttributeType": "S" }
+        ],
+        "KeySchema": [
+          { "AttributeName": "requestKey", "KeyType": "HASH" }
+        ],
+        "TimeToLiveSpecification": {
+          "AttributeName": "expiresAt",
+          "Enabled": true
+        }
       }
     },
     "IAMRoleRAiMApiLambdaRole": {
-      "UpdateReplacePolicy": "Retain",
       "Type": "AWS::IAM::Role",
       "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
       "Properties": {
-        "Path": "/",
-        "ManagedPolicyArns": [
-          "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
-          "arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess_v2",
-          "arn:aws:iam::aws:policy/AmazonBedrockFullAccess"
-        ],
-        "MaxSessionDuration": 3600,
-        "RoleName": "RAiM-ApiLambdaRole",
-        "Description": "Allows Lambda functions to call AWS services on your behalf.",
+        "RoleName": { "Ref": "CoreLambdaRoleName" },
+        "Description": "Least-privilege execution role for RAiM Core Lambda.",
         "AssumeRolePolicyDocument": {
           "Version": "2012-10-17",
           "Statement": [
             {
-              "Action": "sts:AssumeRole",
               "Effect": "Allow",
-              "Principal": {
-                "Service": "lambda.amazonaws.com"
-              }
+              "Principal": { "Service": "lambda.amazonaws.com" },
+              "Action": "sts:AssumeRole"
             }
           ]
-        }
+        },
+        "ManagedPolicyArns": [
+          "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+        ],
+        "Policies": [
+          {
+            "PolicyName": "RaimCoreDynamoDbAccess",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "dynamodb:GetItem",
+                    "dynamodb:PutItem",
+                    "dynamodb:UpdateItem",
+                    "dynamodb:Scan"
+                  ],
+                  "Resource": [
+                    { "Fn::GetAtt": ["DynamoDBTableRAiMUserSessiondev", "Arn"] },
+                    { "Fn::GetAtt": ["DynamoDBTableRAiMFewShotdev", "Arn"] },
+                    { "Fn::GetAtt": ["CoreRequestStateTable", "Arn"] }
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "PolicyName": "RaimCoreSqsAccess",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "sqs:ReceiveMessage",
+                    "sqs:DeleteMessage",
+                    "sqs:GetQueueAttributes"
+                  ],
+                  "Resource": { "Fn::GetAtt": ["RequestQueue", "Arn"] }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": "sqs:SendMessage",
+                  "Resource": { "Fn::GetAtt": ["ResponseQueue", "Arn"] }
+                }
+              ]
+            }
+          },
+          {
+            "PolicyName": "RaimCoreMantleSecretAccess",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": "secretsmanager:GetSecretValue",
+                  "Resource": { "Ref": "MantleApiKeySecretArn" }
+                }
+              ]
+            }
+          },
+          {
+            "PolicyName": "RaimCoreTitanAccess",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": "bedrock:InvokeModel",
+                  "Resource": { "Ref": "TitanInvokeResourceArn" }
+                }
+              ]
+            }
+          },
+          {
+            "PolicyName": "RaimCoreXRayAccess",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "xray:PutTraceSegments",
+                    "xray:PutTelemetryRecords"
+                  ],
+                  "Resource": "*"
+                }
+              ]
+            }
+          }
+        ]
       }
     },
-    "DynamoDBTableRAiMFewShotdev": {
-      "UpdateReplacePolicy": "Retain",
-      "Type": "AWS::DynamoDB::Table",
+    "LambdaFunctionRAiMAPILambdadev": {
+      "Type": "AWS::Lambda::Function",
       "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "DependsOn": "IAMRoleRAiMApiLambdaRole",
       "Properties": {
-        "SSESpecification": {
-          "SSEEnabled": false
+        "FunctionName": { "Ref": "CoreLambdaFunctionName" },
+        "Description": "RAiM Core Lambda: FIFO SQS input, Titan scene selection, and Bedrock Mantle streaming.",
+        "Runtime": "nodejs24.x",
+        "Handler": "index.handler",
+        "Architectures": ["x86_64"],
+        "PackageType": "Zip",
+        "MemorySize": 256,
+        "Timeout": 60,
+        "Role": { "Fn::GetAtt": ["IAMRoleRAiMApiLambdaRole", "Arn"] },
+        "Code": {
+          "S3Bucket": { "Ref": "DeploymentBucketName" },
+          "S3Key": { "Ref": "DeploymentObjectKey" }
         },
-        "TableName": "RAiM-FewShot-dev",
-        "AttributeDefinitions": [
-          {
-            "AttributeType": "S",
-            "AttributeName": "id"
+        "Environment": {
+          "Variables": {
+            "NODE_ENV": "production",
+            "USER_SESSION_TABLE_NAME": { "Ref": "UserSessionTableName" },
+            "SCENE_TABLE_NAME": { "Ref": "SceneTableName" },
+            "REQUEST_STATE_TABLE_NAME": { "Ref": "RequestStateTableName" },
+            "REQUEST_QUEUE_URL": { "Ref": "RequestQueue" },
+            "RESPONSE_QUEUE_URL": { "Ref": "ResponseQueue" },
+            "REQUEST_LEASE_SECONDS": { "Ref": "RequestLeaseSeconds" },
+            "REQUEST_STATE_TTL_SECONDS": { "Ref": "RequestStateTtlSeconds" },
+            "STREAM_CHUNK_MIN_CHARACTERS": { "Ref": "StreamChunkMinimumCharacters" },
+            "MANTLE_API_KEY_SECRET_ARN": { "Ref": "MantleApiKeySecretArn" },
+            "MANTLE_API_KEY_SECRET_JSON_KEY": { "Ref": "MantleApiKeySecretJsonKey" },
+            "MANTLE_SECRET_REGION": { "Ref": "MantleSecretRegion" },
+            "OPENAI_BASE_URL": { "Ref": "MantleEndpointUrl" },
+            "MANTLE_MODEL": { "Ref": "MantleModelId" },
+            "BEDROCK_MANTLE_REGION": "us-east-1",
+            "MANTLE_RESPONSES_PATH": "/responses",
+            "MANTLE_TIMEOUT_MS": { "Ref": "MantleTimeoutMs" },
+            "MANTLE_MAX_OUTPUT_TOKENS": { "Ref": "MantleMaxOutputTokens" },
+            "MANTLE_TEMPERATURE": { "Ref": "MantleTemperature" },
+            "BEDROCK_REGION": { "Ref": "TitanRegion" },
+            "TITAN_EMBEDDING_MODEL_ID": { "Ref": "TitanModelId" },
+            "TITAN_EMBEDDING_DIMENSIONS": { "Ref": "TitanEmbeddingDimensions" },
+            "TITAN_EMBEDDING_NORMALIZE": "true",
+            "SCENE_SIMILARITY_THRESHOLD": { "Ref": "SceneSimilarityThreshold" }
           }
-        ],
-        "ContributorInsightsSpecification": {
-          "Enabled": false
         },
-        "BillingMode": "PAY_PER_REQUEST",
-        "PointInTimeRecoverySpecification": {
-          "PointInTimeRecoveryEnabled": false
-        },
-        "WarmThroughput": {
-          "ReadUnitsPerSecond": 12000,
-          "WriteUnitsPerSecond": 4000
-        },
-        "KeySchema": [
-          {
-            "KeyType": "HASH",
-            "AttributeName": "id"
-          }
-        ],
-        "DeletionProtectionEnabled": false,
-        "TableClass": "STANDARD",
-        "Tags": [
-          {
-            "Value": "Sign",
-            "Key": "Team"
-          }
-        ],
-        "TimeToLiveSpecification": {
-          "Enabled": false
+        "TracingConfig": { "Mode": "Active" },
+        "EphemeralStorage": { "Size": 512 },
+        "LoggingConfig": { "LogFormat": "JSON" }
+      }
+    },
+    "CoreRequestQueueEventSourceMapping": {
+      "Type": "AWS::Lambda::EventSourceMapping",
+      "DependsOn": [
+        "LambdaFunctionRAiMAPILambdadev",
+        "IAMRoleRAiMApiLambdaRole"
+      ],
+      "Properties": {
+        "EventSourceArn": { "Fn::GetAtt": ["RequestQueue", "Arn"] },
+        "FunctionName": { "Ref": "LambdaFunctionRAiMAPILambdadev" },
+        "Enabled": true,
+        "BatchSize": 1,
+        "FunctionResponseTypes": ["ReportBatchItemFailures"],
+        "ScalingConfig": {
+          "MaximumConcurrency": { "Ref": "CoreMaximumConcurrency" }
         }
       }
+    }
+  },
+  "Outputs": {
+    "CoreLambdaArn": {
+      "Value": { "Fn::GetAtt": ["LambdaFunctionRAiMAPILambdadev", "Arn"] }
+    },
+    "RequestQueueUrl": {
+      "Value": { "Ref": "RequestQueue" }
+    },
+    "RequestQueueArn": {
+      "Value": { "Fn::GetAtt": ["RequestQueue", "Arn"] }
+    },
+    "ResponseQueueUrl": {
+      "Value": { "Ref": "ResponseQueue" }
+    },
+    "ResponseQueueArn": {
+      "Value": { "Fn::GetAtt": ["ResponseQueue", "Arn"] }
+    },
+    "RequestDeadLetterQueueUrl": {
+      "Value": { "Ref": "RequestDeadLetterQueue" }
+    },
+    "ResponseDeadLetterQueueUrl": {
+      "Value": { "Ref": "ResponseDeadLetterQueue" }
     }
   }
 }

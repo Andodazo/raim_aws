@@ -1,18 +1,18 @@
 // lib/types.js
 // ==============================================================================
-// RAiM API Lambda 用 JSON メッセージ定義・バリデーション
+// RAiM Core Lambda 用 JSON メッセージ定義・バリデーション
 // ==============================================================================
 //
 // 【このファイルの役割】
-// CloudFront → API Gateway REST /chat → Lambda の経路で扱う
-// 入力JSON・出力JSONの形式を一元管理する。
+// Edge Lambdaやキューから受け取る入力と、Core Lambdaが返す
+// chat / error メッセージの基本形式を一元管理する。
 //
 // 現在の主な用途:
-// - クライアントからの上りリクエスト { text, images } の検証
-// - Lambdaからクライアントへ返す chat / error JSON の作成
-// - Mantle / LLM が返したJSON文字列の正規化
+// - Core Lambdaへ渡される { text, images } の検証
+// - Core Lambdaが返す chat / error JSON の作成
+// - Bedrock / LLM が返したJSON文字列の正規化
 //
-// 【現在のLambda REST APIで使う主な関数】
+// 【Core Lambdaで使う主な関数】
 // - validateUpstream()
 // - createChat()
 // - createError()
@@ -20,8 +20,8 @@
 // - clampIntensity()
 //
 // 【現時点では使わないもの】
-// WebSocket時代に使っていた filler_audio / tool_call / proactive_message /
-// session_start 関連の関数は、将来使う可能性があるためコメントアウトして残している。
+// filler_audio / tool_call / proactive_message / session_start 関連の関数は、
+// Edge Lambdaとの責務分離後に必要性を再検討するためコメントアウトして残している。
 // 必要になったら MESSAGE_TYPES と exports も含めて復活させる。
 //
 // 【スキーマ仕様の正本】
@@ -41,14 +41,14 @@ const SCHEMA_VERSION = 1;
 // type 列挙
 // ─────────────────────────────────────────────
 //
-// 現在のREST /chat では chat / error を主に使用する。
-// WebSocket向け・将来拡張向けのtypeはコメントアウトして保持する。
+// Core Lambdaでは chat / error を使用する。
+// Edge側で扱う可能性があるtypeはコメントアウトして保持する。
 
 const MESSAGE_TYPES = Object.freeze({
   CHAT: 'chat',
   ERROR: 'error',
 
-  // 将来拡張・WebSocket向け
+  // 将来拡張・Edge Lambda向け
   // FILLER_AUDIO: 'filler_audio',
   // TOOL_CALL: 'tool_call',
   // PROACTIVE_MESSAGE: 'proactive_message',
@@ -83,13 +83,13 @@ const EMOTIONS = Object.freeze({
 //
 // Lambda内で発生したエラーを、クライアントが扱いやすい形に分類する。
 // 現時点では INVALID_INPUT / INTERNAL_ERROR を主に使用する。
-// Mantle / Embedding 実装後に LLM_ERROR / EMBED_ERROR を使用する。
+// Bedrock Runtime / Embedding 実装で LLM_ERROR / EMBED_ERROR を使用する。
 
 const ERROR_CODES = Object.freeze({
   INVALID_INPUT: 'INVALID_INPUT',
   INTERNAL_ERROR: 'INTERNAL_ERROR',
 
-  // Mantle / Embedding 実装後に使用予定
+  // Bedrock Runtime / Embedding 呼び出し用
   LLM_TIMEOUT: 'LLM_TIMEOUT',
   LLM_ERROR: 'LLM_ERROR',
   EMBED_ERROR: 'EMBED_ERROR',
@@ -100,7 +100,7 @@ const ERROR_CODES = Object.freeze({
 });
 
 // 将来のAction Group / 外部ツール通知用。
-// 現時点のLambda REST /chat では未使用。
+// 現時点のCore Lambdaでは未使用。
 // const TOOLS = Object.freeze({
 //   WEB_SEARCH: 'web_search',
 // });
@@ -109,11 +109,11 @@ const ERROR_CODES = Object.freeze({
 // マルチモーダル制約値
 // ─────────────────────────────────────────────
 //
-// images は、ユーザーが送信した画像をMantleへ渡すためのフィールド。
+// images は、ユーザーが送信した画像をBedrock Runtimeへ渡すためのフィールド。
 // 画像Embeddingや画像Scene選択には使用しない。
 // Scene選択は text のEmbeddingのみで行う。
 //
-// Lambdaでは、Mantleへ渡す前に以下を検証する。
+// Core Lambdaでは、Bedrock Runtimeへ渡す前に以下を検証する。
 // - Base64文字列か
 // - media_type が対応形式か
 // - 画像枚数が上限以内か
@@ -150,7 +150,7 @@ function clampIntensity(v) {
 /**
  * chat レスポンスを作成する。
  *
- * Lambdaの正常応答として、クライアントへ返す基本形式。
+ * Core Lambdaの正常応答として、Edge Lambdaへ返す基本形式。
  * Flutter側は text をチャットUIに表示し、
  * emotion / intensity をUnity表情制御に利用する想定。
  */
@@ -192,12 +192,11 @@ function createError({ code, message, retriable, details }) {
 }
 
 // ─────────────────────────────────────────────
-// 現時点では未使用のWebSocket向けファクトリ関数
+// 現時点では未使用のEdge Lambda向けファクトリ関数
 // ─────────────────────────────────────────────
 //
-// 以下はローカルWebSocket版で使っていた関数。
-// REST API Lambdaでは現時点で使わないためコメントアウトしている。
-// 将来WebSocket APIやプロアクティブ通知を復活させる場合に戻す。
+// 以下はCore Lambdaの会話生成では使わないためコメントアウトしている。
+// Edge Lambdaとのメッセージ仕様で必要になった場合に戻す。
 
 /*
 function createFiller({ text, emotion = EMOTIONS.NEUTRAL, intensity = 0.5 }) {
@@ -247,11 +246,11 @@ function createSessionStart({ sessionId }) {
 */
 
 // ─────────────────────────────────────────────
-// Mantle / LLM 応答の正規化ユーティリティ
+// Bedrock / LLM 応答の正規化ユーティリティ
 // ─────────────────────────────────────────────
 
 /**
- * Mantle / LLM が返す生の応答文字列を chat メッセージに整える。
+ * Bedrock / LLM が返す生の応答文字列を chat メッセージに整える。
  *
  * 想定するLLM応答:
  * {
@@ -320,7 +319,7 @@ function normalizeLLMOutput(rawLLMOutput) {
 // ─────────────────────────────────────────────
 
 /**
- * REST /chat のリクエストbodyを検証する。
+ * Core Lambdaへ渡される会話入力を検証する。
  *
  * 期待する入力:
  * {
@@ -332,9 +331,9 @@ function normalizeLLMOutput(rawLLMOutput) {
  * textのみのリクエストはOK。
  * 画像のみのリクエストも許容する。
  *
- * 画像が含まれる場合、Lambdaでは画像Embeddingを行わない。
+ * 画像が含まれる場合、Core Lambdaでは画像Embeddingを行わない。
  * 画像は validateUpstream() で形式・サイズを検証した後、
- * prompt-builder / mantle-client 側でMantleへ渡す。
+ * prompt-builder / Bedrock Runtime client 側でモデルへ渡す。
  *
  * ただし、以下はNG:
  * - bodyがオブジェクトではない
