@@ -1,61 +1,89 @@
 #!/usr/bin/env node
 /**
- * Bedrock Mantle connection tester
+ * Bedrock Mantle connection tester for AWS CloudShell
  *
  * 目的:
- *   Lambda / IAM / Secrets Manager を使わずに、Windows の VSCode ターミナルや
- *   コマンドプロンプトから Mantle endpoint URL + API Key だけで疎通確認します。
+ *   AWS CloudShell 上で、Mantle endpoint URL + API Key + model ID だけを使って
+ *   Bedrock Mantle / Gemma 4 の疎通を確認します。
  *
  * このファイルは AWS SDK を使いません。
- * そのため、Lambda ロールの secretsmanager:GetSecretValue 権限や
- * bedrock:InvokeModel 権限とは切り離して、Mantle API Key の有効性だけを検証できます。
+ * CloudShell の IAM ロール、Lambda の実行ロール、Secrets Manager、Bedrock Runtime
+ * にはアクセスしません。
  *
- * 事前準備 PowerShell:
- *   $env:OPENAI_BASE_URL="https://bedrock-mantle.us-east-1.api.aws/v1"
- *   $env:OPENAI_API_KEY="実際の Mantle API Key"
- *   $env:MANTLE_MODEL="google.gemma-4-26b-a4b"
+ * つまり、このテストで確認する対象は次の3つだけです。
  *
- * 事前準備 コマンドプロンプト:
- *   set OPENAI_BASE_URL=https://bedrock-mantle.us-east-1.api.aws/v1
- *   set OPENAI_API_KEY=実際の Mantle API Key
- *   set MANTLE_MODEL=google.gemma-4-26b-a4b
+ *   - Mantle endpoint URL が正しいこと
+ *   - Mantle API Key が有効であること
+ *   - 指定した Mantle model ID で生成APIを呼び出せること
  *
- * 使い方:
- *   1. モデル一覧を確認する
+ * RAiM の本命設定:
+ *
+ *   - region   : us-west-2
+ *   - endpoint : https://bedrock-mantle.us-west-2.api.aws/v1
+ *   - model    : google.gemma-4-31b
+ *
+ * CloudShell での実行手順:
+ *
+ *   1. このファイルを CloudShell にアップロードする
+ *
+ *      CloudShell の「Actions」→「Upload file」から
+ *      test_mantle_connection.js をアップロードします。
+ *
+ *   2. Node.js のバージョンを確認する
+ *
+ *      node -v
+ *
+ *      v18 以上であれば、このファイルは追加パッケージなしで実行できます。
+ *      fetch API を使うため、古い Node.js では動きません。
+ *
+ *   3. Mantle API Key を環境変数に設定する
+ *
+ *      export OPENAI_API_KEY='実際の Mantle API Key'
+ *
+ *      OPENAI_BASE_URL と MANTLE_MODEL は本命値をデフォルトにしているため、
+ *      通常は指定しなくても動きます。
+ *      明示したい場合は以下も実行してください。
+ *
+ *      export OPENAI_BASE_URL='https://bedrock-mantle.us-west-2.api.aws/v1'
+ *      export MANTLE_MODEL='google.gemma-4-31b'
+ *
+ *   4. モデル一覧を確認する
+ *
  *      node test_mantle_connection.js --models
  *
- *   2. Responses API をストリーミングで確認する
- *      node test_mantle_connection.js --prompt "こんにちは。短く挨拶してください。"
+ *   5. 生成APIを最小リクエストで確認する
  *
- *   3. ストリーミングが詰まる場合、非ストリーミングで確認する
- *      node test_mantle_connection.js --no-stream --prompt "こんにちは。短く挨拶してください。"
+ *      node test_mantle_connection.js --chat --minimal --no-stream --prompt 'こんにちは。短く挨拶してください。'
  *
- *   4. Chat Completions 互換 API で確認する
- *      node test_mantle_connection.js --chat --prompt "こんにちは。短く挨拶してください。"
+ *   6. ストリーミングを確認する
  *
- *   5. SSE の生イベントを表示して、Mantle が返すイベント形式を確認する
- *      node test_mantle_connection.js --debug-sse --prompt "こんにちは。短く挨拶してください。"
+ *      node test_mantle_connection.js --chat --minimal --debug-sse --prompt 'こんにちは。短く挨拶してください。'
  *
  * 注意:
- *   API Key を --api-key で直接渡すこともできますが、ターミナル履歴に残りやすいです。
- *   基本的には OPENAI_API_KEY 環境変数で渡すことをおすすめします。
+ *   API Key を --api-key で直接渡すこともできますが、CloudShell の履歴に残りやすいです。
+ *   基本的には OPENAI_API_KEY 環境変数で渡してください。
  */
 
 'use strict';
 
-const DEFAULT_BASE_URL = 'https://bedrock-mantle.us-east-1.api.aws/v1';
+// RAiM の本命構成では、Gemma 4 31B を us-west-2 の Mantle endpoint で呼び出す。
+// CloudShell で OPENAI_BASE_URL を指定し忘れても、本命 endpoint を使う。
+const DEFAULT_BASE_URL = 'https://bedrock-mantle.us-west-2.api.aws/v1';
+const DEFAULT_MODEL = 'google.gemma-4-31b';
 const DEFAULT_PROMPT = 'こんにちは。日本語で一言だけ挨拶してください。';
 
 function parseArgs(argv) {
   const options = {
     baseUrl: process.env.OPENAI_BASE_URL || process.env.MANTLE_BASE_URL || DEFAULT_BASE_URL,
     apiKey: process.env.OPENAI_API_KEY || process.env.MANTLE_API_KEY || '',
-    model: process.env.MANTLE_MODEL || '',
+    // RAiM の本命モデル。CloudShell 側で MANTLE_MODEL または --model を指定すると差し替えられる。
+    model: process.env.MANTLE_MODEL || DEFAULT_MODEL,
     prompt: DEFAULT_PROMPT,
     modelsOnly: false,
     jsonMode: false,
     stream: true,
     chat: false,
+    minimal: false,
     debugSse: false,
     timeoutMs: Number(process.env.MANTLE_TIMEOUT_MS || 60000),
     streamIdleTimeoutMs: Number(process.env.MANTLE_STREAM_IDLE_TIMEOUT_MS || 15000),
@@ -77,6 +105,8 @@ function parseArgs(argv) {
       options.stream = false;
     } else if (arg === '--chat') {
       options.chat = true;
+    } else if (arg === '--minimal') {
+      options.minimal = true;
     } else if (arg === '--debug-sse') {
       options.debugSse = true;
     } else if (arg === '--base-url') {
@@ -107,10 +137,6 @@ function parseArgs(argv) {
     throw new Error('OPENAI_API_KEY or --api-key is required');
   }
 
-  if (!options.modelsOnly && !options.model) {
-    throw new Error('MANTLE_MODEL or --model is required unless --models is used');
-  }
-
   if (!Number.isFinite(options.timeoutMs) || options.timeoutMs <= 0) {
     throw new Error('--timeout-ms must be a positive number');
   }
@@ -132,22 +158,29 @@ function readValue(argv, index, optionName) {
 }
 
 function printHelp() {
-  console.log(`Bedrock Mantle connection tester
+  console.log(`Bedrock Mantle connection tester for AWS CloudShell
+
+CloudShell setup:
+  export OPENAI_API_KEY='your Mantle API Key'
+
+Optional explicit RAiM defaults:
+  export OPENAI_BASE_URL='https://bedrock-mantle.us-west-2.api.aws/v1'
+  export MANTLE_MODEL='google.gemma-4-31b'
 
 Usage:
   node test_mantle_connection.js --models
-  node test_mantle_connection.js --prompt "こんにちは"
-  node test_mantle_connection.js --no-stream --prompt "こんにちは"
-  node test_mantle_connection.js --chat --prompt "こんにちは"
-  node test_mantle_connection.js --debug-sse --prompt "こんにちは"
+  node test_mantle_connection.js --chat --minimal --no-stream --prompt 'こんにちは'
+  node test_mantle_connection.js --chat --minimal --debug-sse --prompt 'こんにちは'
+  node test_mantle_connection.js --no-stream --prompt 'こんにちは'
+  node test_mantle_connection.js --debug-sse --prompt 'こんにちは'
   node test_mantle_connection.js --json
 
 Environment variables:
-  OPENAI_BASE_URL                 e.g. https://bedrock-mantle.us-east-1.api.aws/v1
-  OPENAI_API_KEY                  Mantle API Key
-  MANTLE_MODEL                    e.g. google.gemma-4-26b-a4b
-  MANTLE_TIMEOUT_MS               whole request timeout, default 60000
-  MANTLE_STREAM_IDLE_TIMEOUT_MS   streaming idle timeout, default 15000
+  OPENAI_API_KEY                  required: Mantle API Key
+  OPENAI_BASE_URL                 optional: default https://bedrock-mantle.us-west-2.api.aws/v1
+  MANTLE_MODEL                    optional: default google.gemma-4-31b
+  MANTLE_TIMEOUT_MS               optional: whole request timeout, default 60000
+  MANTLE_STREAM_IDLE_TIMEOUT_MS   optional: streaming idle timeout, default 15000
 
 Options:
   --base-url URL
@@ -158,6 +191,7 @@ Options:
   --json
   --no-stream
   --chat
+  --minimal
   --debug-sse
   --timeout-ms N
   --stream-idle-timeout-ms N
@@ -246,6 +280,24 @@ function buildInputMessages(options) {
 }
 
 function buildResponsesRequest(options) {
+  if (options.minimal) {
+    const request = {
+      model: options.model,
+      input: [
+        {
+          role: 'user',
+          content: options.prompt,
+        },
+      ],
+    };
+
+    if (options.stream) {
+      request.stream = true;
+    }
+
+    return request;
+  }
+
   return {
     model: options.model,
     input: buildInputMessages(options),
@@ -257,6 +309,24 @@ function buildResponsesRequest(options) {
 }
 
 function buildChatCompletionsRequest(options) {
+  if (options.minimal) {
+    const request = {
+      model: options.model,
+      messages: [
+        {
+          role: 'user',
+          content: options.prompt,
+        },
+      ],
+    };
+
+    if (options.stream) {
+      request.stream = true;
+    }
+
+    return request;
+  }
+
   return {
     model: options.model,
     messages: buildInputMessages(options),
@@ -419,6 +489,7 @@ async function callGenerationApi(options) {
   console.log(`  URL         : ${url}`);
   console.log(`  model       : ${options.model}`);
   console.log(`  stream      : ${options.stream}`);
+  console.log(`  minimal     : ${options.minimal}`);
 
   const response = await fetchWithTimeout(url, {
     method: 'POST',
