@@ -36,6 +36,26 @@ test('normalizeWebSocketEvent extracts Cognito sub and chat body', () => {
   assert.equal(normalized.text, '笑わせて');
 });
 
+test('normalizeWebSocketEvent extracts sub from Lambda Authorizer context', () => {
+  const event = {
+    requestContext: {
+      routeKey: '$default',
+      connectionId: 'conn-001',
+      authorizer: {
+        sub: 'user-from-context',
+      },
+    },
+    body: JSON.stringify({
+      requestId: 'req-001',
+      text: 'こんにちは',
+    }),
+  };
+
+  const normalized = normalizeWebSocketEvent(event);
+
+  assert.equal(normalized.sub, 'user-from-context');
+});
+
 test('normalizeWebSocketEvent rejects empty default message', () => {
   assert.throws(
     () => normalizeWebSocketEvent({
