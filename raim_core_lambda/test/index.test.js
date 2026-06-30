@@ -21,7 +21,7 @@ test('classifyCoreError hides unknown internal errors', () => {
   assert.equal(classifyCoreError(new Error('secret detail')).code, 'INTERNAL_ERROR');
 });
 
-test('handler routes SQS events to the partial batch response path', async () => {
+test('handler does not retry non-retriable invalid SQS messages', async () => {
   const originalConsoleError = console.error;
   console.error = () => {};
 
@@ -35,7 +35,7 @@ test('handler routes SQS events to the partial batch response path', async () =>
     }, { awsRequestId: 'invocation-1' });
 
     assert.deepEqual(result, {
-      batchItemFailures: [{ itemIdentifier: 'invalid-message' }],
+      batchItemFailures: [],
     });
   } finally {
     console.error = originalConsoleError;

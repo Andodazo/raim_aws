@@ -156,10 +156,14 @@ function createSqsCoreHandler(dependencyOverrides = {}) {
         await processRecord(record, context);
       } catch (error) {
         console.error(`Failed to process SQS record ${record.messageId}:`, error);
-        batchItemFailures.push({ itemIdentifier: record.messageId });
+        // CoreEventErrorなど、入力メッセージ自体が不正な場合は再試行しても直らない。
+        // そのためbatchItemFailuresへ入れず、SQS上は成功扱いにして毒メッセージ化を防ぐ。
+        if (error.retriable !== false) {
+          batchItemFailures.push({ itemIdentifier: record.messageId });
 
-        if (messageGroupId) {
-          failedMessageGroups.add(messageGroupId);
+          if (messageGroupId) {
+            failedMessageGroups.add(messageGroupId);
+          }
         }
       }
     }

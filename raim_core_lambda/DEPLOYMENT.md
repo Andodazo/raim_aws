@@ -79,19 +79,29 @@ Lambda実行ロールには、対象Secret ARNに限定した
 
 ## Request Queue message
 
-Edge LambdaはFIFO Queueへ送る時、同一ユーザーの会話順を守るため
-`MessageGroupId=sub`を指定します。`MessageDeduplicationId=requestId`を推奨します。
+Edge Lambdaは、WebSocketの `$default` で受け取ったユーザー入力を、
+次の `chat.request` 形式でCore Lambda用Request Queueへ送ります。
+
+FIFO Queueでは、同じWebSocket接続からの入力順序を守るため、
+`MessageGroupId=connectionId` を使います。
+重複送信を抑えるため、`MessageDeduplicationId=requestId` を使います。
 
 ```json
 {
+  "schemaVersion": 1,
+  "type": "chat.request",
   "sub": "cognito-user-sub",
   "requestId": "req-001",
   "connectionId": "websocket-connection-id",
   "source": "websocket",
   "text": "こんにちは",
-  "images": []
+  "images": [],
+  "createdAt": "2026-06-30T00:00:00.000Z"
 }
 ```
+
+Core Lambdaは `schemaVersion=1` と `type=chat.request` を正式なRequest Queue形式として検証します。
+schemaVersionやtypeが異なるメッセージは入力不正として扱います。
 
 ## Response Queue events
 
