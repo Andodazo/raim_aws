@@ -47,17 +47,25 @@
  *      export OPENAI_BASE_URL='https://bedrock-mantle.us-west-2.api.aws/openai/v1'
  *      export MANTLE_MODEL='google.gemma-4-31b'
  *
- *   4. モデル一覧を確認する
+ *   4. 生成APIを最小リクエストで確認する
+ *
+ *      node test_mantle_connection.js --minimal --no-stream --prompt 'こんにちは。短く挨拶してください。'
+ *
+ *   5. Responses API のストリーミングを確認する
+ *
+ *      node test_mantle_connection.js --minimal --debug-sse --prompt 'こんにちは。短く挨拶してください。'
+ *
+ *   6. 必要に応じてモデル一覧を確認する
  *
  *      node test_mantle_connection.js --models
  *
- *   5. 生成APIを最小リクエストで確認する
+ *      モデルカードの本命確認は生成APIです。
+ *      環境やAPI Keyの種類によって /models が 404 になる場合がありますが、
+ *      その場合も生成APIの結果を優先して判断してください。
+ *
+ *   7. 参考として Chat Completions 互換 API を確認する
  *
  *      node test_mantle_connection.js --chat --minimal --no-stream --prompt 'こんにちは。短く挨拶してください。'
- *
- *   6. ストリーミングを確認する
- *
- *      node test_mantle_connection.js --chat --minimal --debug-sse --prompt 'こんにちは。短く挨拶してください。'
  *
  * 注意:
  *   API Key を --api-key で直接渡すこともできますが、CloudShell の履歴に残りやすいです。
@@ -168,11 +176,10 @@ Optional explicit RAiM defaults:
   export MANTLE_MODEL='google.gemma-4-31b'
 
 Usage:
+  node test_mantle_connection.js --minimal --no-stream --prompt 'こんにちは'
+  node test_mantle_connection.js --minimal --debug-sse --prompt 'こんにちは'
   node test_mantle_connection.js --models
   node test_mantle_connection.js --chat --minimal --no-stream --prompt 'こんにちは'
-  node test_mantle_connection.js --chat --minimal --debug-sse --prompt 'こんにちは'
-  node test_mantle_connection.js --no-stream --prompt 'こんにちは'
-  node test_mantle_connection.js --debug-sse --prompt 'こんにちは'
   node test_mantle_connection.js --json
 
 Environment variables:
@@ -281,14 +288,13 @@ function buildInputMessages(options) {
 
 function buildResponsesRequest(options) {
   if (options.minimal) {
+    // Gemma 4 31B のモデルカードにある Responses API サンプルでは、
+    // input に messages 配列ではなく、単純な文字列を渡している。
+    // 500 エラーの切り分けでは、まず公式サンプルと同じ最小形に寄せる。
     const request = {
       model: options.model,
-      input: [
-        {
-          role: 'user',
-          content: options.prompt,
-        },
-      ],
+      input: options.prompt,
+      max_output_tokens: 512,
     };
 
     if (options.stream) {
