@@ -288,14 +288,13 @@ function buildInputMessages(options) {
 
 function buildResponsesRequest(options) {
   if (options.minimal) {
+    // Gemma 4 31B のモデルカードにある Responses API サンプルでは、
+    // input に messages 配列ではなく、単純な文字列を渡している。
+    // 500 エラーの切り分けでは、まず公式サンプルと同じ最小形に寄せる。
     const request = {
       model: options.model,
-      input: [
-        {
-          role: 'user',
-          content: options.prompt,
-        },
-      ],
+      input: options.prompt,
+      max_output_tokens: 512,
     };
 
     if (options.stream) {
