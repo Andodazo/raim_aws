@@ -34,6 +34,7 @@ function extractSub(event) {
   const authorizer = event?.requestContext?.authorizer || {};
 
   return String(
+    authorizer?.sub ||
     authorizer?.claims?.sub ||
     authorizer?.jwt?.claims?.sub ||
     authorizer?.principalId ||
