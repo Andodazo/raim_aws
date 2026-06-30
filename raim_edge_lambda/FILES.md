@@ -4,6 +4,8 @@
 
 Edge Lambdaは、クライアントのWebSocket接続を受け付け、ユーザー入力をCore Lambda用Request Queueへ送り、Core Lambdaから戻ってきたResponse QueueイベントをWebSocketへ返す役割を持ちます。
 
+Response Queueは環境変数ではなく、Edge LambdaのSQSイベントソースマッピングとして紐づけます。
+
 ## ファイル群の全体図
 
 ```text
@@ -25,6 +27,7 @@ raim_edge_lambda/
 │   └── websocket-response.js         ← API Gatewayへ返すHTTP形式レスポンスを作る
 └── test/                             ← Node.js標準テストランナー用の単体テスト
     ├── client-message.test.js        ← streamイベント変換のテスト
+    ├── index.test.js                 ← WebSocket/SQSイベント判定のテスト
     ├── response-queue-handler.test.js ← Response QueueからWebSocket返信までのテスト
     ├── websocket-event.test.js       ← WebSocketイベント正規化のテスト
     └── websocket-handler.test.js     ← $connect/$disconnect/$default処理のテスト
@@ -188,6 +191,9 @@ Core Lambda内部のstreamイベントを、クライアントへ送りやすい
 - `stream.delta`
 - `stream.completed`
 - `stream.error`
+
+`RAiM-CoreResponse-dev.fifo` は、LambdaのSQSトリガーとしてEdge Lambdaへ紐づけます。
+Edge Lambdaの環境変数にResponse Queue URLを設定する必要はありません。
 
 ### `lib/websocket-response.js`
 

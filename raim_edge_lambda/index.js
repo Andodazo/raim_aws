@@ -22,7 +22,8 @@ const { createHttpResponse } = require('./lib/websocket-response');
 
 function isSqsEvent(event) {
   return Array.isArray(event?.Records) &&
-    event.Records.some((record) => record.eventSource === 'aws:sqs');
+    event.Records.length > 0 &&
+    event.Records.every((record) => record.eventSource === 'aws:sqs');
 }
 
 function isWebSocketEvent(event) {
