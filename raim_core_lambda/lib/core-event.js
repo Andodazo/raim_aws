@@ -35,6 +35,9 @@
 const crypto = require('crypto');
 const { ERROR_CODES, validateUpstream } = require('./types');
 
+const CORE_REQUEST_SCHEMA_VERSION = 1;
+const CORE_CHAT_REQUEST_TYPE = 'chat.request';
+
 class CoreEventError extends Error {
   constructor(message, details) {
     super(message);
@@ -42,6 +45,45 @@ class CoreEventError extends Error {
     this.code = ERROR_CODES.INVALID_INPUT;
     this.retriable = false;
     this.details = details;
+  }
+}
+
+function validateCoreRequestEnvelope(payload) {
+  // Edge LambdaからRequest Queueへ送られる正式なメッセージは、
+  // schemaVersion/typeを持つ envelope 形式。
+  //
+  // {
+  //   schemaVersion: 1,
+  //   type: "chat.request",
+  //   requestId,
+  //   connectionId,
+  //   sub,
+  //   source: "websocket",
+  //   text,
+  //   images
+  // }
+  //
+  // Lambdaコンソールからの直接テストや旧形式の呼び出しでは
+  // schemaVersion/type が無い場合もあるため、その場合は互換目的で許可する。
+  const hasSchemaVersion = payload.schemaVersion !== undefined && payload.schemaVersion !== null;
+  const hasType = payload.type !== undefined && payload.type !== null && payload.type !== '';
+
+  if (!hasSchemaVersion && !hasType) {
+    return;
+  }
+
+  if (Number(payload.schemaVersion) !== CORE_REQUEST_SCHEMA_VERSION) {
+    throw new CoreEventError('Unsupported Core request schemaVersion', {
+      schemaVersion: payload.schemaVersion,
+      expected: CORE_REQUEST_SCHEMA_VERSION,
+    });
+  }
+
+  if (String(payload.type || '') !== CORE_CHAT_REQUEST_TYPE) {
+    throw new CoreEventError('Unsupported Core request type', {
+      type: payload.type,
+      expected: CORE_CHAT_REQUEST_TYPE,
+    });
   }
 }
 
@@ -162,6 +204,8 @@ function getCoreRequestId(event, fallbackRequestId) {
  */
 function normalizeCoreEvent(event, { fallbackRequestId } = {}) {
   const { payload, source } = unwrapCorePayload(event);
+  validateCoreRequestEnvelope(payload);
+
   const sub = optionalString(payload.sub, 'sub');
 
   if (!sub) {
@@ -195,8 +239,11 @@ function normalizeCoreEvent(event, { fallbackRequestId } = {}) {
 }
 
 module.exports = {
+  CORE_CHAT_REQUEST_TYPE,
+  CORE_REQUEST_SCHEMA_VERSION,
   CoreEventError,
   getCoreRequestId,
   normalizeCoreEvent,
+  validateCoreRequestEnvelope,
   unwrapCorePayload,
 };

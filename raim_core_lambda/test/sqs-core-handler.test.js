@@ -85,3 +85,25 @@ test('returns only failed SQS records in batchItemFailures', async () => {
     console.error = originalConsoleError;
   }
 });
+
+test('does not retry non-retriable invalid request messages', async () => {
+  const handler = createSqsCoreHandler({
+    normalizeCoreEvent: () => {
+      const error = new Error('invalid request');
+      error.retriable = false;
+      throw error;
+    },
+  });
+
+  const originalConsoleError = console.error;
+  console.error = () => {};
+
+  try {
+    const result = await handler({ Records: [createRecord('invalid-1')] }, {});
+    assert.deepEqual(result, {
+      batchItemFailures: [],
+    });
+  } finally {
+    console.error = originalConsoleError;
+  }
+});
