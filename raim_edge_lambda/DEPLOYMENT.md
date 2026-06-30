@@ -126,6 +126,27 @@ stream.error
 
 Edge LambdaはこのQueueをEvent Source Mappingで購読し、各イベントをWebSocketへpostします。
 
+作成済みのResponse Queue:
+
+```text
+RAiM-CoreResponse-dev.fifo
+```
+
+Edge Lambda側では、このQueue URLを環境変数に入れる必要はありません。
+代わりに、Lambdaの「トリガーを追加」からSQSイベントソースとして紐づけます。
+
+推奨イベントソースマッピング設定:
+
+| 項目 | 設定値 |
+|---|---|
+| ソース | `SQS` |
+| SQSキュー | `RAiM-CoreResponse-dev.fifo` |
+| バッチサイズ | `1` |
+| バッチウィンドウ | `0秒` |
+| レポートバッチ項目の失敗 | `有効` |
+
+バッチサイズは大きくしてもコード上は処理できますが、WebSocketへ順番に返す検証段階では `1` が分かりやすいです。
+
 ## 必要なIAM権限
 
 Edge Lambdaの実行ロールには最低限次が必要です。
