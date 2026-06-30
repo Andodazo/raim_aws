@@ -1,68 +1,44 @@
 #!/usr/bin/env node
 /**
- * Bedrock Mantle 疎通確認用スクリプト。
+ * Bedrock Mantle connection tester
  *
  * 目的:
- *   LambdaのIAM権限やSecrets Manager設定を待たずに、
- *   Windowsのコマンドプロンプト上で
+ *   Lambda / IAM / Secrets Manager を使わずに、Windows の VSCode ターミナルや
+ *   コマンドプロンプトから Mantle endpoint URL + API Key だけで疎通確認します。
  *
- *     - Mantle endpoint URL
- *     - Mantle API Key
- *     - Mantle model ID
+ * このファイルは AWS SDK を使いません。
+ * そのため、Lambda ロールの secretsmanager:GetSecretValue 権限や
+ * bedrock:InvokeModel 権限とは切り離して、Mantle API Key の有効性だけを検証できます。
  *
- *   だけを使って、Bedrock Mantleへ直接アクセスできるか確認する。
+ * 事前準備 PowerShell:
+ *   $env:OPENAI_BASE_URL="https://bedrock-mantle.us-east-1.api.aws/v1"
+ *   $env:OPENAI_API_KEY="実際の Mantle API Key"
+ *   $env:MANTLE_MODEL="google.gemma-4-26b-a4b"
  *
- * このスクリプトはAWS SDKを使いません。
- * Secrets Managerにもアクセスしません。
- * API Keyは環境変数またはコマンドライン引数で直接渡します。
- *
- * ============================================================================
- * Windows コマンドプロンプトでの使い方
- * ============================================================================
- *
- * 1. 環境変数を設定する
- *
+ * 事前準備 コマンドプロンプト:
  *   set OPENAI_BASE_URL=https://bedrock-mantle.us-east-1.api.aws/v1
- *   set OPENAI_API_KEY=実際のMantle API Key
+ *   set OPENAI_API_KEY=実際の Mantle API Key
  *   set MANTLE_MODEL=google.gemma-4-26b-a4b
  *
- *   us-west-2で試す場合:
+ * 使い方:
+ *   1. モデル一覧を確認する
+ *      node test_mantle_connection.js --models
  *
- *   set OPENAI_BASE_URL=https://bedrock-mantle.us-west-2.api.aws/v1
+ *   2. Responses API をストリーミングで確認する
+ *      node test_mantle_connection.js --prompt "こんにちは。短く挨拶してください。"
  *
- * 2. モデル一覧だけ確認する
+ *   3. ストリーミングが詰まる場合、非ストリーミングで確認する
+ *      node test_mantle_connection.js --no-stream --prompt "こんにちは。短く挨拶してください。"
  *
- *   node test_mantle_connection.js --models
+ *   4. Chat Completions 互換 API で確認する
+ *      node test_mantle_connection.js --chat --prompt "こんにちは。短く挨拶してください。"
  *
- * 3. Responses APIで短い応答を生成する
- *
- *   node test_mantle_connection.js --prompt "こんにちは。短く挨拶して"
- *
- * 4. JSON応答形式をCore Lambdaに近い形で試す
- *
- *   node test_mantle_connection.js --json
- *
- * ============================================================================
- * コマンドライン引数で直接指定する例
- * ============================================================================
- *
- *   node test_mantle_connection.js ^
- *     --base-url "https://bedrock-mantle.us-east-1.api.aws/v1" ^
- *     --api-key "実際のMantle API Key" ^
- *     --model "google.gemma-4-26b-a4b" ^
- *     --prompt "こんにちは"
+ *   5. SSE の生イベントを表示して、Mantle が返すイベント形式を確認する
+ *      node test_mantle_connection.js --debug-sse --prompt "こんにちは。短く挨拶してください。"
  *
  * 注意:
- *   コマンド履歴にAPI Keyが残るため、通常は --api-key より環境変数を推奨します。
- *
- * ============================================================================
- * 成功時に分かること
- * ============================================================================
- *
- * - endpoint URLが正しい
- * - API KeyがMantleで受け付けられている
- * - 指定したmodel IDが利用できる
- * - Responses APIのstream=trueで応答を受け取れる
+ *   API Key を --api-key で直接渡すこともできますが、ターミナル履歴に残りやすいです。
+ *   基本的には OPENAI_API_KEY 環境変数で渡すことをおすすめします。
  */
 
 'use strict';
@@ -78,7 +54,11 @@ function parseArgs(argv) {
     prompt: DEFAULT_PROMPT,
     modelsOnly: false,
     jsonMode: false,
+    stream: true,
+    chat: false,
+    debugSse: false,
     timeoutMs: Number(process.env.MANTLE_TIMEOUT_MS || 60000),
+    streamIdleTimeoutMs: Number(process.env.MANTLE_STREAM_IDLE_TIMEOUT_MS || 15000),
   };
 
   for (let i = 2; i < argv.length; i += 1) {
@@ -89,10 +69,16 @@ function parseArgs(argv) {
     } else if (arg === '--json') {
       options.jsonMode = true;
       options.prompt = [
-        '次の形式のJSONだけを返してください。',
+        '次の形式の JSON だけを返してください。',
         '{"text":"短い返答","emotion":"happy","intensity":0.5}',
         'ユーザーへの返答: こんにちは',
       ].join('\n');
+    } else if (arg === '--no-stream') {
+      options.stream = false;
+    } else if (arg === '--chat') {
+      options.chat = true;
+    } else if (arg === '--debug-sse') {
+      options.debugSse = true;
     } else if (arg === '--base-url') {
       options.baseUrl = readValue(argv, ++i, arg);
     } else if (arg === '--api-key') {
@@ -103,6 +89,8 @@ function parseArgs(argv) {
       options.prompt = readValue(argv, ++i, arg);
     } else if (arg === '--timeout-ms') {
       options.timeoutMs = Number(readValue(argv, ++i, arg));
+    } else if (arg === '--stream-idle-timeout-ms') {
+      options.streamIdleTimeoutMs = Number(readValue(argv, ++i, arg));
     } else if (arg === '--help' || arg === '-h') {
       printHelp();
       process.exit(0);
@@ -127,17 +115,19 @@ function parseArgs(argv) {
     throw new Error('--timeout-ms must be a positive number');
   }
 
+  if (!Number.isFinite(options.streamIdleTimeoutMs) || options.streamIdleTimeoutMs <= 0) {
+    throw new Error('--stream-idle-timeout-ms must be a positive number');
+  }
+
   options.baseUrl = options.baseUrl.replace(/\/$/, '');
   return options;
 }
 
 function readValue(argv, index, optionName) {
   const value = argv[index];
-
   if (!value || value.startsWith('--')) {
     throw new Error(`${optionName} requires a value`);
   }
-
   return value;
 }
 
@@ -147,12 +137,17 @@ function printHelp() {
 Usage:
   node test_mantle_connection.js --models
   node test_mantle_connection.js --prompt "こんにちは"
+  node test_mantle_connection.js --no-stream --prompt "こんにちは"
+  node test_mantle_connection.js --chat --prompt "こんにちは"
+  node test_mantle_connection.js --debug-sse --prompt "こんにちは"
   node test_mantle_connection.js --json
 
 Environment variables:
-  OPENAI_BASE_URL   e.g. https://bedrock-mantle.us-east-1.api.aws/v1
-  OPENAI_API_KEY    Mantle API Key
-  MANTLE_MODEL      e.g. google.gemma-4-26b-a4b
+  OPENAI_BASE_URL                 e.g. https://bedrock-mantle.us-east-1.api.aws/v1
+  OPENAI_API_KEY                  Mantle API Key
+  MANTLE_MODEL                    e.g. google.gemma-4-26b-a4b
+  MANTLE_TIMEOUT_MS               whole request timeout, default 60000
+  MANTLE_STREAM_IDLE_TIMEOUT_MS   streaming idle timeout, default 15000
 
 Options:
   --base-url URL
@@ -161,19 +156,17 @@ Options:
   --prompt TEXT
   --models
   --json
+  --no-stream
+  --chat
+  --debug-sse
   --timeout-ms N
+  --stream-idle-timeout-ms N
 `);
 }
 
 function maskApiKey(apiKey) {
-  if (!apiKey) {
-    return '(empty)';
-  }
-
-  if (apiKey.length <= 8) {
-    return `${apiKey[0] || ''}***`;
-  }
-
+  if (!apiKey) return '(empty)';
+  if (apiKey.length <= 8) return `${apiKey[0] || ''}***`;
   return `${apiKey.slice(0, 4)}...${apiKey.slice(-4)} (${apiKey.length} chars)`;
 }
 
@@ -186,6 +179,11 @@ async function fetchWithTimeout(url, init, timeoutMs) {
       ...init,
       signal: controller.signal,
     });
+  } catch (error) {
+    if (error.name === 'AbortError') {
+      throw new Error(`Request timed out after ${timeoutMs} ms`);
+    }
+    throw error;
   } finally {
     clearTimeout(timer);
   }
@@ -213,15 +211,7 @@ async function listModels(options) {
     throw new Error(`Models API failed with HTTP ${response.status}`);
   }
 
-  let payload;
-  try {
-    payload = JSON.parse(text);
-  } catch (error) {
-    console.log('\nRaw response:');
-    console.log(text);
-    throw new Error(`Models API returned non-JSON: ${error.message}`);
-  }
-
+  const payload = parseJsonOrThrow(text, 'Models API');
   const ids = Array.isArray(payload.data)
     ? payload.data.map((item) => item.id).filter(Boolean)
     : [];
@@ -240,26 +230,50 @@ async function listModels(options) {
   return ids;
 }
 
+function buildInputMessages(options) {
+  return [
+    {
+      role: 'system',
+      content: options.jsonMode
+        ? 'あなたは RAiM の応答生成テストです。必ず JSON だけを返してください。'
+        : 'あなたは接続確認用のアシスタントです。日本語で短く返答してください。',
+    },
+    {
+      role: 'user',
+      content: options.prompt,
+    },
+  ];
+}
+
 function buildResponsesRequest(options) {
   return {
     model: options.model,
-    input: [
-      {
-        role: 'system',
-        content: options.jsonMode
-          ? 'あなたはRAiMの応答生成テストです。必ずJSONだけを返してください。'
-          : 'あなたは疎通確認用のアシスタントです。短く返答してください。',
-      },
-      {
-        role: 'user',
-        content: options.prompt,
-      },
-    ],
+    input: buildInputMessages(options),
     store: false,
-    stream: true,
+    stream: options.stream,
     max_output_tokens: 256,
     temperature: 0.3,
   };
+}
+
+function buildChatCompletionsRequest(options) {
+  return {
+    model: options.model,
+    messages: buildInputMessages(options),
+    stream: options.stream,
+    max_tokens: 256,
+    temperature: 0.3,
+  };
+}
+
+function parseJsonOrThrow(text, label) {
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    console.log('\nRaw response:');
+    console.log(text);
+    throw new Error(`${label} returned non-JSON: ${error.message}`);
+  }
 }
 
 function parseSseBlock(block) {
@@ -281,31 +295,72 @@ function parseSseBlock(block) {
 }
 
 function extractDelta(payload) {
-  if (typeof payload.delta === 'string') {
-    return payload.delta;
+  if (typeof payload.delta === 'string') return payload.delta;
+  if (typeof payload.text === 'string') return payload.text;
+  if (typeof payload.output_text === 'string') return payload.output_text;
+
+  if (typeof payload.response?.output_text === 'string') {
+    return payload.response.output_text;
   }
 
-  if (typeof payload.text === 'string') {
-    return payload.text;
-  }
-
-  if (typeof payload.output_text === 'string') {
-    return payload.output_text;
+  if (typeof payload.choices?.[0]?.delta?.content === 'string') {
+    return payload.choices[0].delta.content;
   }
 
   return '';
 }
 
-async function consumeSseStream(body) {
+function extractTextDeep(value) {
+  const found = [];
+
+  function visit(node) {
+    if (!node || typeof node !== 'object') return;
+
+    if (typeof node.output_text === 'string') found.push(node.output_text);
+    if (typeof node.text === 'string') found.push(node.text);
+    if (typeof node.content === 'string') found.push(node.content);
+    if (typeof node.message?.content === 'string') found.push(node.message.content);
+
+    if (Array.isArray(node)) {
+      for (const item of node) visit(item);
+      return;
+    }
+
+    for (const child of Object.values(node)) {
+      visit(child);
+    }
+  }
+
+  visit(value);
+  return [...new Set(found)].join('');
+}
+
+async function readWithIdleTimeout(reader, idleTimeoutMs) {
+  let timeout;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeout = setTimeout(() => {
+      reject(new Error(`No streaming chunk received for ${idleTimeoutMs} ms`));
+    }, idleTimeoutMs);
+  });
+
+  try {
+    return await Promise.race([reader.read(), timeoutPromise]);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function consumeSseStream(body, options) {
   const decoder = new TextDecoder('utf-8');
   const reader = body.getReader();
   let buffer = '';
   let rawText = '';
   let responseId = '';
   let completedPayload = null;
+  let eventCount = 0;
 
   while (true) {
-    const { value, done } = await reader.read();
+    const { value, done } = await readWithIdleTimeout(reader, options.streamIdleTimeoutMs);
     buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
 
     let separatorIndex;
@@ -314,16 +369,16 @@ async function consumeSseStream(body) {
       buffer = buffer.slice(separatorIndex).replace(/^\r?\n/, '');
       const parsed = parseSseBlock(block);
 
-      if (!parsed) {
-        continue;
+      if (!parsed) continue;
+      eventCount += 1;
+
+      if (options.debugSse) {
+        console.log(`\n[SSE event ${eventCount}] ${parsed.event || '(no event name)'}`);
+        console.log(parsed.data);
       }
 
       if (parsed.data === '[DONE]') {
-        return {
-          rawText,
-          responseId,
-          completedPayload,
-        };
+        return { rawText, responseId, completedPayload, eventCount };
       }
 
       let payload;
@@ -333,13 +388,8 @@ async function consumeSseStream(body) {
         continue;
       }
 
-      if (!responseId && typeof payload.id === 'string') {
-        responseId = payload.id;
-      }
-
-      if (!responseId && typeof payload.response?.id === 'string') {
-        responseId = payload.response.id;
-      }
+      if (!responseId && typeof payload.id === 'string') responseId = payload.id;
+      if (!responseId && typeof payload.response?.id === 'string') responseId = payload.response.id;
 
       const delta = extractDelta(payload);
       if (delta) {
@@ -353,58 +403,71 @@ async function consumeSseStream(body) {
     }
 
     if (done) {
-      return {
-        rawText,
-        responseId,
-        completedPayload,
-      };
+      return { rawText, responseId, completedPayload, eventCount };
     }
   }
 }
 
-async function callResponsesApi(options) {
-  const url = `${options.baseUrl}/responses`;
-  const requestBody = buildResponsesRequest(options);
+async function callGenerationApi(options) {
+  const path = options.chat ? '/chat/completions' : '/responses';
+  const url = `${options.baseUrl}${path}`;
+  const requestBody = options.chat
+    ? buildChatCompletionsRequest(options)
+    : buildResponsesRequest(options);
 
-  console.log('\nResponses API');
+  console.log(`\n${options.chat ? 'Chat Completions API' : 'Responses API'}`);
   console.log(`  URL         : ${url}`);
   console.log(`  model       : ${options.model}`);
-  console.log(`  stream      : true`);
-  console.log('\nStreaming text:');
+  console.log(`  stream      : ${options.stream}`);
 
   const response = await fetchWithTimeout(url, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${options.apiKey}`,
       'Content-Type': 'application/json',
-      Accept: 'text/event-stream',
+      Accept: options.stream ? 'text/event-stream' : 'application/json',
     },
     body: JSON.stringify(requestBody),
   }, options.timeoutMs);
 
+  console.log(`  HTTP status : ${response.status}`);
+
   if (!response.ok) {
     const text = await response.text();
-    console.log(`\n\nHTTP status : ${response.status}`);
-    console.log('Raw response:');
+    console.log('\nRaw response:');
     console.log(text);
-    throw new Error(`Responses API failed with HTTP ${response.status}`);
+    throw new Error(`Generation API failed with HTTP ${response.status}`);
+  }
+
+  if (!options.stream) {
+    const text = await response.text();
+    const payload = parseJsonOrThrow(text, 'Generation API');
+    const extractedText = extractTextDeep(payload);
+
+    console.log('\nExtracted text:');
+    console.log(extractedText || '(text not found)');
+    console.log('\nRaw JSON:');
+    console.log(JSON.stringify(payload, null, 2));
+    return { rawText: extractedText, eventCount: 0 };
   }
 
   if (!response.body) {
     const text = await response.text();
     console.log(text);
-    throw new Error('Responses API did not return a stream body');
+    throw new Error('Generation API did not return a stream body');
   }
 
-  const result = await consumeSseStream(response.body);
+  console.log('\nStreaming text:');
+  const result = await consumeSseStream(response.body, options);
 
   console.log('\n\nResult summary');
   console.log(`  responseId  : ${result.responseId || '(not found)'}`);
+  console.log(`  eventCount  : ${result.eventCount}`);
   console.log(`  text length : ${result.rawText.length}`);
 
   if (!result.rawText) {
     console.log('\nNo streaming text was extracted.');
-    console.log('The API call may still have succeeded, but the SSE event shape may differ.');
+    console.log('Try --debug-sse or --no-stream to inspect the actual response shape.');
     if (result.completedPayload) {
       console.log('\nCompleted payload:');
       console.log(JSON.stringify(result.completedPayload, null, 2));
@@ -418,17 +481,18 @@ async function main() {
   const options = parseArgs(process.argv);
 
   console.log('Bedrock Mantle connection tester');
-  console.log(`  baseUrl     : ${options.baseUrl}`);
-  console.log(`  apiKey      : ${maskApiKey(options.apiKey)}`);
-  console.log(`  model       : ${options.model || '(not required for --models)'}`);
-  console.log(`  timeoutMs   : ${options.timeoutMs}`);
+  console.log(`  baseUrl               : ${options.baseUrl}`);
+  console.log(`  apiKey                : ${maskApiKey(options.apiKey)}`);
+  console.log(`  model                 : ${options.model || '(not required for --models)'}`);
+  console.log(`  timeoutMs             : ${options.timeoutMs}`);
+  console.log(`  streamIdleTimeoutMs   : ${options.streamIdleTimeoutMs}`);
 
   if (options.modelsOnly) {
     await listModels(options);
     return;
   }
 
-  await callResponsesApi(options);
+  await callGenerationApi(options);
 }
 
 main().catch((error) => {
