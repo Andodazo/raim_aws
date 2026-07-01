@@ -16,6 +16,14 @@
  *   - Mantle API Key が有効であること
  *   - 指定した Mantle model ID で生成APIを呼び出せること
  *
+ * 通信時間として、次の値も実行結果へ表示します。
+ *
+ *   - response headers: リクエスト送信からHTTPレスポンスヘッダー受信まで
+ *   - first chunk     : ストリーミングで最初のデータを受信するまで
+ *   - total elapsed   : レスポンス本文またはストリームを最後まで受信するまで
+ *
+ * HTTPエラーやタイムアウトの場合も、エラーが確定するまでのtotal elapsedを表示します。
+ *
  * RAiM の本命設定:
  *
  *   - region   : us-west-2
@@ -211,6 +219,24 @@ function maskApiKey(apiKey) {
   return `${apiKey.slice(0, 4)}...${apiKey.slice(-4)} (${apiKey.length} chars)`;
 }
 
+/**
+ * 通信時間の計測には、PCの時計を変更しても値が飛ばない単調増加時計を使う。
+ * Date.now()ではなくprocess.hrtime.bigint()を使うことで、ミリ秒未満まで測定できる。
+ */
+function createRequestTimer() {
+  const startedAt = process.hrtime.bigint();
+
+  return {
+    elapsedMs() {
+      return Number(process.hrtime.bigint() - startedAt) / 1_000_000;
+    },
+  };
+}
+
+function formatElapsed(milliseconds) {
+  return `${milliseconds.toFixed(1)} ms (${(milliseconds / 1000).toFixed(3)} s)`;
+}
+
 async function fetchWithTimeout(url, init, timeoutMs) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -232,43 +258,54 @@ async function fetchWithTimeout(url, init, timeoutMs) {
 
 async function listModels(options) {
   const url = `${options.baseUrl}/models`;
-  const response = await fetchWithTimeout(url, {
-    method: 'GET',
-    headers: {
-      Authorization: `Bearer ${options.apiKey}`,
-      Accept: 'application/json',
-    },
-  }, options.timeoutMs);
+  const timer = createRequestTimer();
+  let completedMs;
 
-  const text = await response.text();
+  try {
+    const response = await fetchWithTimeout(url, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${options.apiKey}`,
+        Accept: 'application/json',
+      },
+    }, options.timeoutMs);
 
-  console.log('\nModels API');
-  console.log(`  URL         : ${url}`);
-  console.log(`  HTTP status : ${response.status}`);
+    const responseHeadersMs = timer.elapsedMs();
+    const text = await response.text();
+    completedMs = timer.elapsedMs();
 
-  if (!response.ok) {
-    console.log('\nRaw response:');
-    console.log(text);
-    throw new Error(`Models API failed with HTTP ${response.status}`);
+    console.log('\nModels API');
+    console.log(`  URL             : ${url}`);
+    console.log(`  HTTP status     : ${response.status}`);
+    console.log(`  response headers: ${formatElapsed(responseHeadersMs)}`);
+
+    if (!response.ok) {
+      console.log('\nRaw response:');
+      console.log(text);
+      throw new Error(`Models API failed with HTTP ${response.status}`);
+    }
+
+    const payload = parseJsonOrThrow(text, 'Models API');
+    const ids = Array.isArray(payload.data)
+      ? payload.data.map((item) => item.id).filter(Boolean)
+      : [];
+
+    if (ids.length === 0) {
+      console.log('\nNo model IDs found in response:');
+      console.log(JSON.stringify(payload, null, 2));
+      return [];
+    }
+
+    console.log('\nAvailable model IDs:');
+    for (const id of ids) {
+      console.log(`  ${id}`);
+    }
+
+    return ids;
+  } finally {
+    // HTTPエラーやタイムアウトの場合も、失敗が確定するまでの時間を必ず表示する。
+    console.log(`\n  total elapsed   : ${formatElapsed(completedMs ?? timer.elapsedMs())}`);
   }
-
-  const payload = parseJsonOrThrow(text, 'Models API');
-  const ids = Array.isArray(payload.data)
-    ? payload.data.map((item) => item.id).filter(Boolean)
-    : [];
-
-  if (ids.length === 0) {
-    console.log('\nNo model IDs found in response:');
-    console.log(JSON.stringify(payload, null, 2));
-    return [];
-  }
-
-  console.log('\nAvailable model IDs:');
-  for (const id of ids) {
-    console.log(`  ${id}`);
-  }
-
-  return ids;
 }
 
 function buildInputMessages(options) {
@@ -426,7 +463,7 @@ async function readWithIdleTimeout(reader, idleTimeoutMs) {
   }
 }
 
-async function consumeSseStream(body, options) {
+async function consumeSseStream(body, options, onFirstChunk) {
   const decoder = new TextDecoder('utf-8');
   const reader = body.getReader();
   let buffer = '';
@@ -434,9 +471,18 @@ async function consumeSseStream(body, options) {
   let responseId = '';
   let completedPayload = null;
   let eventCount = 0;
+  let receivedFirstChunk = false;
 
   while (true) {
     const { value, done } = await readWithIdleTimeout(reader, options.streamIdleTimeoutMs);
+
+    // fetch()はレスポンスヘッダーを受信した時点で完了する。
+    // ストリーミング本文が実際に届いた時刻はここで別途記録する。
+    if (!receivedFirstChunk && value && value.byteLength > 0) {
+      receivedFirstChunk = true;
+      onFirstChunk?.();
+    }
+
     buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
 
     let separatorIndex;
@@ -496,62 +542,86 @@ async function callGenerationApi(options) {
   console.log(`  model       : ${options.model}`);
   console.log(`  stream      : ${options.stream}`);
   console.log(`  minimal     : ${options.minimal}`);
+  const timer = createRequestTimer();
+  let responseHeadersMs;
+  let firstChunkMs;
+  let completedMs;
 
-  const response = await fetchWithTimeout(url, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${options.apiKey}`,
-      'Content-Type': 'application/json',
-      Accept: options.stream ? 'text/event-stream' : 'application/json',
-    },
-    body: JSON.stringify(requestBody),
-  }, options.timeoutMs);
+  try {
+    const response = await fetchWithTimeout(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${options.apiKey}`,
+        'Content-Type': 'application/json',
+        Accept: options.stream ? 'text/event-stream' : 'application/json',
+      },
+      body: JSON.stringify(requestBody),
+    }, options.timeoutMs);
 
-  console.log(`  HTTP status : ${response.status}`);
+    responseHeadersMs = timer.elapsedMs();
+    console.log(`  HTTP status     : ${response.status}`);
 
-  if (!response.ok) {
-    const text = await response.text();
-    console.log('\nRaw response:');
-    console.log(text);
-    throw new Error(`Generation API failed with HTTP ${response.status}`);
-  }
-
-  if (!options.stream) {
-    const text = await response.text();
-    const payload = parseJsonOrThrow(text, 'Generation API');
-    const extractedText = extractTextDeep(payload);
-
-    console.log('\nExtracted text:');
-    console.log(extractedText || '(text not found)');
-    console.log('\nRaw JSON:');
-    console.log(JSON.stringify(payload, null, 2));
-    return { rawText: extractedText, eventCount: 0 };
-  }
-
-  if (!response.body) {
-    const text = await response.text();
-    console.log(text);
-    throw new Error('Generation API did not return a stream body');
-  }
-
-  console.log('\nStreaming text:');
-  const result = await consumeSseStream(response.body, options);
-
-  console.log('\n\nResult summary');
-  console.log(`  responseId  : ${result.responseId || '(not found)'}`);
-  console.log(`  eventCount  : ${result.eventCount}`);
-  console.log(`  text length : ${result.rawText.length}`);
-
-  if (!result.rawText) {
-    console.log('\nNo streaming text was extracted.');
-    console.log('Try --debug-sse or --no-stream to inspect the actual response shape.');
-    if (result.completedPayload) {
-      console.log('\nCompleted payload:');
-      console.log(JSON.stringify(result.completedPayload, null, 2));
+    if (!response.ok) {
+      const text = await response.text();
+      completedMs = timer.elapsedMs();
+      console.log('\nRaw response:');
+      console.log(text);
+      throw new Error(`Generation API failed with HTTP ${response.status}`);
     }
-  }
 
-  return result;
+    if (!options.stream) {
+      const text = await response.text();
+      completedMs = timer.elapsedMs();
+      const payload = parseJsonOrThrow(text, 'Generation API');
+      const extractedText = extractTextDeep(payload);
+
+      console.log('\nExtracted text:');
+      console.log(extractedText || '(text not found)');
+      console.log('\nRaw JSON:');
+      console.log(JSON.stringify(payload, null, 2));
+      return { rawText: extractedText, eventCount: 0 };
+    }
+
+    if (!response.body) {
+      const text = await response.text();
+      completedMs = timer.elapsedMs();
+      console.log(text);
+      throw new Error('Generation API did not return a stream body');
+    }
+
+    console.log('\nStreaming text:');
+    const result = await consumeSseStream(response.body, options, () => {
+      firstChunkMs = timer.elapsedMs();
+    });
+    completedMs = timer.elapsedMs();
+
+    console.log('\n\nResult summary');
+    console.log(`  responseId  : ${result.responseId || '(not found)'}`);
+    console.log(`  eventCount  : ${result.eventCount}`);
+    console.log(`  text length : ${result.rawText.length}`);
+
+    if (!result.rawText) {
+      console.log('\nNo streaming text was extracted.');
+      console.log('Try --debug-sse or --no-stream to inspect the actual response shape.');
+      if (result.completedPayload) {
+        console.log('\nCompleted payload:');
+        console.log(JSON.stringify(result.completedPayload, null, 2));
+      }
+    }
+
+    return result;
+  } finally {
+    console.log('\nTiming');
+    if (responseHeadersMs !== undefined) {
+      console.log(`  response headers: ${formatElapsed(responseHeadersMs)}`);
+    }
+    if (firstChunkMs !== undefined) {
+      console.log(`  first chunk     : ${formatElapsed(firstChunkMs)}`);
+    }
+    // 非ストリーミングでは本文全体、ストリーミングでは終了イベントまでを合計時間とする。
+    // 途中で失敗した場合は、エラーが確定するまでに経過した時間になる。
+    console.log(`  total elapsed   : ${formatElapsed(completedMs ?? timer.elapsedMs())}`);
+  }
 }
 
 async function main() {
