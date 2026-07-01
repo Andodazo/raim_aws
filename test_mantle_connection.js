@@ -26,8 +26,8 @@
  *
  * RAiM の本命設定:
  *
- *   - region   : us-west-2
- *   - endpoint : https://bedrock-mantle.us-west-2.api.aws/openai/v1
+ *   - region   : us-east-1
+ *   - endpoint : https://bedrock-mantle.us-east-1.api.aws/openai/v1
  *   - model    : google.gemma-4-31b
  *
  * CloudShell での実行手順:
@@ -52,7 +52,7 @@
  *      通常は指定しなくても動きます。
  *      明示したい場合は以下も実行してください。
  *
- *      export OPENAI_BASE_URL='https://bedrock-mantle.us-west-2.api.aws/openai/v1'
+ *      export OPENAI_BASE_URL='https://bedrock-mantle.us-east-1.api.aws/openai/v1'
  *      export MANTLE_MODEL='google.gemma-4-31b'
  *
  *   4. 生成APIを最小リクエストで確認する
@@ -82,9 +82,9 @@
 
 'use strict';
 
-// RAiM の本命構成では、Gemma 4 31B を us-west-2 の Mantle endpoint で呼び出す。
+// RAiM の本命構成では、Gemma 4 31B を us-east-1 の Mantle endpoint で呼び出す。
 // CloudShell で OPENAI_BASE_URL を指定し忘れても、本命 endpoint を使う。
-const DEFAULT_BASE_URL = 'https://bedrock-mantle.us-west-2.api.aws/openai/v1';
+const DEFAULT_BASE_URL = 'https://bedrock-mantle.us-east-1.api.aws/openai/v1';
 const DEFAULT_MODEL = 'google.gemma-4-31b';
 const DEFAULT_PROMPT = 'こんにちは。日本語で一言だけ挨拶してください。';
 
@@ -180,7 +180,7 @@ CloudShell setup:
   export OPENAI_API_KEY='your Mantle API Key'
 
 Optional explicit RAiM defaults:
-  export OPENAI_BASE_URL='https://bedrock-mantle.us-west-2.api.aws/openai/v1'
+  export OPENAI_BASE_URL='https://bedrock-mantle.us-east-1.api.aws/openai/v1'
   export MANTLE_MODEL='google.gemma-4-31b'
 
 Usage:
@@ -192,7 +192,7 @@ Usage:
 
 Environment variables:
   OPENAI_API_KEY                  required: Mantle API Key
-  OPENAI_BASE_URL                 optional: default https://bedrock-mantle.us-west-2.api.aws/openai/v1
+  OPENAI_BASE_URL                 optional: default https://bedrock-mantle.us-east-1.api.aws/openai/v1
   MANTLE_MODEL                    optional: default google.gemma-4-31b
   MANTLE_TIMEOUT_MS               optional: whole request timeout, default 60000
   MANTLE_STREAM_IDLE_TIMEOUT_MS   optional: streaming idle timeout, default 15000
