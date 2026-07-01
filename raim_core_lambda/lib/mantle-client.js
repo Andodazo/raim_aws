@@ -10,7 +10,7 @@
 // Amazon Bedrock MantleはOpenAI Responses API互換のHTTP endpointを提供する。
 // RAiMではGemma 4を利用するため、Mantleは米国東部（バージニア北部）へ接続する。
 // LambdaやTitanの実行リージョンが東京でも、Mantle endpointは次へ固定する。
-//   https://bedrock-mantle.us-west-2.api.aws/openai/v1
+//   https://bedrock-mantle.us-east-1.api.aws/openai/v1
 //
 // 接続情報は環境ごとに異なるため、APIキーやmodel IDをコードへ埋め込まない。
 // Lambdaでは次の環境変数を設定する。
@@ -22,7 +22,7 @@
 // - MANTLE_MODEL: Responses API対応のBedrock model ID
 //
 // 任意:
-// - BEDROCK_MANTLE_REGION: endpointのAWSリージョン。既定値 us-west-2
+// - BEDROCK_MANTLE_REGION: endpointのAWSリージョン。既定値 us-east-1
 // - OPENAI_BASE_URL: 公式形式でendpointを明示する場合に設定
 // - MANTLE_BASE_URL: endpoint設定名の後方互換用
 // - MANTLE_RESPONSES_PATH: Responses APIのpath。既定値 /responses
@@ -97,7 +97,7 @@ function numberSetting(env, name, fallback) {
 /**
  * Amazon Bedrock Mantleのbase URLを決める。
  *
- * RAiMの既定値はGemma 4を利用するus-west-2。
+ * RAiMの既定値はGemma 4を利用するus-east-1。
  * LambdaのAWS_REGIONは参照しないため、Core Lambdaが東京で動いていても
  * Mantleだけが誤ってap-northeast-1へ向くことはない。
  * ローカルテストや将来のendpoint変更時だけMANTLE_BASE_URLで上書きできる。
@@ -112,7 +112,7 @@ function resolveMantleBaseUrl(env = process.env) {
   }
 
   const region = String(
-    env.BEDROCK_MANTLE_REGION || 'us-west-2'
+    env.BEDROCK_MANTLE_REGION || 'us-east-1'
   ).trim();
 
   return `https://bedrock-mantle.${region}.api.aws/openai/v1`;
@@ -122,8 +122,8 @@ function resolveMantleBaseUrl(env = process.env) {
  * BASE URLとpathのslashを揃え、実際にPOSTするURLを作る。
  *
  * 例:
- * baseUrl="https://bedrock-mantle.us-west-2.api.aws/openai/v1", path="/responses"
- * → "https://bedrock-mantle.us-west-2.api.aws/openai/v1/responses"
+ * baseUrl="https://bedrock-mantle.us-east-1.api.aws/openai/v1", path="/responses"
+ * → "https://bedrock-mantle.us-east-1.api.aws/openai/v1/responses"
  */
 function buildMantleUrl(baseUrl, responsesPath = '/responses') {
   return `${String(baseUrl).replace(/\/$/, '')}/${String(responsesPath).replace(/^\//, '')}`;

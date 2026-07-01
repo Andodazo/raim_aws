@@ -10,7 +10,7 @@ const {
 } = require('../lib/mantle-client');
 
 const TEST_ENV = Object.freeze({
-  OPENAI_BASE_URL: 'https://bedrock-mantle.us-west-2.api.aws/openai/v1',
+  OPENAI_BASE_URL: 'https://bedrock-mantle.us-east-1.api.aws/openai/v1',
   MANTLE_MODEL: 'mantle-model-1',
   MANTLE_TIMEOUT_MS: '1000',
 });
@@ -60,7 +60,7 @@ test('buildMantleRequest adds previous_response_id only for follow-up calls', ()
 
 test('resolveMantleBaseUrl builds the official regional Bedrock endpoint', () => {
   assert.equal(resolveMantleBaseUrl({ AWS_REGION: 'ap-northeast-1' }),
-    'https://bedrock-mantle.us-west-2.api.aws/openai/v1');
+    'https://bedrock-mantle.us-east-1.api.aws/openai/v1');
   assert.equal(resolveMantleBaseUrl({ BEDROCK_MANTLE_REGION: 'us-west-2' }),
     'https://bedrock-mantle.us-west-2.api.aws/openai/v1');
 });
@@ -109,7 +109,7 @@ test('createMantleClient streams the real Bedrock Responses API shape', async ()
   });
 
   assert.equal(captured.url,
-    'https://bedrock-mantle.us-west-2.api.aws/openai/v1/responses');
+    'https://bedrock-mantle.us-east-1.api.aws/openai/v1/responses');
   assert.equal(captured.options.method, 'POST');
   assert.equal(captured.options.headers.Authorization, 'Bearer test-secret');
   assert.equal(captured.options.headers.Accept, 'text/event-stream');
