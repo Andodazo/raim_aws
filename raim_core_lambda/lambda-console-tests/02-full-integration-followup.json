@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "type": "chat.request",
+  "sub": "lambda-console-test-user-001",
+  "requestId": "console-followup-001",
+  "connectionId": "lambda-console-connection-001",
+  "source": "lambda-console",
+  "text": "さっきの返事を踏まえて、もう少し短く話して。",
+  "images": []
+}

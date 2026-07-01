@@ -13,6 +13,12 @@ raim_core_lambda/
 ├── package-lock.json                ← 依存パッケージのバージョン固定
 ├── DEPLOYMENT.md                    ← Lambda環境変数・IAM権限・アップロード手順のメモ
 ├── FILES.md                         ← このファイル。Core Lambda各ファイルの説明
+├── lambda-console-tests/            ← Lambdaコンソールへ貼り付ける実AWSテストイベント
+│   ├── README.md                     ← 実行順・事前条件・期待結果・エラーの見方
+│   ├── 01-full-integration-initial.json  ← Titan/Mantleを含む初回会話テスト
+│   ├── 02-full-integration-followup.json ← previous_response_idを使う継続会話テスト
+│   ├── 03-invalid-empty-message.json     ← 空メッセージを拒否する入力検証テスト
+│   └── 04-invalid-schema-version.json    ← 未対応schemaVersionの入力検証テスト
 ├── lib/                             ← Core Lambdaの実装コード本体
 │   ├── core-chat-service.js          ← 会話処理の中心。Session/Scene/Mantle/Titanをつなぐ
 │   ├── core-event.js                 ← Edge Lambda/SQSから来た入力イベントを正規化する
@@ -90,6 +96,14 @@ Core Lambdaのエントリーポイントです。
 - 最終的にEdge Lambdaが扱いやすいレスポンス形式へ整える
 
 このファイル自体には、MantleやTitanの細かい呼び出しロジックは置かず、ルーティング役に徹しています。
+
+### `lambda-console-tests/`
+
+SQSトリガーを関連付ける前でも、LambdaコンソールからCore Lambdaを直接実行できる
+テストイベント一式です。正常系ではDynamoDB、Titan、Mantleまで実際に接続し、
+入力不正系では外部サービスを呼び出す前に検証エラーになることを確認できます。
+
+登録手順と各ケースの期待結果は、フォルダー内の`README.md`にまとめています。
 
 ### `package.json`
 

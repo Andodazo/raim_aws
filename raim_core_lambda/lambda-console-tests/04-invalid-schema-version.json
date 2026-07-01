@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 999,
+  "type": "chat.request",
+  "sub": "lambda-console-test-user-001",
+  "requestId": "console-invalid-schema-001",
+  "connectionId": "lambda-console-connection-001",
+  "source": "lambda-console",
+  "text": "このメッセージは外部サービスへ送信されません。",
+  "images": []
+}
