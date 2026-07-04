@@ -32,7 +32,7 @@ TTS Lambda、Tool Lambda、Backup Lambdaはこの実装範囲に含みません�
 | Lambda | `CoreLambdaFunctionName`, `CoreLambdaRoleName` |
 | DynamoDB | `UserSessionTableName`, `SceneTableName`, `RequestStateTableName` |
 | Queue | `RequestQueueName`, `ResponseQueueName`, 各DLQ名、visibility、retention、max receive count |
-| Mantle | `MantleApiKeySecretArn`, `MantleApiKeySecretJsonKey`, `MantleSecretRegion`, `MantleEndpointUrl`, `MantleModelId`, `MantleTimeoutMs`, `MantleMaxOutputTokens`, `MantleTemperature` |
+| Mantle | `MantleApiKeySecretArn`, `MantleApiKeySecretJsonKey`, `MantleSecretRegion`, `MantleEndpointUrl`, `MantleModelId`, `MantleTimeoutMs`, `MantleMaxOutputTokens` |
 | Titan | `TitanRegion`, `TitanModelId`, `TitanInvokeResourceArn`, `TitanEmbeddingDimensions` |
 | Stream | `StreamChunkMinimumCharacters`, `RequestLeaseSeconds`, `RequestStateTtlSeconds` |
 

@@ -30,7 +30,6 @@
 // - MANTLE_API_KEY_PREFIX: APIキーのprefix。既定値 Bearer
 // - MANTLE_TIMEOUT_MS: HTTPタイムアウト。既定値 30000ms
 // - MANTLE_MAX_OUTPUT_TOKENS: 最大出力token数。既定値 1024
-// - MANTLE_TEMPERATURE: temperature。既定値 0.7
 //
 // APIキーはログやエラーdetailsへ出さないこと。
 //
@@ -41,8 +40,7 @@
 //   store: true,
 //   stream: true,
 //   previous_response_id: "resp-...", // 継続会話時だけ
-//   max_output_tokens: 1024,
-//   temperature: 0.7
+//   max_output_tokens: 1024
 // }
 //
 // 【このファイルが返す内部形式】
@@ -161,7 +159,9 @@ function buildMantleRequest({ mantleInput, previousResponseId, store }, env) {
     // Bedrock MantleからSSEイベントを逐次受信するため、常にstreamを有効にする。
     stream: true,
     max_output_tokens: numberSetting(env, 'MANTLE_MAX_OUTPUT_TOKENS', 1024),
-    temperature: numberSetting(env, 'MANTLE_TEMPERATURE', 0.7),
+    // Gemma 4ではtemperatureがサポートされておらず、指定するとMantleが
+    // unsupported_parameterを返す。そのため、この項目はリクエストへ含めず、
+    // モデル側の既定の生成設定を使用する。
   };
 
   // response_idが有効なときだけ指定する。
