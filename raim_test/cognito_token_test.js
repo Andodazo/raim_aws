@@ -12,6 +12,13 @@
  * PowerShellの環境変数へAccess Tokenを直接格納する場合:
  *   $env:ACCESS_TOKEN = node .\cognito_token_test.js --token-only
  *
+ * Access Token取得後、CloudFrontへ接続してメッセージを1件送信する場合:
+ *   node .\cognito_token_test.js --wscat --text "こんにちは"
+ *
+ * 接続先や応答待機時間を指定する場合:
+ *   node .\cognito_token_test.js --wscat --text "こんにちは" `
+ *     --endpoint "wss://example.cloudfront.net/dev" --wait 120
+ *
  * --token-onlyでは、Access Tokenだけを標準出力へ出す。
  * ログインURLや入力案内は標準エラー出力へ分けるため、PowerShell変数には混ざらない。
  *
@@ -27,6 +34,8 @@
  *   3. ログイン後のリダイレクトURLをユーザーが貼り付ける
  *   4. URL内のAuthorization CodeをToken endpointへ送る
  *   5. WebSocket認証に使用するAccess Tokenだけを表示する
+ *   6. --wscat指定時は、TokenをAuthorizationヘッダーへ設定してCloudFrontへ接続する
+ *   7. RAiM形式のユーザーリクエストを送信し、ストリーミング応答を表示する
  *
  * 注意:
  *   このプログラムは接続試験用のためAccess Tokenを画面へ表示します。
@@ -36,6 +45,8 @@
 'use strict';
 
 const crypto = require('node:crypto');
+const fs = require('node:fs');
+const path = require('node:path');
 const { spawn } = require('node:child_process');
 const readline = require('node:readline/promises');
 const { stdin, stdout, stderr } = require('node:process');
@@ -54,6 +65,20 @@ const CALLBACK_URL = String(
   process.env.COGNITO_CALLBACK_URL || 'http://localhost:3000/callback'
 );
 
+// CloudFront経由でWebSocket APIへ接続する。
+// 環境ごとにDistributionが異なる場合はRAIM_WEBSOCKET_URLまたは--endpointで上書きする。
+const DEFAULT_WEBSOCKET_URL = String(
+  process.env.RAIM_WEBSOCKET_URL ||
+  'wss://d1403ont6098ah.cloudfront.net/dev'
+);
+
+// CloudFront/WAFがクライアント種別を確認できるよう、検証時もFlutterと同じ値を送る。
+const DEFAULT_USER_AGENT = String(
+  process.env.RAIM_USER_AGENT || 'RAiM-Flutter/1.0'
+);
+
+const DEFAULT_WSCAT_WAIT_SECONDS = 60;
+
 /**
  * コマンドラインオプションを読み取る。
  *
@@ -61,18 +86,107 @@ const CALLBACK_URL = String(
  * Access Token以外を標準出力へ書かない。
  */
 function parseOptions(argv) {
-  const supportedOptions = new Set(['--token-only']);
   const args = argv.slice(2);
+  const options = {
+    tokenOnly: false,
+    useWscat: false,
+    text: '',
+    endpoint: DEFAULT_WEBSOCKET_URL,
+    waitSeconds: DEFAULT_WSCAT_WAIT_SECONDS,
+    help: false,
+  };
 
-  for (const arg of args) {
-    if (!supportedOptions.has(arg)) {
-      throw new Error(`Unknown option: ${arg}`);
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+
+    switch (arg) {
+      case '--token-only':
+        options.tokenOnly = true;
+        break;
+      case '--wscat':
+        options.useWscat = true;
+        break;
+      case '--text':
+        options.text = readOptionValue(args, ++index, '--text');
+        break;
+      case '--endpoint':
+        options.endpoint = readOptionValue(args, ++index, '--endpoint');
+        break;
+      case '--wait': {
+        const rawWait = readOptionValue(args, ++index, '--wait');
+        const waitSeconds = Number(rawWait);
+
+        if (!Number.isInteger(waitSeconds) || waitSeconds < -1) {
+          throw new Error('--wait must be an integer greater than or equal to -1');
+        }
+
+        options.waitSeconds = waitSeconds;
+        break;
+      }
+      case '--help':
+      case '-h':
+        options.help = true;
+        break;
+      default:
+        throw new Error(`Unknown option: ${arg}`);
     }
   }
 
-  return {
-    tokenOnly: args.includes('--token-only'),
-  };
+  if (options.tokenOnly && options.useWscat) {
+    throw new Error('--token-only and --wscat cannot be used together');
+  }
+
+  if ((options.text || options.endpoint !== DEFAULT_WEBSOCKET_URL ||
+      options.waitSeconds !== DEFAULT_WSCAT_WAIT_SECONDS) && !options.useWscat) {
+    throw new Error('--text, --endpoint and --wait require --wscat');
+  }
+
+  validateWebSocketUrl(options.endpoint);
+  return options;
+}
+
+/**
+ * 値を必要とするコマンドラインオプションの次の引数を読む。
+ * 未指定や次のオプション名を誤って値として渡した場合は、ログイン開始前に終了する。
+ */
+function readOptionValue(args, index, optionName) {
+  const value = args[index];
+
+  if (value === undefined || String(value).startsWith('--')) {
+    throw new Error(`${optionName} requires a value`);
+  }
+
+  return String(value).trim();
+}
+
+/** CloudFront WebSocket接続先として、安全なwss URLだけを許可する。 */
+function validateWebSocketUrl(value) {
+  let parsed;
+
+  try {
+    parsed = new URL(value);
+  } catch (error) {
+    throw new Error(`WebSocket endpoint is not a valid URL: ${error.message}`);
+  }
+
+  if (parsed.protocol !== 'wss:') {
+    throw new Error('WebSocket endpoint must use wss://');
+  }
+}
+
+function printUsage() {
+  console.log(`Usage:
+  node cognito_token_test.js
+  node cognito_token_test.js --token-only
+  node cognito_token_test.js --wscat [--text <message>] [--endpoint <wss-url>] [--wait <seconds>]
+
+Options:
+  --token-only       Access Tokenだけを標準出力へ出す
+  --wscat            Token取得後にCloudFrontへ接続してリクエストを送る
+  --text <message>   送信する本文。省略時は対話入力する
+  --endpoint <url>   CloudFrontのwss URL
+  --wait <seconds>   送信後に応答を待つ秒数。既定値60、-1は手動終了まで待機
+  --help, -h         この説明を表示する`);
 }
 
 /**
@@ -201,8 +315,111 @@ async function exchangeCodeForTokens(code, codeVerifier) {
   };
 }
 
+/**
+ * npmでグローバルインストールされたwscat本体のJavaScriptを探す。
+ * PowerShellではwscat.ps1が実行ポリシーに遮断されることがあるため、
+ * ラッパーではなくbin/wscatをNode.jsで直接起動する。
+ */
+function resolveWscatCli() {
+  const candidates = [
+    process.env.WSCAT_CLI_PATH,
+    process.env.APPDATA
+      ? path.join(process.env.APPDATA, 'npm', 'node_modules', 'wscat', 'bin', 'wscat')
+      : '',
+    process.env.npm_config_prefix
+      ? path.join(process.env.npm_config_prefix, 'node_modules', 'wscat', 'bin', 'wscat')
+      : '',
+  ].filter(Boolean);
+
+  const cliPath = candidates.find((candidate) => fs.existsSync(candidate));
+
+  if (!cliPath) {
+    throw new Error(
+      'wscat was not found. Install it with: npm install -g wscat'
+    );
+  }
+
+  return cliPath;
+}
+
+/** 送信本文が--textで指定されなかった場合に、コンソールから入力する。 */
+async function askUserText() {
+  const terminal = readline.createInterface({ input: stdin, output: stdout });
+
+  try {
+    return String(await terminal.question('RAiMへ送信するメッセージ: ')).trim();
+  } finally {
+    terminal.close();
+  }
+}
+
+/**
+ * Access TokenをAuthorizationヘッダーへ設定してwscatを起動する。
+ *
+ * --executeで接続直後にRAiM形式のJSONを1件送り、--waitで指定した時間だけ
+ * 接続を維持する。Core Lambdaからのstream.start/delta/completedは、wscatの
+ * 標準出力へ到着順に表示される。
+ */
+async function runWscat({ accessToken, endpoint, text, waitSeconds }) {
+  const wscatCli = resolveWscatCli();
+  const request = {
+    requestId: `local-${crypto.randomUUID()}`,
+    text,
+    images: [],
+  };
+  const requestJson = JSON.stringify(request);
+  const args = [
+    wscatCli,
+    '--connect', endpoint,
+    '--header', `Authorization: Bearer ${accessToken}`,
+    '--header', `User-Agent: ${DEFAULT_USER_AGENT}`,
+    '--execute', requestJson,
+    '--wait', String(waitSeconds),
+    '--no-color',
+  ];
+
+  console.log();
+  console.log('=== CloudFront WebSocket Test ===');
+  console.log(`Endpoint  : ${endpoint}`);
+  console.log(`User-Agent: ${DEFAULT_USER_AGENT}`);
+  console.log(`Request ID: ${request.requestId}`);
+  console.log(`Text      : ${text}`);
+  console.log(`Wait      : ${waitSeconds === -1 ? 'until Ctrl+C' : `${waitSeconds} seconds`}`);
+  console.log('Access TokenはAuthorizationヘッダーへ設定します（画面には表示しません）。');
+  console.log();
+
+  await new Promise((resolve, reject) => {
+    // wscatのJavaScript本体を現在のNode.jsで直接実行するため、
+    // PowerShellのスクリプト実行ポリシーには影響されない。
+    const child = spawn(process.execPath, args, {
+      stdio: 'inherit',
+      windowsHide: false,
+    });
+
+    child.once('error', reject);
+    child.once('exit', (code, signal) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+
+      reject(new Error(
+        signal
+          ? `wscat was terminated by signal ${signal}`
+          : `wscat exited with code ${code}`
+      ));
+    });
+  });
+}
+
 async function main() {
   const options = parseOptions(process.argv);
+
+  if (options.help) {
+    printUsage();
+    return;
+  }
+
   const codeVerifier = generateCodeVerifier();
   const codeChallenge = generateCodeChallenge(codeVerifier);
 
@@ -283,6 +500,22 @@ async function main() {
   if (options.tokenOnly) {
     // PowerShellの代入対象になるstdoutにはAccess Tokenの1行だけを出力する。
     stdout.write(`${accessToken}\n`);
+    return;
+  }
+
+  if (options.useWscat) {
+    const userText = options.text || await askUserText();
+
+    if (!userText) {
+      throw new Error('User message must not be empty');
+    }
+
+    await runWscat({
+      accessToken,
+      endpoint: options.endpoint,
+      text: userText,
+      waitSeconds: options.waitSeconds,
+    });
     return;
   }
 
