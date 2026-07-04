@@ -55,6 +55,7 @@ test('buildMantleRequest adds previous_response_id only for follow-up calls', ()
   assert.equal(request.previous_response_id, 'resp-previous');
   assert.equal(request.store, true);
   assert.equal(request.stream, true);
+  assert.equal(Object.hasOwn(request, 'temperature'), false);
   assert.deepEqual(request.input, [{ role: 'user', content: 'hello' }]);
 });
 
@@ -116,6 +117,7 @@ test('createMantleClient streams the real Bedrock Responses API shape', async ()
   const requestBody = JSON.parse(captured.options.body);
   assert.equal(requestBody.previous_response_id, 'resp-previous');
   assert.equal(requestBody.stream, true);
+  assert.equal(Object.hasOwn(requestBody, 'temperature'), false);
   assert.equal(result.responseId, 'resp-1');
   assert.match(result.rawText, /"text":"やあ"/);
   assert.equal(result.usedPreviousResponseId, true);
