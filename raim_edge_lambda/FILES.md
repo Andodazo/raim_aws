@@ -99,6 +99,7 @@ Edge Lambdaの各ファイルの役割を把握するための引き継ぎ資料
 
 扱う主な環境変数:
 
+- `AWS_REGION`（任意。未指定時は `ap-northeast-1`）
 - `REQUEST_QUEUE_URL`
 - `CONNECTION_TABLE_NAME`
 - `WEBSOCKET_API_ENDPOINT`
@@ -202,6 +203,11 @@ API Gateway WebSocket route呼び出しに返すHTTP形式レスポンスを作�
 主に `$connect` / `$disconnect` / `$default` の受付結果を返すために使います。
 
 ## `test` 配下のテストファイル
+
+### `test/index.test.js`
+
+Lambda入口がAPI Gateway WebSocketイベントとSQSイベントを正しく判定し、
+それぞれのHandlerへ振り分けられることを確認します。
 
 ### `test/websocket-event.test.js`
 
