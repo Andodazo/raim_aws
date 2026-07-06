@@ -2,8 +2,8 @@
 
 ## 1. この文書の目的
 
-Core Lambdaを担当者のローカル実装に近づける際に、現在動作しているAWS基盤や
-Edge Lambdaとの通信契約を壊さないため、変更範囲と保護対象を定めます。
+Core Lambdaを担当者のローカル実装に近づける際に、現在動作しているAWS基盤を
+維持しながら、入力・返答形式を含む変更範囲と保護対象を定めます。
 
 `local_core_reference`は、人格・感情・会話処理・Tool・TTSなどの仕様を確認するための
 参照資料です。ローカルWebSocketサーバーとして作られているため、ファイルをそのまま
@@ -13,16 +13,17 @@ Core Lambdaへ上書きすることは想定していません。
 
 次の境界で移植対象を分けます。
 
-- AWS接続、SQS、DynamoDB、Secrets Manager、Edge Lambdaとの通信契約は維持する
+- AWS接続、SQS、DynamoDB、Secrets Managerの実行基盤は維持する
+- 入力・返答形式は変更可能とするが、関係コンポーネントと同時に設計・移行する
 - 人格、口調、プロンプト、感情表現、会話処理はローカル構成へ近づけられる
 - TTSとToolの実処理は、当初の構成どおり将来のTTS Lambda／Tool Lambdaへ分離する
-- ローカル実装のコードを直接上書きせず、現行Core Lambdaのインターフェースへ移植する
+- ローカル実装のコードを直接上書きせず、現行Core LambdaのAWS実行基盤に適合する形で移植する
 - 既存テストを削除せず、仕様変更に応じて更新・追加する
 
 ## 3. 置換・削除してはいけないファイル
 
-以下は、現在動作しているAWS連携や外部通信の基盤です。
-内部の不具合修正は可能ですが、ローカル版での置換、削除、公開インターフェースの変更は
+以下は、現在動作しているAWS連携や非同期処理の基盤です。
+内部の不具合修正や入出力形式への対応は可能ですが、ローカル版での置換・削除は
 行わないでください。
 
 ### 3.1 Lambda・SQS基盤
@@ -30,19 +31,14 @@ Core Lambdaへ上書きすることは想定していません。
 | ファイル | 保護する役割 |
 |---|---|
 | `raim_core_lambda/index.js` | Lambdaの`index.handler`と通常／SQSイベントの振り分け |
-| `raim_core_lambda/lib/core-event.js` | Edge Lambdaから受け取る入力形式の正規化 |
+| `raim_core_lambda/lib/core-event.js` | Edge Lambdaから受け取る入力形式の正規化とバージョン判定 |
 | `raim_core_lambda/lib/sqs-core-handler.js` | Request Queue処理、FIFO順序、部分的バッチ失敗 |
 | `raim_core_lambda/lib/request-state-store.js` | SQS重複配信対策、lease、TTL、処理状態管理 |
-| `raim_core_lambda/lib/response-queue-publisher.js` | Response Queueへの順序付きストリーミングイベント送信 |
-| `raim_core_lambda/lib/streaming-chat-json-extractor.js` | Mantleの生成途中JSONから表示用テキストを抽出 |
+| `raim_core_lambda/lib/response-queue-publisher.js` | Response Queueへの順序・重複排除付きイベント送信 |
 
-次の情報は外部契約として維持します。
-
-- Request Queueの`schemaVersion`、`type`、`sub`、`requestId`、`connectionId`
-- Response Queueの`stream.start`、`stream.delta`、`stream.completed`、`stream.error`
-- Responseイベントの`requestId`、`connectionId`、`sequence`
-- FIFO QueueのMessageGroupIdと重複排除処理
-- SQSの`batchItemFailures`形式
+入力・返答のJSON項目やイベント種別は変更対象になり得ます。形式変更の方針は
+「5. 入力・返答形式の変更方針」へまとめます。一方、FIFO Queueの順序制御、
+重複排除、SQSの`batchItemFailures`処理は維持します。
 
 ### 3.2 AWSサービス接続
 
@@ -63,19 +59,6 @@ Core Lambdaへ上書きすることは想定していません。
 - SceneとFew-shotはローカルJSONではなくDynamoDBから取得する
 - 会話状態をプロセス内MapではなくDynamoDBへ保存する
 - Mantleの`previous_response_id`が失効した場合に状態をクリアして復旧する
-
-### 3.3 Edge Lambdaとの出力契約
-
-| ファイル | 保護する役割 |
-|---|---|
-| `raim_core_lambda/lib/core-response.js` | `ok`、`type`、`requestId`を含む共通レスポンス形式 |
-
-レスポンス形式を変更する場合は、Core Lambda単体では変更せず、必ず次を同時に確認します。
-
-- Edge Lambdaの`client-message.js`
-- Response Queueのメッセージ形式
-- Flutterクライアント
-- Unityの表情制御
 
 ## 4. ローカル構成へ近づけるために変更できるファイル
 
@@ -152,15 +135,21 @@ lib/prompts/
 - `image_description`を履歴へ活用する考え方
 - Tool利用前後の会話表現
 
-### 4.2 インターフェースを維持すれば変更できるファイル
+### 4.2 関係箇所と整合させながら変更できるファイル
 
 | ファイル | 変更時の条件 |
 |---|---|
-| `raim_core_lambda/lib/core-chat-service.js` | 既存の入力、戻り値、ストリーミングコールバックを維持する |
-| `raim_core_lambda/lib/types.js` | Edge、Flutter、Unityとのメッセージ契約を同時に確認する |
+| `raim_core_lambda/lib/core-chat-service.js` | 呼び出し元、戻り値、ストリーミング処理を同時に更新する |
+| `raim_core_lambda/lib/core-event.js` | Edge Lambdaの送信形式とschemaVersionを同時に更新する |
+| `raim_core_lambda/lib/core-response.js` | Response Queue、Edge、クライアントの返答形式を同時に更新する |
+| `raim_core_lambda/lib/response-queue-publisher.js` | Edge LambdaのResponse Queue処理と同時に更新する |
+| `raim_core_lambda/lib/streaming-chat-json-extractor.js` | Mantle出力と新しいストリーミング形式に合わせて変更・置換できる |
+| `raim_core_lambda/lib/types.js` | Edge、Flutter、Unityの型定義を同時に更新する |
 | `raim_core_lambda/lib/response-validator.js` | `types.js`とMantle出力形式を一致させる |
 
-`core-chat-service.js`では、次のインターフェースを維持します。
+現時点の`core-chat-service.js`は次のインターフェースを持ちますが、これらも新しい設計に
+合わせて変更できます。変更する場合は、`sqs-core-handler.js`、`index.js`、テストを
+同じ変更単位で更新します。
 
 - `handleCoreChat(event, options)`として呼び出せる
 - `fallbackRequestId`を受け取れる
@@ -169,39 +158,213 @@ lib/prompts/
 - 成功時に`ok: true`のCoreレスポンスを返す
 - 失敗時に分類可能なエラーを返す
 
-## 5. 単独では変更してはいけない仕様
+## 5. 入力・返答形式の変更方針
 
-以下はローカル構成に近づけられますが、Core Lambdaだけを変更すると互換性が壊れます。
+入力・返答形式は、ローカル構成との整合やクライアント仕様の確定に伴って変更される
+可能性があります。そのため、現在のJSON形式を変更禁止事項にはしません。
+ただし、Core Lambdaだけを先行変更すると通信できなくなるため、形式の定義、影響範囲、
+移行方法をこの節へ集約します。
 
-### 5.1 12感情と複数感情
+### 5.1 現在の入力形式
 
-ローカル構成では、従来の8感情に次を加えた12感情を使用します。
+FlutterからEdge Lambdaへ送る現在の主な項目は次のとおりです。
 
-- `curious`
-- `amused`
-- `thoughtful`
-- `playful`
+```json
+{
+  "requestId": "req-001",
+  "text": "こんにちは",
+  "images": []
+}
+```
 
-また、単一の`emotion`／`intensity`ではなく、`emotions` Mapと
-`overall_intensity`を使用します。
+Edge LambdaはCognitoの`sub`とWebSocketの`connectionId`を補い、Request Queueへ
+次の形式で送ります。
 
-この変更には、少なくとも次の同時変更が必要です。
+```json
+{
+  "schemaVersion": 1,
+  "type": "chat.request",
+  "requestId": "req-001",
+  "connectionId": "connection-id",
+  "sub": "cognito-user-sub",
+  "source": "websocket",
+  "text": "こんにちは",
+  "images": [],
+  "createdAt": "ISO-8601"
+}
+```
 
-- Core Lambdaのプロンプト、型、応答検証
-- Response Queueイベント
-- Edge Lambdaのクライアント向け変換
-- FlutterのJSON処理
-- UnityのBlendShape／表情制御
-- TTSの感情マッピング
+入力形式を変更する場合は、次をまとめて更新します。
 
-移行期間中は、従来の`emotion`／`intensity`も後方互換として残す方針を推奨します。
+- Flutterの送信処理
+- Edge Lambdaの`websocket-event.js`
+- Edge Lambdaの`request-queue-publisher.js`
+- Core Lambdaの`core-event.js`
+- 入力検証を行う`types.js`
+- 関連する単体テストとLambdaコンソール用テストイベント
 
-### 5.2 ストリーミングメッセージ
+認証済みユーザーと接続先を特定するため、`sub`と`connectionId`に相当する情報は
+新形式でも失わないようにします。項目名や配置は変更可能です。
 
-ローカル構成の`metadata`、`text_chunk`、`audio_chunk`、`chat_end`へ変更する場合も、
-Core Lambdaだけでは変更しません。現行の`stream.*`形式から段階的に拡張してください。
+### 5.2 現在の返答・ストリーミング形式
 
-### 5.3 ToolとTTS
+現在はResponse Queueへ次のイベントを送ります。
+
+- `stream.start`
+- `stream.delta`
+- `stream.completed`
+- `stream.error`
+
+Core LambdaからResponse Queueへ送る現在のJSON例は次のとおりです。
+
+生成開始時:
+
+```json
+{
+  "schemaVersion": 1,
+  "type": "stream.start",
+  "requestId": "req-001",
+  "connectionId": "connection-id",
+  "sub": "cognito-user-sub",
+  "source": "websocket",
+  "sequence": 0,
+  "attempt": 1,
+  "createdAt": "ISO-8601"
+}
+```
+
+生成途中のテキスト差分:
+
+```json
+{
+  "schemaVersion": 1,
+  "type": "stream.delta",
+  "requestId": "req-001",
+  "connectionId": "connection-id",
+  "sub": "cognito-user-sub",
+  "source": "websocket",
+  "sequence": 1,
+  "attempt": 1,
+  "createdAt": "ISO-8601",
+  "textDelta": "こんにちは！"
+}
+```
+
+生成完了時:
+
+```json
+{
+  "schemaVersion": 1,
+  "type": "stream.completed",
+  "requestId": "req-001",
+  "connectionId": "connection-id",
+  "sub": "cognito-user-sub",
+  "source": "websocket",
+  "sequence": 2,
+  "attempt": 1,
+  "createdAt": "ISO-8601",
+  "text": "こんにちは！今日はどうしたの？",
+  "emotion": "happy",
+  "intensity": 0.6
+}
+```
+
+処理失敗時:
+
+```json
+{
+  "schemaVersion": 1,
+  "type": "stream.error",
+  "requestId": "req-001",
+  "connectionId": "connection-id",
+  "sub": "cognito-user-sub",
+  "source": "websocket",
+  "sequence": 2,
+  "attempt": 1,
+  "createdAt": "ISO-8601",
+  "code": "LLM_ERROR",
+  "message": "Core Lambda processing failed",
+  "retriable": true
+}
+```
+
+Edge LambdaはResponse Queueイベントから内部配送用の`connectionId`、`sub`、`source`、
+`attempt`、`createdAt`などを取り除き、Flutterへ必要な項目をWebSocketで送ります。
+例えば生成完了時のクライアント向けJSONは次の形式です。
+
+```json
+{
+  "type": "stream.completed",
+  "requestId": "req-001",
+  "sequence": 2,
+  "text": "こんにちは！今日はどうしたの？",
+  "emotion": "happy",
+  "intensity": 0.6
+}
+```
+
+`stream.delta`の場合は`textDelta`、`stream.error`の場合は`code`、`message`、
+`retriable`をクライアントへ送ります。
+
+各イベントには、追跡・順序制御に使う`requestId`、`connectionId`、`sequence`などを
+含めています。イベント名やpayloadは変更可能ですが、非同期処理で次を判定できる情報は
+新形式でも保持します。
+
+- どのリクエストに対する返答か
+- どのWebSocket接続へ送るか
+- どの順番で処理するか
+- 正常終了かエラーか
+- SQS再配信による重複か
+
+ローカル構成の`metadata`、`text_chunk`、`audio_chunk`、`tool_call`、`chat_end`へ
+近づけることも可能です。ただし、現行のMantle SSE、Response Queue、Edge Lambdaを
+経由できる形式へ設計し直します。
+
+返答形式を変更する場合は、次をまとめて更新します。
+
+- Core Lambdaの`types.js`と`core-response.js`
+- Core Lambdaの`response-validator.js`
+- Core Lambdaの`response-queue-publisher.js`
+- 必要に応じて`streaming-chat-json-extractor.js`
+- Edge Lambdaの`response-queue-handler.js`と`client-message.js`
+- Flutterの受信・重複排除・画面更新処理
+- Unityの表情制御
+- TTS Lambda／Tool Lambdaとのイベント形式
+
+### 5.3 感情形式
+
+ローカル構成では、従来の8感情へ`curious`、`amused`、`thoughtful`、`playful`を
+加えた12感情を使用します。また、単一の`emotion`／`intensity`ではなく、
+`emotions` Mapと`overall_intensity`を使用します。
+
+この形式への変更も可能です。移行期間中は、次のように新旧形式を併記し、古い
+Flutter／Unity実装でも動作できる後方互換期間を設けることを推奨します。
+
+```json
+{
+  "emotion": "happy",
+  "intensity": 0.6,
+  "emotions": {
+    "happy": 0.7,
+    "caring": 0.3
+  },
+  "overall_intensity": 0.8
+}
+```
+
+### 5.4 形式変更の進め方
+
+入力・返答形式を変更する際は、次の順で進めます。
+
+1. 新しいJSON例と必須・任意項目を文書で定義する
+2. `schemaVersion`を更新するか、旧形式との判別方法を決める
+3. Core、Edge、Flutter、Unityの影響ファイルを一覧化する
+4. 先に新旧両形式を読み取れる受信側を実装する
+5. 送信側を新形式へ切り替える
+6. 後方互換期間後に旧形式を削除する
+7. 直接実行、SQS、CloudFront経由の全経路をテストする
+
+## 6. ToolとTTS
 
 ローカル構成の次の処理は、そのままCore Lambdaへ統合しません。
 
@@ -213,7 +376,7 @@ Core Lambdaだけでは変更しません。現行の`stream.*`形式から段�
 Core Lambdaには、将来のTool Lambda／TTS Lambdaを呼び出すための判断・イベント生成だけを
 追加し、外部API呼び出しや音声合成本体は別Lambdaへ配置します。
 
-## 6. 禁止する直接置換
+## 7. 禁止する直接置換
 
 以下の直接置換は行わないでください。
 
@@ -225,7 +388,7 @@ Core Lambdaには、将来のTool Lambda／TTS Lambdaを呼び出すための判
 | `local_core_reference/lib/memory-store.js` | `raim_core_lambda/lib/user-session-store.js` | ローカルMapは再起動で履歴が消える |
 | `local_core_reference/lib/pick-scene.js` | `raim_core_lambda/lib/scene-selector.js` | Scene保存場所、Embeddingモデル、閾値が異なる |
 
-## 7. ローカル参照構成の注意点
+## 8. ローカル参照構成の注意点
 
 ローカル構成には、移植前に解消すべき不整合があります。
 
@@ -239,7 +402,7 @@ Core Lambdaには、将来のTool Lambda／TTS Lambdaを呼び出すための判
 そのため、ローカル構成のコメントを仕様の正本として扱わず、実コードと現行AWS構成を
 照合したうえで必要な機能だけを移植します。
 
-## 8. 変更時の確認手順
+## 9. 変更時の確認手順
 
 1. 変更対象が保護ファイルか確認する
 2. Edge Lambda、SQS、DynamoDB、Flutter、Unityへの影響を確認する
@@ -247,7 +410,7 @@ Core Lambdaには、将来のTool Lambda／TTS Lambdaを呼び出すための判
 4. 新仕様の単体テストを追加する
 5. Lambdaコンソールの直接イベントでTitan／Mantleを確認する
 6. CloudFrontからのエンドツーエンドテストを実行する
-7. `stream.start`から`stream.completed`までの`sequence`を確認する
+7. 採用した返答形式で、開始から完了までの識別子・順序・重複排除を確認する
 
 テストコマンド:
 
@@ -256,7 +419,7 @@ cd .\raim_core_lambda
 npm.cmd test
 ```
 
-## 9. 完了条件
+## 10. 完了条件
 
 ローカル構成への整合後も、次をすべて満たすことを完了条件とします。
 
