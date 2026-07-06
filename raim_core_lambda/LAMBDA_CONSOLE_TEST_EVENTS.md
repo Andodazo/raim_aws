@@ -2,6 +2,20 @@
 
 このファイルは、SQS Event Source Mappingがまだ未設定でも、AWS Lambdaコンソールの「テスト」からCore Lambdaを直接実行して、Titan Embedding・Scene選択・Mantle呼び出しを確認するためのイベント集です。
 
+## 目次
+
+- [先に確認すること](#先に確認すること)
+- [必要な環境変数](#必要な環境変数)
+- [事前データ](#事前データ)
+- [テストイベント1: joke Scene想定](#テストイベント1-joke-scene想定)
+- [テストイベント2: gaming Scene想定](#テストイベント2-gaming-scene想定)
+- [テストイベント3: tired Scene想定](#テストイベント3-tired-scene想定)
+- [テストイベント4: default Scene想定](#テストイベント4-default-scene想定)
+- [テストイベント5: Edge Lambdaから来るRequest Queueメッセージ相当](#テストイベント5-edge-lambdaから来るrequest-queueメッセージ相当)
+- [テストイベント6: SQSイベントをLambdaコンソールで擬似実行する場合](#テストイベント6-sqsイベントをlambdaコンソールで擬似実行する場合)
+- [エラー別の見方](#エラー別の見方)
+- [最初におすすめする実行順](#最初におすすめする実行順)
+
 ## 先に確認すること
 
 Lambdaコンソールから直接実行する場合、SQS Request Queueは使いません。

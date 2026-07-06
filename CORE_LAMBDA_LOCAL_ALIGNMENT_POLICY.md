@@ -1,5 +1,19 @@
 # Core Lambda ローカル構成整合方針
 
+## 目次
+
+- [1. この文書の目的](#1-この文書の目的)
+- [2. 基本方針](#2-基本方針)
+- [3. 置換・削除してはいけないファイル](#3-置換削除してはいけないファイル)
+- [4. ローカル構成へ近づけるために変更できるファイル](#4-ローカル構成へ近づけるために変更できるファイル)
+- [5. 入力・返答形式の変更方針](#5-入力返答形式の変更方針)
+- [6. ToolとTTS](#6-toolとtts)
+- [7. 禁止する直接置換](#7-禁止する直接置換)
+- [8. ローカル参照構成の注意点](#8-ローカル参照構成の注意点)
+- [9. 変更時の確認手順](#9-変更時の確認手順)
+- [10. 完了条件](#10-完了条件)
+- [11. `local_core_reference` とCore Lambdaのファイル対応](#11-local_core_reference-と-core-lambda-のファイル対応)
+
 ## 1. この文書の目的
 
 Core Lambdaを担当者のローカル実装に近づける際に、現在動作しているAWS基盤を
@@ -431,3 +445,78 @@ npm.cmd test
 - Edge LambdaからWebSocketクライアントへ回答が返る
 - SQS再配信時に同一リクエストを二重処理しない
 - 既存テストと追加テストがすべて成功する
+
+## 11. `local_core_reference` と Core Lambda のファイル対応
+
+`local_core_reference`は、ローカルPC上で動く常駐WebSocketサーバーとして、会話処理、Ollama、VOICEVOX、Toolなどを確認するための参照実装です。
+
+Core Lambdaはこのコードをそのまま移植したものではありません。AWS上でSQS、DynamoDB、Titan Text Embeddings V2、Bedrock Mantleを利用できるように、local側の役割を複数ファイルへ分割・置換しています。
+
+### 11.1 local側から見た対応表
+
+| local側のファイル | 対応するCore側のファイル | 対応内容・実装状況 |
+|---|---|---|
+| `local_core_reference/server.js` | `raim_core_lambda/index.js`、`raim_core_lambda/lib/sqs-core-handler.js`、`raim_core_lambda/lib/core-chat-service.js` | localではWebSocket受付から応答返却までを1ファイルで統括する。CoreではLambda入口、SQS処理、会話生成へ分割している |
+| `local_core_reference/lib/types.js` | `raim_core_lambda/lib/types.js`、`raim_core_lambda/lib/core-event.js`、`raim_core_lambda/lib/core-response.js`、`raim_core_lambda/lib/response-validator.js` | localでは通信型、入力検証、LLM出力補正をまとめている。Coreでは入力、出力、Mantle応答検証へ分割している |
+| `local_core_reference/lib/llm.js` | `raim_core_lambda/lib/mantle-client.js` | localのOllama呼び出しを、Bedrock Mantle Responses API呼び出しへ置き換えている |
+| `local_core_reference/lib/llm.js` のAPIキー・会話継続部分 | `raim_core_lambda/lib/mantle-secret-provider.js`、`raim_core_lambda/lib/mantle-session-policy.js` | APIキーはSecrets Managerから取得し、`previous_response_id`の期限・失効を管理する。localに同等のAWS処理はない |
+| `local_core_reference/lib/embed.js` | `raim_core_lambda/lib/titan-embedding-client.js` | localのOllama `bge-m3`を、Titan Text Embeddings V2へ置き換えている |
+| `local_core_reference/lib/memory-store.js` | `raim_core_lambda/lib/user-session-store.js` | localはプロセス内Mapへ会話イベントを保存する。CoreはDynamoDBへ`sessionSummary`やMantle response IDを保存する |
+| `local_core_reference/lib/prompt-builder.js` | `raim_core_lambda/lib/prompt-builder.js`、`raim_core_lambda/lib/prompts/raim-system-prompt.js` | localで同居していた固定人格プロンプトと動的な入力組み立てを分離している |
+| `local_core_reference/lib/pick-scene.js` | `raim_core_lambda/lib/scene-selector.js`、`raim_core_lambda/lib/scene-repository.js` | localのScene JSON読込と類似度判定を、DynamoDB取得とTitan類似度判定へ分割している |
+| `local_core_reference/lib/streaming-parser.js` | `raim_core_lambda/lib/streaming-chat-json-extractor.js` | どちらも生成JSONから`text`部分だけを抽出する。local版は現在の主経路では未使用だが、Core版はMantle SSE処理で使用している |
+| `local_core_reference/scenes/*.json` | `raim_core_lambda/lib/scene-repository.js`とDynamoDB FewShotテーブル | Coreは静的JSONではなく、DynamoDBのScene/Few-shotを読み込む |
+| `local_core_reference/scripts/build-embeddings.js` | Core Lambda内に直接対応する実行時ファイルはない | AWS側の事前準備に相当する処理は、`raim_test/generate_scene_centroids.js`でDynamoDBの`textCentroid`を生成する |
+
+### 11.2 Core側にのみ存在するAWS基盤処理
+
+次のファイルにはlocal側の直接対応ファイルがありません。常駐WebSocketサーバーでは不要だった、SQSやDynamoDB向けの処理です。
+
+| Core側のファイル | Coreで追加された役割 |
+|---|---|
+| `raim_core_lambda/lib/request-state-store.js` | SQS再配信によるMantleの二重実行、二重通知、二重課金を防ぐ |
+| `raim_core_lambda/lib/response-queue-publisher.js` | `stream.start`、`stream.delta`、`stream.completed`、`stream.error`をResponse Queueへ順番付きで送る |
+| `raim_core_lambda/lib/sqs-core-handler.js` | Request Queueのレコード処理、部分失敗、重複排除を統括する |
+| `raim_core_lambda/lib/core-event.js` | Edge Lambda、SQS、Lambdaコンソールの入力形式をCore標準形式へ揃える |
+| `raim_core_lambda/lib/core-response.js` | Edge Lambdaへ返す成功・失敗レスポンスを統一する |
+| `raim_core_lambda/lib/mantle-secret-provider.js` | Mantle API KeyをSecrets Managerから取得・キャッシュする |
+| `raim_core_lambda/lib/mantle-session-policy.js` | Mantleの`previous_response_id`を再利用できるか判定する |
+
+### 11.3 未実装・部分実装の機能
+
+#### TTS
+
+local側では、`local_core_reference/lib/tts.js`、`local_core_reference/lib/voice-mapper.js`、`local_core_reference/voice-config.json`でVOICEVOX連携が実装されています。
+
+Core Lambda側には対応するTTS実装がありません。設計上は専用のTTS LambdaまたはTTSサービスへ分離する予定です。`audio_chunk`の生成とResponse Queueへの送信も未実装です。
+
+#### Tool
+
+local側では、`local_core_reference/lib/tools/index.js`、`local_core_reference/lib/tools/web-search.js`、`local_core_reference/lib/tools/get-weather.js`でTavily検索とOpenWeatherMap天気取得が実装されています。
+
+Core Lambda側にはTool実行処理がありません。`raim_core_lambda/lib/types.js`に`tool_call`関連のコードが将来拡張用として残っていますが、現在は定数とexportが無効化されており、処理経路から呼ばれません。将来は専用のTool Lambdaへ分離する予定です。
+
+#### その他
+
+- `filler_audio`: Core Lambdaでは未使用
+- `proactive_message`: Core Lambdaでは未実装
+- `session_start`: Core Lambdaでは未使用
+- Backup Lambda: 未実装
+- 画像入力: Core LambdaからMantleへ画像を渡す処理は実装済み。ただしScene選択は画像Embeddingではなく、テキストEmbeddingのみを使用する
+- local側のAWSモード: `llm.js`、`embed.js`、`memory-store.js`内のAWS分岐は未実装。実際のAWS処理はCore Lambda側の別ファイルとして実装している
+- local側のLLMストリーミング: パーサーは存在するが、現在の主経路は`callLLMWithTools()`で全文取得後に分割送信する。Core Lambda側はMantle SSEを実際に逐次処理する
+
+主要な対応だけを簡略化すると、次の関係になります。
+
+```text
+local server.js
+  ├── Core index.js
+  ├── lib/sqs-core-handler.js
+  └── lib/core-chat-service.js
+
+local lib/llm.js          → Core lib/mantle-client.js
+local lib/embed.js        → Core lib/titan-embedding-client.js
+local lib/memory-store.js → Core lib/user-session-store.js
+local lib/pick-scene.js   → Core lib/scene-repository.js + lib/scene-selector.js
+local TTS / Tool          → Core未実装（将来、別Lambdaへ分離予定）
+```
