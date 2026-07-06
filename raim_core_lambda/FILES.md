@@ -8,11 +8,13 @@ Core Lambdaは、Edge Lambdaから渡されたユーザー入力を受け取り�
 
 ```text
 raim_core_lambda/
+├── .gitignore                       ← node_modules・環境変数ファイル・zipなどをGit管理から除外する
 ├── index.js                         ← Lambdaの入口。通常呼び出し/SQS呼び出しを振り分ける
 ├── package.json                     ← Node.js依存パッケージとnpm testコマンドの定義
 ├── package-lock.json                ← 依存パッケージのバージョン固定
 ├── DEPLOYMENT.md                    ← Lambda環境変数・IAM権限・アップロード手順のメモ
 ├── FILES.md                         ← このファイル。Core Lambda各ファイルの説明
+├── LAMBDA_CONSOLE_TEST_EVENTS.md    ← Lambdaコンソール用テストイベントをまとめた補足資料
 ├── lambda-console-tests/            ← Lambdaコンソールへ貼り付ける実AWSテストイベント
 │   ├── README.md                     ← 実行順・事前条件・期待結果・エラーの見方
 │   ├── 01-full-integration-initial.json  ← Titan/Mantleを含む初回会話テスト
@@ -35,7 +37,7 @@ raim_core_lambda/
 │   ├── sqs-core-handler.js           ← SQS batch処理と部分失敗レスポンスを担当する
 │   ├── streaming-chat-json-extractor.js ← Mantleのstreaming JSONからtext差分だけを抽出する
 │   ├── titan-embedding-client.js     ← Titan Text Embeddings V2をBedrock Runtimeで呼び出す
-│   ├── types.js                      ← chat/filler/proactiveなどの内部レスポンス型を作る
+│   ├── types.js                      ← chat/error型・emotion・入力検証を定義する
 │   ├── user-session-store.js         ← UserSessionテーブルの読み書きを担当する
 │   └── prompts/
 │       └── raim-system-prompt.js     ← RAiMの人格・出力JSON形式・emotion方針を定義する
@@ -63,9 +65,11 @@ raim_core_lambda/
 ```mermaid
 flowchart TD
   A["Edge Lambda / SQS"] --> B["index.js"]
-  B --> C["core-event.js"]
-  C --> D["core-chat-service.js"]
+  B -->|直接呼び出し| D["core-chat-service.js"]
+  B -->|SQSイベント| P["sqs-core-handler.js"]
+  D --> C["core-event.js"]
   D --> E["user-session-store.js"]
+  D --> M["mantle-session-policy.js"]
   D --> F["scene-repository.js"]
   D --> G["scene-selector.js"]
   G --> H["titan-embedding-client.js"]
@@ -73,13 +77,14 @@ flowchart TD
   I --> J["prompts/raim-system-prompt.js"]
   D --> K["mantle-client.js"]
   K --> L["mantle-secret-provider.js"]
-  K --> M["mantle-session-policy.js"]
   D --> N["response-validator.js"]
   D --> O["core-response.js"]
-  B --> P["sqs-core-handler.js"]
+  P --> C
+  P --> D
   P --> Q["request-state-store.js"]
   P --> R["response-queue-publisher.js"]
-  R --> S["streaming-chat-json-extractor.js"]
+  K -->|生成テキスト差分| S["streaming-chat-json-extractor.js"]
+  S --> R
 ```
 
 ## ルート直下のファイル
@@ -104,6 +109,15 @@ SQSトリガーを関連付ける前でも、LambdaコンソールからCore Lam
 入力不正系では外部サービスを呼び出す前に検証エラーになることを確認できます。
 
 登録手順と各ケースの期待結果は、フォルダー内の`README.md`にまとめています。
+
+### `LAMBDA_CONSOLE_TEST_EVENTS.md`
+
+Lambdaコンソールから直接実行するテストイベントを、用途別にまとめた補足資料です。
+個別JSONファイルを使って実行する場合は、`lambda-console-tests/README.md`を優先して参照します。
+
+### `.gitignore`
+
+`node_modules/`、`.env`、生成したzipなど、リポジトリへ登録しないファイルを定義します。
 
 ### `package.json`
 
@@ -163,7 +177,7 @@ Core Lambdaに渡された入力イベントを、内部処理で扱いやすい
 
 - Edge Lambdaから直接渡されたイベントを正規化する
 - SQSメッセージ内のJSONを取り出して正規化する
-- `sub`、`requestId`、`connectionId`、`userText`、`images` などを統一形式へ変換する
+- `sub`、`requestId`、`connectionId`、`text`、`images` などを統一形式へ変換する
 - 必須項目が不足している場合は入力エラーとして扱う
 
 Core Lambdaの後続処理は、このファイルが整えた共通形式を前提に動きます。
@@ -207,6 +221,7 @@ Bedrock MantleのOpenAI互換Responses APIを呼び出すクライアントで�
 - MantleエンドポイントURLを組み立てる
 - Secrets Managerから取得したAPI KeyをAuthorizationヘッダーへ設定する
 - `stream: true` でMantleへリクエストする
+- Gemma 4でサポートされない `temperature` はリクエストへ含めず、モデル側の既定値を使用する
 - Server-Sent Events形式のストリーミングレスポンスを解析する
 - テキスト差分を `onTextDelta` コールバックへ流す
 - 最終的な `response_id` と出力テキストを返す
@@ -420,11 +435,13 @@ Core Lambda内部で使うレスポンス型・イベント型の生成補助を
 主な役割:
 
 - `chat` レスポンスを作る
-- `filler` レスポンスを作る
-- `proactive` レスポンスを作る
+- `error` レスポンスを作る
 - emotion一覧を定義する
 - intensityを0.0〜1.0へ丸める
 - MantleのJSON出力をCore Lambda内部型へ変換する
+
+`filler_audio`、`tool_call`、`proactive_message`、`session_start` は将来拡張用として
+コード内にコメントで残していますが、現在は生成・exportしていません。
 
 クライアントへ返すデータ形式の基本定義に近いファイルです。
 
@@ -481,6 +498,7 @@ Mantleクライアントのテストです。
 主な確認:
 
 - Mantleリクエストに `previous_response_id` を必要時だけ含める
+- Gemma 4で非対応の `temperature` をリクエストへ含めない
 - Bedrock Mantleのリージョナルエンドポイントを組み立てる
 - OpenAI互換Responses APIのストリーミング形式を扱える
 - Mantle応答から `response_id` や出力テキストを取り出せる
@@ -578,17 +596,23 @@ Titan Embeddingクライアントのテストです。
 - 返ってきたEmbeddingの次元数を検証できる
 - 独自TitanエンドポイントではなくAWS SDK標準エンドポイントを使う
 
-## 関連するワークスペース直下の補助スクリプト
+## `raim_test` 配下の関連補助スクリプト
 
-以下は `raim_core_lambda` 配下ではありませんが、Core LambdaのScene選択準備・検証に使う補助スクリプトです。
+以下は `raim_core_lambda` 配下ではなく、ワークスペース直下の`raim_test`にあります。
+Core LambdaのScene選択準備・検証に使う補助スクリプトです。
 
-### `generate_scene_centroids.js`
+### `raim_test/generate_scene_centroids.js`
 
 FewShotテーブルの `embedding_text` をTitan Text Embeddings V2でEmbeddingし、同じDynamoDBアイテムの `textCentroid` に保存します。
 
 Core LambdaのScene選択を実AWSで動かす前に、まずこのスクリプトで `textCentroid` を作成します。
 
-### `test_scene_selection.js`
+### `raim_test/generate_scene_centroids.py`
+
+Scene centroid生成処理のPython版です。現在のFewShot形式に合わせたNode.js版を利用する場合は、
+`generate_scene_centroids.js`を使用します。
+
+### `raim_test/test_scene_selection.js`
 
 ユーザー入力をTitanでEmbeddingし、FewShotテーブルの `textCentroid` と比較して、どのSceneが選ばれるかをCloudShell上で確認するスクリプトです。
 
