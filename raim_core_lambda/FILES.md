@@ -60,32 +60,333 @@ raim_core_lambda/
 
 まず全体を把握するなら、`index.js` → `lib/core-chat-service.js` → `lib/prompt-builder.js` / `lib/scene-selector.js` / `lib/mantle-client.js` の順に読むと流れを追いやすいです。
 
-## 全体の処理フロー
+## 全体の処理フロー(エラー処理を除く)
 
-```mermaid
-flowchart TD
-  A["Edge Lambda / SQS"] --> B["index.js"]
-  B -->|直接呼び出し| D["core-chat-service.js"]
-  B -->|SQSイベント| P["sqs-core-handler.js"]
-  D --> C["core-event.js"]
-  D --> E["user-session-store.js"]
-  D --> M["mantle-session-policy.js"]
-  D --> F["scene-repository.js"]
-  D --> G["scene-selector.js"]
-  G --> H["titan-embedding-client.js"]
-  D --> I["prompt-builder.js"]
-  I --> J["prompts/raim-system-prompt.js"]
-  D --> K["mantle-client.js"]
-  K --> L["mantle-secret-provider.js"]
-  D --> N["response-validator.js"]
-  D --> O["core-response.js"]
-  P --> C
-  P --> D
-  P --> Q["request-state-store.js"]
-  P --> R["response-queue-publisher.js"]
-  K -->|生成テキスト差分| S["streaming-chat-json-extractor.js"]
-  S --> R
+```text
+【Core Lambda 本番SQS経路：正常系の本筋処理フロー】
+
+────────────────────────────────────────
+フェーズ1: SQSイベントの受付と処理開始
+────────────────────────────────────────
+
+[1] index.js
+     → SQSイベントであることを判定する
+
+[2] index.js
+     → sqs-core-handler.js にSQS batch処理を渡す
+
+[3] sqs-core-handler.js
+    → 現在はBatchSize=1のため、受信した1件のSQS recordを処理対象にする
+
+  [3.1] sqs-core-handler.js
+       → core-event.js にSQS recordの正規化を依頼する
+
+  [3.2] core-event.js
+       → schemaVersion、type、sub、requestId、connectionIdなどを検証する
+
+  [3.3] core-event.js
+       → sqs-core-handler.js にCore標準入力を返す
+
+  [3.4] sqs-core-handler.js
+       → request-state-store.js にrequestIdの処理権取得を依頼する
+
+  [3.5] request-state-store.js
+       → sqs-core-handler.js に処理権取得成功を返す
+
+  [3.6] sqs-core-handler.js
+       → response-queue-publisher.js を作成する
+
+  [3.7] sqs-core-handler.js
+       → streaming-chat-json-extractor.js を作成する
+
+  [3.8] streaming-chat-json-extractor.js
+       → 抽出したtextをresponse-queue-publisher.jsへ渡すよう設定する
+
+  [3.9] sqs-core-handler.js
+       → response-queue-publisher.js にstream.start送信を依頼する
+
+  [3.10] response-queue-publisher.js
+       → SQS Response Queueへstream.startを送る
+
+  [3.11] sqs-core-handler.js
+       → core-chat-service.js に会話生成を依頼する
+
+
+  ────────────────────────────────────────
+  フェーズ2: セッション取得とScene選択
+  ────────────────────────────────────────
+
+  [3.12] core-chat-service.js
+       → core-event.js に入力検証・正規化を依頼する
+
+  [3.13] core-event.js
+       → core-chat-service.js にCore標準入力を返す
+
+  [3.14] core-chat-service.js
+       → user-session-store.js にUserSession取得を依頼する
+
+  [3.15] user-session-store.js
+       → core-chat-service.js にUserSessionを返す
+
+  [3.16] core-chat-service.js
+       → mantle-session-policy.js にprevious_response_id利用可否判定を依頼する
+
+  [3.17] mantle-session-policy.js
+       → core-chat-service.js にprevious_response_idを使うかどうかを返す
+
+  [3.18] core-chat-service.js
+       → scene-repository.js にScene一覧取得を依頼する
+
+  [3.19] scene-repository.js
+       → DynamoDBのFewShotテーブルからScene一覧を取得する
+
+  [3.20] scene-repository.js
+       → core-chat-service.js に正規化済みScene一覧を返す
+
+  [3.21] core-chat-service.js
+       → scene-selector.js にScene選択を依頼する
+
+  [3.22] scene-selector.js
+       → titan-embedding-client.js にユーザー発話Embedding生成を依頼する
+
+  [3.23] titan-embedding-client.js
+       → Bedrock RuntimeのTitan Text Embeddings V2を呼び出す
+
+  [3.24] titan-embedding-client.js
+       → scene-selector.js にEmbeddingを返す
+
+  [3.25] scene-selector.js
+       → ユーザー発話Embeddingと各SceneのtextCentroidを比較する
+
+  [3.26] scene-selector.js
+       → 最も適切なSceneをcore-chat-service.jsへ返す
+
+
+  ────────────────────────────────────────
+  フェーズ3: プロンプト作成とMantle呼び出し
+  ────────────────────────────────────────
+
+  [3.27] core-chat-service.js
+       → prompt-builder.js にMantle input作成を依頼する
+
+  [3.28] prompt-builder.js
+       → 初回会話の場合はprompts/raim-system-prompt.jsの固定プロンプトを使用する
+
+  [3.29] prompt-builder.js
+       → 初回会話では固定プロンプト、SessionSummary、Scene、Few-shot、ユーザー入力を組み立てる
+
+  [3.30] prompt-builder.js
+       → 継続会話ではprevious_response_idを前提にSceneヒントとユーザー入力を組み立てる
+
+  [3.31] prompt-builder.js
+       → core-chat-service.js にMantle inputを返す
+
+  [3.32] core-chat-service.js
+       → mantle-client.js にMantle呼び出しを依頼する
+
+  [3.33] mantle-client.js
+       → mantle-secret-provider.js にAPI Key取得を依頼する
+
+  [3.34] mantle-secret-provider.js
+       → キャッシュまたはSecrets ManagerからAPI Keyを取得する
+
+  [3.35] mantle-secret-provider.js
+       → mantle-client.js にAPI Keyを返す
+
+  [3.36] mantle-client.js
+       → Bedrock Mantle Responses APIへstream=trueでPOSTする
+
+  [3.37] Bedrock Mantle Responses API
+       → mantle-client.js にSSE streamを返す
+
+
+  ────────────────────────────────────────
+  フェーズ4: Mantleストリーミング応答の中継
+  ────────────────────────────────────────
+
+  [3.38] while (MantleからSSEイベントが届く) {
+
+    [3.38.1] mantle-client.js
+         → response.output_text.deltaからraw JSON差分を取得する
+
+    [3.38.2] mantle-client.js
+         → sqs-core-handler.js から渡されたonTextDeltaを呼ぶ
+
+    [3.38.3] onTextDelta
+         → streaming-chat-json-extractor.js にraw JSON差分を渡す
+
+    [3.38.4] streaming-chat-json-extractor.js
+         → JSON内のtextフィールドから表示用テキストだけを抽出する
+
+    [3.38.5] streaming-chat-json-extractor.js
+         → response-queue-publisher.js にtext差分を渡す
+
+    [3.38.6] response-queue-publisher.js
+         → text差分を内部バッファへ追加する
+
+
+    [3.38.7] if (内部バッファが一定文字数以上になった場合) {
+
+      [3.38.7.1] response-queue-publisher.js
+           → SQS Response Queueへstream.deltaを送る
+
+      [3.38.7.2] response-queue-publisher.js
+           → 送信済みの内部バッファを空にする
+
+    } else {
+
+      [3.38.7.3] response-queue-publisher.js
+           → 次のtext差分を待つ
+
+    }
+
+  }
+
+
+  ────────────────────────────────────────
+  フェーズ5: 最終応答の検証と会話状態の保存
+  ────────────────────────────────────────
+
+  [3.39] mantle-client.js
+       → SSE streamからresponseId、rawText、createdAtを組み立てる
+
+  [3.40] mantle-client.js
+       → core-chat-service.js にresponseId、rawText、createdAtを返す
+
+  [3.41] core-chat-service.js
+       → response-validator.js にrawText検証を依頼する
+
+  [3.42] response-validator.js
+       → rawTextからJSON部分を取り出してparseする
+
+  [3.43] response-validator.js
+       → types.jsを使ってchat形式へ正規化する
+
+  [3.44] types.js
+       → chat型、emotion定義、intensity補正を提供する
+
+  [3.45] response-validator.js
+       → core-chat-service.js に正規化済みchat outputを返す
+
+  [3.46] core-chat-service.js
+       → user-session-store.js に新しいresponse_id保存を依頼する
+
+  [3.47] user-session-store.js
+       → DynamoDBのUserSessionへresponse_idと作成日時を保存する
+
+  [3.48] user-session-store.js
+       → core-chat-service.js に保存完了を返す
+
+  [3.49] core-chat-service.js
+       → core-response.js にCore chatレスポンス作成を依頼する
+
+  [3.50] core-response.js
+       → ok、type、text、emotion、intensity、requestIdを持つCore responseを作る
+
+  [3.51] core-response.js
+       → core-chat-service.js にCore responseを返す
+
+  [3.52] core-chat-service.js
+       → sqs-core-handler.js にresult.ok === trueのresultを返す
+
+
+  ────────────────────────────────────────
+  フェーズ6: 完了イベント送信とrequest状態更新
+  ────────────────────────────────────────
+
+  [3.53] sqs-core-handler.js
+       → response-queue-publisher.js にstream.completed送信を依頼する
+
+  [3.54] response-queue-publisher.js
+       → 内部バッファに残っているtextがあればstream.deltaとして先に送る
+
+  [3.55] response-queue-publisher.js
+       → SQS Response Queueへstream.completedを送る
+
+  [3.56] sqs-core-handler.js
+       → request-state-store.js にCOMPLETED記録を依頼する
+
+  [3.57] request-state-store.js
+       → request状態をCOMPLETEDへ更新してleaseを解放する
+
+  [3.58] request-state-store.js
+       → sqs-core-handler.js にCOMPLETED記録完了を返す
+
+  [3.59] sqs-core-handler.js
+       → このrecordの処理を完了する
+
+[4] sqs-core-handler.js
+     → 1件のrecord処理完了後、index.jsへbatchItemFailuresを返す
+
+[5] index.js
+     → Lambda Runtime / SQS Event Source Mappingへ結果を返す
 ```
+
+## 用語集（変数名と役割）
+
+Core LambdaのコードやJSONに登場する主な変数名を、用途ごとにまとめます。
+同じ「ID」でも役割が異なるため、特に `requestId`、`messageId`、`connectionId`、`responseId` の違いに注意してください。
+
+### リクエストとユーザーを識別する変数
+
+| 変数名 | 説明 |
+|---|---|
+| `event` | Lambdaが受け取る入力全体です。本番ではSQSイベント、Lambdaコンソールの単体テストではCore標準入力などが入ります。 |
+| `event.Records` | SQS Event Source MappingがLambdaへ渡したSQSレコードの配列です。現在は `BatchSize=1` のため、通常は1件だけ入ります。 |
+| `record` | `event.Records` に含まれる1件分のSQSレコードです。実際のリクエストJSONは `record.body` に文字列として格納されています。 |
+| `schemaVersion` | リクエストまたはレスポンスのJSON形式のバージョンです。現在は `1` を使用します。 |
+| `type` | メッセージの種類です。入力では `chat.request`、出力では `stream.start`、`stream.delta`、`stream.completed`、`stream.error` などを使用します。 |
+| `sub` | Cognitoがユーザーごとに発行する一意な識別子です。UserSessionの取得など、ユーザー単位の処理に使用します。 |
+| `requestId` | クライアントが送信した1回の会話リクエストを識別するIDです。Request QueueからResponse Queueまで同じ値を引き継ぎます。 |
+| `connectionId` | API Gateway WebSocketの接続を識別するIDです。Edge Lambdaが、どの接続へ応答を返すか判断するために使用します。 |
+| `source` | リクエストの送信元を表します。例として `websocket`、`sqs`、`lambda-console` などがあります。 |
+| `text` | ユーザーの入力文、または最終的なRAiMの返答本文です。どちらを指すかは、そのJSONや処理の文脈で決まります。 |
+| `images` | ユーザー入力に添付された画像情報の配列です。画像がない場合は空配列 `[]` になります。 |
+
+### SQSとストリーミングで使用する変数
+
+| 変数名 | 説明 |
+|---|---|
+| `messageId` | AWS SQSが各SQSメッセージへ付与するIDです。RAiMが発行する `requestId` とは別物です。 |
+| `MessageGroupId` | FIFO Queue内で順序を保証する単位です。同じ値を持つメッセージは順番に処理され、異なる値のグループは並列処理できます。 |
+| `MessageDeduplicationId` | FIFO Queueが同じメッセージの重複登録を抑止するために使用するIDです。コード内では `deduplicationId` として生成します。 |
+| `batchItemFailures` | 処理に失敗し、SQSから再配信してほしいレコードをLambda Runtimeへ伝える配列です。成功時は空配列になります。 |
+| `itemIdentifier` | `batchItemFailures` の各要素に設定する識別子です。値には、失敗したSQSレコードの `messageId` を指定します。 |
+| `attempt` | SQSメッセージが何回目の受信・処理であるかを表します。SQSの `ApproximateReceiveCount` から取得します。 |
+| `sequence` | 同じ `requestId` のストリーミングイベントを並べる連番です。`stream.start` を0として、送信するたびに1増えます。 |
+| `textDelta` | Mantleの返答のうち、今回の `stream.delta` で追加送信する部分文字列です。 |
+| `textBuffer` | 小さすぎる文字列をSQSへ毎回送らないように、複数の `textDelta` を一時的にまとめておく内部バッファです。 |
+| `publisher` | `stream.start`、`stream.delta`、`stream.completed`、`stream.error` をResponse Queueへ送る処理をまとめたオブジェクトです。 |
+| `extractor` | Mantleから届く生成途中のraw JSON文字列から、クライアントへ表示する `text` の差分だけを取り出すオブジェクトです。 |
+
+### 会話状態・Scene・Mantleで使用する変数
+
+| 変数名 | 説明 |
+|---|---|
+| `session` | DynamoDBのUserSessionテーブルから取得したユーザーの会話状態です。要約や直前のMantleレスポンス情報などを保持します。 |
+| `sessionSummary` | 過去の会話内容を短くまとめた文字列です。初回用プロンプトへ会話の前提として含めます。 |
+| `scenes` | FewShotテーブルから取得したScene定義の一覧です。 |
+| `sceneSelection` | ユーザー入力のEmbeddingと各Sceneを比較した選択結果です。選ばれた `scene` などを保持します。 |
+| `textCentroid` | Sceneに属する例文をTitan Text Embeddings V2でEmbeddingし、平均化したベクトルです。Scene選択時の比較対象になります。 |
+| `mantleInput` | system prompt、Scene、Few-shot、ユーザー入力などを組み立てたMantleへの入力です。 |
+| `previousResponseId` | コード内部で使用する、直前のMantle Responses APIのレスポンスIDです。Mantleへ送信するときは `previous_response_id` という項目名になります。 |
+| `responseId` | 今回のMantle Responses API呼び出しで新しく発行されたレスポンスIDです。次回の継続会話に備えてUserSessionへ保存します。 |
+| `rawText` | Mantleが生成した未検証の文字列です。`response-validator.js` がJSONとして解析・検証する前の状態を指します。 |
+| `output` | `rawText`を検証し、RAiMのchat形式またはerror形式へ正規化した結果です。 |
+
+### 処理結果と状態管理で使用する変数
+
+| 変数名 | 説明 |
+|---|---|
+| `result` | Core Lambdaの会話処理結果です。成功時は返答本文や感情、失敗時はエラー情報を保持します。 |
+| `ok` | 処理が成功したかを表す真偽値です。`true` は成功、`false` は業務上のエラー応答を表します。 |
+| `emotion` | RAiMの返答に付与する感情名です。Flutter／Unity側の表情や演出の選択に使用します。 |
+| `intensity` | `emotion` の強さを表す数値です。コード側で許容範囲に補正されます。 |
+| `code` | エラーの種類を機械的に識別する文字列です。例として `INVALID_INPUT`、`LLM_ERROR` などがあります。 |
+| `retriable` | 同じ処理を再試行する価値があるエラーかを表す真偽値です。`false` の場合、そのSQSレコードは `batchItemFailures` に追加しません。 |
+| `ownerId` | REQUEST_STATE_TABLE上で、現在のリクエストの処理権を持つLambda実行を識別するIDです。通常はLambdaの `awsRequestId` を使用します。 |
+| `claim` | `requestId` の処理権を取得した結果です。`claimed`、`status`、`requestKey` などを保持します。 |
+| `requestKey` | REQUEST_STATE_TABLE上で対象リクエストを特定し、`PROCESSING`、`COMPLETED`、`FAILED` の状態を更新するためのキーです。 |
 
 ## ルート直下のファイル
 
