@@ -4,6 +4,16 @@
 
 Edge Lambdaは、API Gateway WebSocketとCore Lambda用SQS Queueの間に立つLambdaです。
 
+## 目次
+
+- [Edge Lambdaの役割](#edge-lambdaの役割)
+- [必須環境変数](#必須環境変数)
+- [必要なAWSリソース](#必要なawsリソース)
+- [必要なIAM権限](#必要なiam権限)
+- [`function.zip` に含めるもの](#functionzip-に含めるもの)
+- [ローカルテスト](#ローカルテスト)
+- [CloudWatch Logsで見るポイント](#cloudwatch-logsで見るポイント)
+
 ## Edge Lambdaの役割
 
 Edge Lambdaは大きく2つの処理を担当します。

@@ -4,6 +4,14 @@
 
 Authorizer Lambdaは、WebSocket API Gatewayの `$connect` でCognito JWTを検証し、Edge LambdaへCognito `sub` を渡します。
 
+## 目次
+
+- [ファイル群の全体図](#ファイル群の全体図)
+- [全体の処理フロー](#全体の処理フロー)
+- [ルート直下のファイル](#ルート直下のファイル)
+- [`lib` 配下の実装ファイル](#lib-配下の実装ファイル)
+- [`test` 配下のテストファイル](#test-配下のテストファイル)
+
 ## ファイル群の全体図
 
 ```text

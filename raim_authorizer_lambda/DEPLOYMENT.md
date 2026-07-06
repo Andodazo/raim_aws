@@ -2,6 +2,17 @@
 
 このLambdaは、WebSocket API Gatewayの `$connect` に設定する検証用Lambda Authorizerです。
 
+## 目次
+
+- [役割](#役割)
+- [必須環境変数](#必須環境変数)
+- [WebSocket API Gateway側の設定](#websocket-api-gateway側の設定)
+- [wscatでの接続例](#wscatでの接続例)
+- [Lambda Authorizerが返す値](#lambda-authorizerが返す値)
+- [`function.zip` に含めるもの](#functionzip-に含めるもの)
+- [必要なIAM権限](#必要なiam権限)
+- [よくあるエラー](#よくあるエラー)
+
 ## 役割
 
 `wscat` やアプリから送られたCognito JWTを検証し、Cognitoユーザーの `sub` をAPI Gateway経由でEdge Lambdaへ渡します。
