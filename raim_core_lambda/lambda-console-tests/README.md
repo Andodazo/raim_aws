@@ -20,13 +20,14 @@
 
 1. 入力イベントの検証と正規化
 2. `RAiM-UserSession-dev`からユーザーの会話状態を取得または作成
-3. `RAiM-FewShot-dev`からSceneとFew-shotを取得
+3. `RAiM-FewShot-dev`からScene候補の`id`と`textCentroid`だけを取得
 4. Titan Text Embeddings V2でユーザー入力をEmbedding
-5. `textCentroid`との類似度からSceneを選択
-6. Secrets ManagerからMantle API Keyを取得
-7. MantleのGemma 4へリクエストを送信
-8. Mantleの`response_id`をUserSessionへ保存
-9. Core Lambda形式の応答をLambdaコンソールへ返却
+5. `textCentroid`との類似度から`sceneId`を選択
+6. 選択された`sceneId`の詳細SceneとFew-shotを1件取得
+7. Secrets ManagerからMantle API Keyを取得
+8. MantleのGemma 4へリクエストを送信
+9. Mantleの`response_id`をUserSessionへ保存
+10. Core Lambda形式の応答をLambdaコンソールへ返却
 
 直接呼び出しのため、Request Queue、`RAiM-CoreRequest-dev`、Response Queue、
 Edge Lambda、API Gateway WebSocketへの送信は実行しません。

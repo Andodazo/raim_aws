@@ -5,19 +5,17 @@
 // ==============================================================================
 //
 // 1. Titan Text Embeddings V2でユーザー発話をベクトル化する。
-// 2. DynamoDBから取得した各SceneのtextCentroidとコサイン類似度を計算する。
-// 3. 類似度が最も高く、閾値以上のSceneを採用する。
-// 4. centroid未登録・閾値未満・画像のみの場合はdefault Sceneを採用する。
+// 2. DynamoDBから取得した軽量Scene候補のtextCentroidとコサイン類似度を計算する。
+// 3. 類似度が最も高く、閾値以上のsceneIdを採用する。
+// 4. centroid未登録・閾値未満・画像のみの場合はdefaultのsceneIdを採用する。
 //
 // Titan呼び出しに失敗した場合はdefaultへ黙って落とさず例外を上位へ返す。
 // 外部サービス障害を通常のScene選択として隠さず、再試行可能なエラーにするため。
 //
-// 【Sceneデータ例】
+// 【Scene候補データ例】
 // {
 //   id: "gaming",
-//   description: "ゲームの相談",
-//   textCentroid: [0.01, -0.02, ...],
-//   few_shots: [...]
+//   textCentroid: [0.01, -0.02, ...]
 // }
 //
 // textCentroidは、FewShotテーブルの `embedding_text` をTitanでEmbeddingした代表ベクトル。
@@ -75,33 +73,27 @@ function cosineSimilarity(left, right) {
   return dot / (Math.sqrt(leftNorm) * Math.sqrt(rightNorm));
 }
 
-function findDefaultScene(scenes) {
-  return scenes.find((scene) => scene.id === DEFAULT_SCENE_ID) || null;
-}
-
 /**
  * Sceneを確定できない場合の戻り値を統一する。
- * default Scene自体が未登録でもsceneIdはdefaultを返し、scene本体はnullとする。
+ * ここではDynamoDBからScene詳細を取得しない。
+ * 選択結果としてsceneIdだけを返し、詳細取得はscene-repository.jsに任せる。
  */
-function createFallbackSelection(scenes, reason, score = null) {
-  const scene = findDefaultScene(scenes);
-
+function createFallbackSelection(reason, score = null) {
   return {
-    sceneId: scene?.id || DEFAULT_SCENE_ID,
+    sceneId: DEFAULT_SCENE_ID,
     score,
     reason,
-    scene,
     fallbackUsed: true,
   };
 }
 
 /**
- * ユーザー発話に最も近いSceneを選ぶ。
+ * ユーザー発話に最も近いsceneIdを選ぶ。
  *
  * @param {string} userText - 今回のユーザー発話。画像内容は含めない。
- * @param {Array<object>} scenes - DynamoDBから取得・正規化済みのScene一覧。
+ * @param {Array<object>} scenes - DynamoDBから取得した軽量Scene候補一覧。
  * @param {Function} embeddingProvider - 通常はTitan Client。テスト時に差し替え可能。
- * @returns {Promise<object>} Scene本体、類似度、選択理由を含む結果。
+ * @returns {Promise<object>} sceneId、類似度、選択理由を含む結果。
  */
 async function selectScene({
   userText,
@@ -113,7 +105,7 @@ async function selectScene({
 
   // 1. 画像のみの入力ではテキストEmbeddingを行わず、defaultを使用する。
   if (!text) {
-    return createFallbackSelection(sceneList, 'empty-text');
+    return createFallbackSelection('empty-text');
   }
 
   // centroidが正しい配列になっているSceneだけを比較対象にする。
@@ -121,7 +113,7 @@ async function selectScene({
   const candidates = sceneList.filter((scene) => isFiniteVector(scene.textCentroid));
 
   if (candidates.length === 0) {
-    return createFallbackSelection(sceneList, 'no-centroid');
+    return createFallbackSelection('no-centroid');
   }
 
   // 2. ユーザー発話をTitanで1回だけEmbeddingする。
@@ -150,19 +142,18 @@ async function selectScene({
 
   // 全centroidが古い次元だった場合。誤比較せずdefaultへ戻す。
   if (!bestScene) {
-    return createFallbackSelection(sceneList, 'dimension-mismatch');
+    return createFallbackSelection('dimension-mismatch');
   }
 
   // 最高得点でも閾値未満なら、無理に専門Sceneへ寄せずdefaultを使う。
   if (bestScore < SCENE_SIMILARITY_THRESHOLD) {
-    return createFallbackSelection(sceneList, 'below-threshold', bestScore);
+    return createFallbackSelection('below-threshold', bestScore);
   }
 
   return {
     sceneId: bestScene.id,
     score: bestScore,
     reason: 'titan-cosine',
-    scene: bestScene,
     fallbackUsed: false,
   };
 }
@@ -177,17 +168,6 @@ function summarizeSceneSelection(selection) {
     score: Number.isFinite(selection.score) ? selection.score : null,
     reason: selection.reason,
     fallbackUsed: Boolean(selection.fallbackUsed),
-    description: selection.scene?.description || '',
-    fewShotsCount: Array.isArray(selection.scene?.few_shots)
-      ? selection.scene.few_shots.length
-      : 0,
-    // 新形式では `embedding_text` をEmbeddingした結果が `textCentroid` に入る。
-    // このフラグで、Scene定義が新形式の代表テキストを持っているか確認できる。
-    hasEmbeddingText: typeof selection.scene?.embedding_text === 'string' &&
-      selection.scene.embedding_text.trim().length > 0,
-    textExamplesCount: Array.isArray(selection.scene?.text_examples)
-      ? selection.scene.text_examples.length
-      : 0,
   };
 }
 

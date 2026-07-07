@@ -11,13 +11,14 @@
 // 【処理フロー】
 // 1. eventをCore標準入力へ正規化する
 // 2. DynamoDBからユーザーの会話状態を取得する
-// 3. DynamoDBからScene/Few-shot一覧を取得する
-// 4. Titan Text Embeddings V2で発話に近いSceneを選ぶ
-// 5. Scene、Few-shot、会話要約を使ってMantle inputを作る
-// 6. Mantle Responses APIを呼び出す
-// 7. Mantle出力をRAiM chat形式へ正規化する
-// 8. 新しいresponse_idをDynamoDBへ保存する
-// 9. Edge Lambda向けCoreレスポンスを返す
+// 3. DynamoDBからScene選択用の軽量候補(id/textCentroid)を取得する
+// 4. Titan Text Embeddings V2で発話に近いsceneIdを選ぶ
+// 5. 選ばれたsceneIdの詳細Scene/Few-shotをDynamoDBから1件取得する
+// 6. Scene、Few-shot、会話要約を使ってMantle inputを作る
+// 7. Mantle Responses APIを呼び出す
+// 8. Mantle出力をRAiM chat形式へ正規化する
+// 9. 新しいresponse_idをDynamoDBへ保存する
+// 10. Edge Lambda向けCoreレスポンスを返す
 //
 // 【response_idの復旧】
 // 保存済みprevious_response_idがMantle側で失効していた時は、DynamoDBの古い状態を
@@ -38,7 +39,10 @@ const {
   getMantleSessionState,
   isMantleResponseExpiredError,
 } = require('./mantle-session-policy');
-const { listScenes } = require('./scene-repository');
+const {
+  getSceneById,
+  listSceneCandidates,
+} = require('./scene-repository');
 const { selectScene } = require('./scene-selector');
 const { buildMantleInput } = require('./prompt-builder');
 const { createMantleResponse } = require('./mantle-client');
@@ -57,7 +61,8 @@ const defaultDependencies = Object.freeze({
   updateMantleResponseState,
   getMantleSessionState,
   isMantleResponseExpiredError,
-  listScenes,
+  getSceneById,
+  listSceneCandidates,
   selectScene,
   buildMantleInput,
   createMantleResponse,
@@ -108,21 +113,27 @@ function createCoreChatService(dependencyOverrides = {}) {
     const session = await dependencies.getOrCreateUserSession(input.sub);
     const sessionState = dependencies.getMantleSessionState(session);
 
-    // 2. Scene/Few-shot定義を取得し、Titan Embeddingで今回のSceneを選ぶ。
-    // selectSceneは非同期でBedrock Runtimeを呼び出す。
-    const scenes = await dependencies.listScenes();
+    // 2. Scene選択用の軽量候補を取得し、Titan Embeddingで今回のsceneIdを選ぶ。
+    // ここではDynamoDBから `id` と `textCentroid` だけをScanする。
+    // few_shotsなどの詳細を全Scene分読むと、Scene数が増えたときに無駄が大きいため。
+    const sceneCandidates = await dependencies.listSceneCandidates();
     const sceneSelection = await dependencies.selectScene({
       userText: input.text,
-      scenes,
+      scenes: sceneCandidates,
     });
 
-    // 3. 初回ならsystem prompt・要約・Few-shotを含める。
+    // 3. 類似度計算で選ばれたsceneIdの詳細Sceneを1件だけ取得する。
+    // prompt-builderが必要とする description / default_emotions / few_shots は、
+    // 選ばれたSceneだけに絞ってGetItemする。
+    const selectedScene = await dependencies.getSceneById(sceneSelection.sceneId);
+
+    // 4. 初回ならsystem prompt・要約・Few-shotを含める。
     // 継続時はprevious_response_idを使うため、今回の発話を中心に組み立てる。
     let mantleInput = dependencies.buildMantleInput({
       userText: input.text,
       images: input.images,
       sessionSummary: session.sessionSummary || '',
-      scene: sceneSelection.scene,
+      scene: selectedScene,
       usePreviousResponseId: sessionState.usePreviousResponseId,
     });
     // policyが期限・存在状態を確認済みの時だけprevious_response_idを送る。
@@ -158,7 +169,7 @@ function createCoreChatService(dependencyOverrides = {}) {
         userText: input.text,
         images: input.images,
         sessionSummary: session.sessionSummary || '',
-        scene: sceneSelection.scene,
+        scene: selectedScene,
         usePreviousResponseId: false,
       });
       mantleResponse = await dependencies.createMantleResponse({

@@ -18,8 +18,9 @@ function createDependencies(calls) {
       previousResponseId: 'previous-1',
     }),
     isMantleResponseExpiredError: () => false,
-    listScenes: async () => [{ id: 'default' }],
-    selectScene: ({ userText }) => ({ scene: { id: 'default' }, userText }),
+    listSceneCandidates: async () => [{ id: 'default', textCentroid: [1, 0] }],
+    selectScene: ({ userText }) => ({ sceneId: 'default', userText }),
+    getSceneById: async (sceneId) => ({ id: sceneId, few_shots: [] }),
     buildMantleInput: (input) => input,
     createMantleResponse: async (input) => {
       calls.push(['model', input]);
