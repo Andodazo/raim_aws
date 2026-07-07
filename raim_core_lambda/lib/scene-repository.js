@@ -37,6 +37,12 @@
 // - image_examples
 // - imageCentroid
 //
+// 【取得方針】
+// Scene選択の類似度計算に必要なのは `id` と `textCentroid` だけです。
+// そのため、通常の会話処理では最初に軽量なScene候補だけをScanし、
+// 選ばれたScene 1件だけをGetItemで詳細取得します。
+// これにより、全Sceneのfew_shotsなど重い属性を毎回読む無駄を避けます。
+//
 // 【DynamoDBテーブル想定】
 // Table name:
 //   RAiM-FewShot-dev
@@ -201,12 +207,103 @@ function normalizeScene(scene) {
 }
 
 // ─────────────────────────────────────────────
-// 全Scene取得
+// Scene候補正規化
+// ─────────────────────────────────────────────
+//
+// normalizeSceneCandidate() は、Scene選択だけに使う軽量データを整えます。
+//
+// 通常の normalizeScene() は few_shots / description / default_emotions など、
+// Prompt作成に使う詳細属性まで扱います。
+// 一方、類似度計算に必要なのは `id` と `textCentroid` だけなので、
+// 候補一覧ではこの2つに絞ります。
+//
+// 返す形:
+// {
+//   id: "gaming",
+//   textCentroid: [0.01, -0.02, ...]
+// }
+//
+// 注意:
+// - textCentroid がない候補も null として残します。
+// - 実際に比較対象にするかどうかは scene-selector.js が判断します。
+
+function normalizeSceneCandidate(scene) {
+  if (!scene || typeof scene !== 'object') {
+    return null;
+  }
+
+  return {
+    id: String(scene.id || ''),
+    textCentroid: Array.isArray(scene.textCentroid) ? scene.textCentroid : null,
+  };
+}
+
+// ─────────────────────────────────────────────
+// Scene候補一覧取得
+// ─────────────────────────────────────────────
+//
+// listSceneCandidates() は DynamoDBテーブルからScene選択に必要な属性だけを取得します。
+//
+// 取得する属性:
+// - id
+// - textCentroid
+//
+// ここでは few_shots / description / default_emotions などは取得しません。
+// それらは類似度計算には不要で、Scene数やfew_shotsが増えるほど読み取り量が大きくなるためです。
+//
+// 選択後、core-chat-service.js が getSceneById(sceneId) を呼び、
+// 選ばれたScene 1件だけの詳細を取得します。
+//
+// Scanは1回で全件取れない場合があるため、LastEvaluatedKeyを使って
+// ページングしながら最後まで取得します。
+
+async function listSceneCandidates() {
+  const candidates = [];
+  let ExclusiveStartKey = undefined;
+
+  do {
+    const result = await docClient.send(
+      new ScanCommand({
+        TableName: TABLE_NAME,
+        ProjectionExpression: '#id, #textCentroid',
+        ExpressionAttributeNames: {
+          '#id': 'id',
+          '#textCentroid': 'textCentroid',
+        },
+        ExclusiveStartKey,
+      })
+    );
+
+    const items = result.Items || [];
+
+    for (const item of items) {
+      const normalized = normalizeSceneCandidate(item);
+
+      // idがないItemはScene候補として扱えないため除外する。
+      if (normalized && normalized.id) {
+        candidates.push(normalized);
+      }
+    }
+
+    ExclusiveStartKey = result.LastEvaluatedKey;
+  } while (ExclusiveStartKey);
+
+  return candidates;
+}
+
+// ─────────────────────────────────────────────
+// 全Scene詳細取得
 // ─────────────────────────────────────────────
 //
 // listScenes() は DynamoDBテーブル内のScene定義をすべて取得する。
 //
-// 現時点ではScene数が少ない想定なので Scan を使う。
+// 現在の会話処理では、通常 listSceneCandidates() と getSceneById() を組み合わせるため、
+// この関数は主にデバッグ・検証・互換用途です。
+//
+// すべてのSceneについて few_shots などの詳細属性まで読むため、
+// 本番のScene選択経路ではできるだけ使わない方針です。
+//
+// 現時点ではScene数が少ない想定なので、この関数自体は Scan を使う。
 // 例:
 // - default
 // - gaming
@@ -361,6 +458,8 @@ function summarizeScenes(scenes) {
 module.exports = {
   DEFAULT_SCENE_ID,
   normalizeScene,
+  normalizeSceneCandidate,
+  listSceneCandidates,
   listScenes,
   getSceneById,
   getDefaultScene,

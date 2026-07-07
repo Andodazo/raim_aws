@@ -146,3 +146,8 @@ APIの`postToConnection`でクライアントへ転送します。
 `RAiM-FewShot-dev`の各Sceneには、`TitanModelId`と
 `TitanEmbeddingDimensions`で生成した`textCentroid`が必要です。
 centroidがないSceneは類似度選択の候補になりません。
+
+Core Lambdaは、Scene選択時に最初から全Sceneの`few_shots`を読みません。
+まず`id`と`textCentroid`だけをScanし、類似度計算で選ばれた`sceneId`の
+レコードだけをGetItemで詳細取得します。そのため、Lambda実行ロールには
+`SCENE_TABLE_NAME`への`dynamodb:Scan`と`dynamodb:GetItem`の両方が必要です。

@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 
 const {
   normalizeScene,
+  normalizeSceneCandidate,
   summarizeScenes,
 } = require('../lib/scene-repository');
 
@@ -60,4 +61,18 @@ test('summarizeScenes reports whether embedding_text exists', () => {
 
   assert.equal(summary[0].hasEmbeddingText, true);
   assert.equal(summary[1].hasEmbeddingText, false);
+});
+
+test('normalizeSceneCandidate keeps only scene selection attributes', () => {
+  const candidate = normalizeSceneCandidate({
+    id: 'gaming',
+    description: 'not needed for selection',
+    few_shots: [{ user: 'hello', raim: 'hi' }],
+    textCentroid: [0.9, 0.1],
+  });
+
+  assert.deepEqual(candidate, {
+    id: 'gaming',
+    textCentroid: [0.9, 0.1],
+  });
 });

@@ -43,8 +43,8 @@ raim_core_lambda/
 │   ├── request-state-store.js        ← SQSリクエストの冪等性・処理状態をDynamoDBで管理する
 │   ├── response-queue-publisher.js   ← 生成中/完了/エラーイベントをResponse Queueへ送る
 │   ├── response-validator.js         ← MantleのJSON出力を検証し、emotion/intensityを補正する
-│   ├── scene-repository.js           ← FewShotテーブルからScene定義を取得・正規化する
-│   ├── scene-selector.js             ← ユーザー入力EmbeddingとtextCentroidを比較してSceneを選ぶ
+│   ├── scene-repository.js           ← FewShotテーブルからScene候補と選択後のScene詳細を取得する
+│   ├── scene-selector.js             ← ユーザー入力EmbeddingとtextCentroidを比較してsceneIdを選ぶ
 │   ├── sqs-core-handler.js           ← SQS batch処理と部分失敗レスポンスを担当する
 │   ├── streaming-chat-json-extractor.js ← Mantleのstreaming JSONからtext差分だけを抽出する
 │   ├── titan-embedding-client.js     ← Titan Text Embeddings V2をBedrock Runtimeで呼び出す
@@ -146,16 +146,16 @@ raim_core_lambda/
        → core-chat-service.js にprevious_response_idを使うかどうかを返す
 
   [3.18] core-chat-service.js
-       → scene-repository.js にScene一覧取得を依頼する
+       → scene-repository.js にScene候補一覧取得を依頼する
 
   [3.19] scene-repository.js
-       → DynamoDBのFewShotテーブルからScene一覧を取得する
+       → DynamoDBのFewShotテーブルから id と textCentroid だけをScanする
 
   [3.20] scene-repository.js
-       → core-chat-service.js に正規化済みScene一覧を返す
+       → core-chat-service.js に軽量なScene候補一覧を返す
 
   [3.21] core-chat-service.js
-       → scene-selector.js にScene選択を依頼する
+       → scene-selector.js にsceneId選択を依頼する
 
   [3.22] scene-selector.js
        → titan-embedding-client.js にユーザー発話Embedding生成を依頼する
@@ -167,47 +167,56 @@ raim_core_lambda/
        → scene-selector.js にEmbeddingを返す
 
   [3.25] scene-selector.js
-       → ユーザー発話Embeddingと各SceneのtextCentroidを比較する
+       → ユーザー発話Embeddingと各Scene候補のtextCentroidを比較する
 
   [3.26] scene-selector.js
-       → 最も適切なSceneをcore-chat-service.jsへ返す
+       → 最も適切なsceneIdをcore-chat-service.jsへ返す
+
+  [3.27] core-chat-service.js
+       → scene-repository.js に選択されたsceneIdの詳細取得を依頼する
+
+  [3.28] scene-repository.js
+       → DynamoDBのFewShotテーブルから選択Scene 1件だけをGetItemする
+
+  [3.29] scene-repository.js
+       → core-chat-service.js にdescription、default_emotions、few_shotsを含む詳細Sceneを返す
 
 
   ────────────────────────────────────────
   フェーズ3: プロンプト作成とMantle呼び出し
   ────────────────────────────────────────
 
-  [3.27] core-chat-service.js
+  [3.30] core-chat-service.js
        → prompt-builder.js にMantle input作成を依頼する
 
-  [3.28] prompt-builder.js
+  [3.31] prompt-builder.js
        → 初回会話の場合はprompts/raim-system-prompt.jsの固定プロンプトを使用する
 
-  [3.29] prompt-builder.js
+  [3.32] prompt-builder.js
        → 初回会話では固定プロンプト、SessionSummary、Scene、Few-shot、ユーザー入力を組み立てる
 
-  [3.30] prompt-builder.js
+  [3.33] prompt-builder.js
        → 継続会話ではprevious_response_idを前提にSceneヒントとユーザー入力を組み立てる
 
-  [3.31] prompt-builder.js
+  [3.34] prompt-builder.js
        → core-chat-service.js にMantle inputを返す
 
-  [3.32] core-chat-service.js
+  [3.35] core-chat-service.js
        → mantle-client.js にMantle呼び出しを依頼する
 
-  [3.33] mantle-client.js
+  [3.36] mantle-client.js
        → mantle-secret-provider.js にAPI Key取得を依頼する
 
-  [3.34] mantle-secret-provider.js
+  [3.37] mantle-secret-provider.js
        → キャッシュまたはSecrets ManagerからAPI Keyを取得する
 
-  [3.35] mantle-secret-provider.js
+  [3.38] mantle-secret-provider.js
        → mantle-client.js にAPI Keyを返す
 
-  [3.36] mantle-client.js
+  [3.39] mantle-client.js
        → Bedrock Mantle Responses APIへstream=trueでPOSTする
 
-  [3.37] Bedrock Mantle Responses API
+  [3.40] Bedrock Mantle Responses API
        → mantle-client.js にSSE streamを返す
 
 
@@ -215,38 +224,38 @@ raim_core_lambda/
   フェーズ4: Mantleストリーミング応答の中継
   ────────────────────────────────────────
 
-  [3.38] while (MantleからSSEイベントが届く) {
+  [3.41] while (MantleからSSEイベントが届く) {
 
-    [3.38.1] mantle-client.js
+    [3.41.1] mantle-client.js
          → response.output_text.deltaからraw JSON差分を取得する
 
-    [3.38.2] mantle-client.js
+    [3.41.2] mantle-client.js
          → sqs-core-handler.js から渡されたonTextDeltaを呼ぶ
 
-    [3.38.3] onTextDelta
+    [3.41.3] onTextDelta
          → streaming-chat-json-extractor.js にraw JSON差分を渡す
 
-    [3.38.4] streaming-chat-json-extractor.js
+    [3.41.4] streaming-chat-json-extractor.js
          → JSON内のtextフィールドから表示用テキストだけを抽出する
 
-    [3.38.5] streaming-chat-json-extractor.js
+    [3.41.5] streaming-chat-json-extractor.js
          → response-queue-publisher.js にtext差分を渡す
 
-    [3.38.6] response-queue-publisher.js
+    [3.41.6] response-queue-publisher.js
          → text差分を内部バッファへ追加する
 
 
-    [3.38.7] if (内部バッファが一定文字数以上になった場合) {
+    [3.41.7] if (内部バッファが一定文字数以上になった場合) {
 
-      [3.38.7.1] response-queue-publisher.js
+      [3.41.7.1] response-queue-publisher.js
            → SQS Response Queueへstream.deltaを送る
 
-      [3.38.7.2] response-queue-publisher.js
+      [3.41.7.2] response-queue-publisher.js
            → 送信済みの内部バッファを空にする
 
     } else {
 
-      [3.38.7.3] response-queue-publisher.js
+      [3.41.7.3] response-queue-publisher.js
            → 次のtext差分を待つ
 
     }
@@ -258,46 +267,46 @@ raim_core_lambda/
   フェーズ5: 最終応答の検証と会話状態の保存
   ────────────────────────────────────────
 
-  [3.39] mantle-client.js
+  [3.42] mantle-client.js
        → SSE streamからresponseId、rawText、createdAtを組み立てる
 
-  [3.40] mantle-client.js
+  [3.43] mantle-client.js
        → core-chat-service.js にresponseId、rawText、createdAtを返す
 
-  [3.41] core-chat-service.js
+  [3.44] core-chat-service.js
        → response-validator.js にrawText検証を依頼する
 
-  [3.42] response-validator.js
+  [3.45] response-validator.js
        → rawTextからJSON部分を取り出してparseする
 
-  [3.43] response-validator.js
+  [3.46] response-validator.js
        → types.jsを使ってchat形式へ正規化する
 
-  [3.44] types.js
+  [3.47] types.js
        → chat型、emotion定義、intensity補正を提供する
 
-  [3.45] response-validator.js
+  [3.48] response-validator.js
        → core-chat-service.js に正規化済みchat outputを返す
 
-  [3.46] core-chat-service.js
+  [3.49] core-chat-service.js
        → user-session-store.js に新しいresponse_id保存を依頼する
 
-  [3.47] user-session-store.js
+  [3.50] user-session-store.js
        → DynamoDBのUserSessionへresponse_idと作成日時を保存する
 
-  [3.48] user-session-store.js
+  [3.51] user-session-store.js
        → core-chat-service.js に保存完了を返す
 
-  [3.49] core-chat-service.js
+  [3.52] core-chat-service.js
        → core-response.js にCore chatレスポンス作成を依頼する
 
-  [3.50] core-response.js
+  [3.53] core-response.js
        → ok、type、text、emotion、intensity、requestIdを持つCore responseを作る
 
-  [3.51] core-response.js
+  [3.54] core-response.js
        → core-chat-service.js にCore responseを返す
 
-  [3.52] core-chat-service.js
+  [3.55] core-chat-service.js
        → sqs-core-handler.js にresult.ok === trueのresultを返す
 
 
@@ -305,25 +314,25 @@ raim_core_lambda/
   フェーズ6: 完了イベント送信とrequest状態更新
   ────────────────────────────────────────
 
-  [3.53] sqs-core-handler.js
+  [3.56] sqs-core-handler.js
        → response-queue-publisher.js にstream.completed送信を依頼する
 
-  [3.54] response-queue-publisher.js
+  [3.57] response-queue-publisher.js
        → 内部バッファに残っているtextがあればstream.deltaとして先に送る
 
-  [3.55] response-queue-publisher.js
+  [3.58] response-queue-publisher.js
        → SQS Response Queueへstream.completedを送る
 
-  [3.56] sqs-core-handler.js
+  [3.59] sqs-core-handler.js
        → request-state-store.js にCOMPLETED記録を依頼する
 
-  [3.57] request-state-store.js
+  [3.60] request-state-store.js
        → request状態をCOMPLETEDへ更新してleaseを解放する
 
-  [3.58] request-state-store.js
+  [3.61] request-state-store.js
        → sqs-core-handler.js にCOMPLETED記録完了を返す
 
-  [3.59] sqs-core-handler.js
+  [3.62] sqs-core-handler.js
        → このrecordの処理を完了する
 
 [4] sqs-core-handler.js
@@ -376,8 +385,9 @@ Core LambdaのコードやJSONに登場する主な変数名を、用途ごと�
 |---|---|
 | `session` | DynamoDBのUserSessionテーブルから取得したユーザーの会話状態です。要約や直前のMantleレスポンス情報などを保持します。 |
 | `sessionSummary` | 過去の会話内容を短くまとめた文字列です。初回用プロンプトへ会話の前提として含めます。 |
-| `scenes` | FewShotテーブルから取得したScene定義の一覧です。 |
-| `sceneSelection` | ユーザー入力のEmbeddingと各Sceneを比較した選択結果です。選ばれた `scene` などを保持します。 |
+| `sceneCandidates` | FewShotテーブルから取得したScene選択用の軽量一覧です。通常は `id` と `textCentroid` だけを持ちます。 |
+| `sceneSelection` | ユーザー入力のEmbeddingと各Scene候補を比較した選択結果です。選ばれた `sceneId`、類似度 `score`、選択理由 `reason` などを保持します。 |
+| `selectedScene` | `sceneSelection.sceneId` を使ってDynamoDBから1件取得した詳細Sceneです。`description`、`default_emotions`、`few_shots` などを含み、Prompt作成に使います。 |
 | `textCentroid` | Sceneに属する例文をTitan Text Embeddings V2でEmbeddingし、平均化したベクトルです。Scene選択時の比較対象になります。 |
 | `mantleInput` | system prompt、Scene、Few-shot、ユーザー入力などを組み立てたMantleへの入力です。 |
 | `previousResponseId` | コード内部で使用する、直前のMantle Responses APIのレスポンスIDです。Mantleへ送信するときは `previous_response_id` という項目名になります。 |
@@ -501,8 +511,9 @@ Core Lambdaの中心となる会話処理サービスです。
 主な役割:
 
 - ユーザーセッションをDynamoDBから取得する
-- FewShot Scene一覧を取得する
-- ユーザー入力をもとにSceneを選択する
+- FewShot Scene候補一覧を軽量取得する
+- ユーザー入力をもとにsceneIdを選択する
+- 選択されたsceneIdの詳細Sceneを取得する
 - Mantleへ渡すプロンプト入力を作る
 - Mantleを呼び出して応答を受け取る
 - Mantleの応答JSONを検証する
@@ -613,8 +624,8 @@ DynamoDBのFewShotテーブルからScene定義を取得します。
 
 主な役割:
 
-- `RAiM-FewShot-dev` からScene一覧をScanする
-- `id` 指定で特定SceneをGetItemする
+- `RAiM-FewShot-dev` からScene選択用の `id` / `textCentroid` だけをScanする
+- `id` 指定で選択されたScene詳細をGetItemする
 - fallback用のdefault Sceneを取得する
 - DynamoDB ItemをCore Lambda内部で扱いやすい形へ正規化する
 
@@ -627,21 +638,25 @@ DynamoDBのFewShotテーブルからScene定義を取得します。
 - `few_shots`
 - `textCentroid`
 
+通常の会話処理では、最初から全Sceneの `few_shots` までは読みません。まず `id` と `textCentroid` だけを軽量Scanし、`scene-selector.js` が選んだ `sceneId` のレコードだけをGetItemで詳細取得します。
+
 旧形式の `text_examples` / `examples` も互換用に保持していますが、現在のScene選択では `embedding_text` から作った `textCentroid` を使います。
 
 ### `lib/scene-selector.js`
 
-ユーザー入力に最も近いSceneを選択します。
+ユーザー入力に最も近いsceneIdを選択します。
 
 主な役割:
 
 - ユーザー入力テキストをTitan Text Embeddings V2でEmbeddingする
-- 各Sceneの `textCentroid` とコサイン類似度を計算する
-- 最も類似度が高いSceneを選ぶ
-- 類似度が閾値未満ならdefault Sceneへfallbackする
+- 各Scene候補の `textCentroid` とコサイン類似度を計算する
+- 最も類似度が高い `sceneId` を選ぶ
+- 類似度が閾値未満ならdefaultの `sceneId` へfallbackする
 - テキストが空、centroid未整備、次元不一致などの場合もfallbackする
 
 `textCentroid` は、FewShotテーブルの `embedding_text` を事前にEmbeddingした値です。ユーザー入力Embeddingと `textCentroid` は同じモデル・同じ次元数で生成されている必要があります。
+
+このファイルはDynamoDBアクセスを担当しません。選択後の詳細Scene取得は `scene-repository.js` の役割です。
 
 ### `lib/titan-embedding-client.js`
 

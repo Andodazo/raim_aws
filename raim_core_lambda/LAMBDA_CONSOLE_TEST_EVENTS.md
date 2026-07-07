@@ -57,6 +57,7 @@ TITAN_EMBEDDING_DIMENSIONS
 ## 事前データ
 
 `SCENE_TABLE_NAME`、通常は `RAiM-FewShot-dev` に、各Sceneの `textCentroid` が入っている必要があります。
+Core Lambdaは最初に `id` と `textCentroid` だけを軽量取得し、Scene選択後に選ばれたScene 1件の詳細とFew-shotを取得します。
 
 まだ入っていない場合は、先にCloudShellで以下を実行してください。
 
@@ -85,8 +86,8 @@ Lambdaコンソールのテストイベントに以下を貼り付けます。
 確認ポイント:
 
 - Titan Embeddingが成功する
-- `RAiM-FewShot-dev` からScene一覧を読める
-- `joke` に近いSceneが選ばれる
+- `RAiM-FewShot-dev` からScene候補一覧を読める
+- `joke` に近いsceneIdが選ばれ、その詳細Sceneを取得できる
 - MantleからJSON応答が返る
 - Lambda結果が以下のような形になる
 
