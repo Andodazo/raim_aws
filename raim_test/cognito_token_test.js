@@ -357,8 +357,8 @@ async function askUserText() {
  * Access TokenをAuthorizationヘッダーへ設定してwscatを起動する。
  *
  * --executeで接続直後にRAiM形式のJSONを1件送り、--waitで指定した時間だけ
- * 接続を維持する。Core Lambdaからのstream.start/delta/completedは、wscatの
- * 標準出力へ到着順に表示される。
+ * 接続を維持する。Edge Lambdaでクライアント向けに変換された
+ * metadata / text_chunk / chat_end / error は、wscatの標準出力へ到着順に表示される。
  */
 async function runWscat({ accessToken, endpoint, text, waitSeconds }) {
   const wscatCli = resolveWscatCli();

@@ -202,6 +202,19 @@ Core Lambda内部のstreamイベントを、クライアントへ送りやすい
 - `stream.completed`
 - `stream.error`
 
+変換後にWebSocketへ送るクライアント向けイベント:
+
+| Core / Response Queue内部イベント | クライアント向けWebSocketイベント | 説明 |
+|---|---|---|
+| `stream.start` | `metadata` | 応答開始と感情メタ情報を伝える |
+| `stream.delta` | `text_chunk` | 画面へ追記する本文断片を伝える |
+| `stream.completed` | `chat_end` | 最終本文と最終感情を伝える |
+| `stream.error` | `error` | エラー内容と再試行可否を伝える |
+
+`audio_chunk` と `tool_call` はクライアント統合仕様上のイベントですが、
+現時点のEdge Lambdaではまだ生成しません。
+TTS Lambda / Tool Lambdaを拡張実装する段階で追加する想定です。
+
 `RAiM-CoreResponse-dev.fifo` は、LambdaのSQSトリガーとしてEdge Lambdaへ紐づけます。
 Edge Lambdaの環境変数にResponse Queue URLを設定する必要はありません。
 
