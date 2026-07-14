@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 
 const { createResponseQueueHandler } = require('../lib/response-queue-handler');
 
-test('response queue handler posts stream events to WebSocket', async () => {
+test('response queue handler posts client-facing text_chunk events to WebSocket', async () => {
   const posted = [];
   const handler = createResponseQueueHandler({
     postback: {
@@ -38,10 +38,13 @@ test('response queue handler posts stream events to WebSocket', async () => {
   assert.equal(posted.length, 1);
   assert.equal(posted[0].connectionId, 'conn-001');
   assert.deepEqual(posted[0].payload, {
-    type: 'stream.delta',
+    type: 'text_chunk',
     requestId: 'req-001',
     sequence: 1,
-    textDelta: 'こんにちは',
+    text: 'こんにちは',
+    chunk_id: 'req-001_chunk_1',
+    is_first: true,
+    is_filler: false,
   });
 });
 
@@ -65,7 +68,7 @@ test('response queue handler deletes gone connections without retrying', async (
           requestId: 'req-001',
           connectionId: 'conn-001',
           sequence: 2,
-          text: 'やあ',
+          text: 'こんにちは！',
           emotion: 'happy',
           intensity: 0.6,
         }),
