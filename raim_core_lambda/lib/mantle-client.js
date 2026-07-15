@@ -138,12 +138,24 @@ function buildMantleUrl(baseUrl, responsesPath = '/responses') {
  *
  * store=trueにより、今回の応答もMantle側へ保存され、返されたidを次回利用できる。
  */
-function buildMantleRequest({ mantleInput, previousResponseId, store }, env) {
+function buildMantleRequest({ mantleInput, previousResponseId, store, tools }, env) {
+  // Responses APIのinputには2種類のアイテムが混在する。
+  //
+  //   1. 通常のメッセージ         { role, content }
+  //   2. ツール関連のアイテム      { type: 'function_call', ... }
+  //                              { type: 'function_call_output', call_id, output }
+  //
+  // roleだけを見て詰め直すと、ツール結果がMantleへ届かずツールループが壊れる。
+  // typeを持つアイテムはそのまま通す。
   const messages = Array.isArray(mantleInput?.messages)
-    ? mantleInput.messages.map((message) => ({
-      role: message.role,
-      content: message.content,
-    }))
+    ? mantleInput.messages.map((message) => (
+      message && message.type
+        ? message
+        : {
+          role: message.role,
+          content: message.content,
+        }
+    ))
     : [];
 
   if (messages.length === 0) {
@@ -163,6 +175,54 @@ function buildMantleRequest({ mantleInput, previousResponseId, store }, env) {
     // unsupported_parameterを返す。そのため、この項目はリクエストへ含めず、
     // モデル側の既定の生成設定を使用する。
   };
+
+  // ─────────────────────────────────────────────
+  // reasoning（思考モード）の制御
+  // ─────────────────────────────────────────────
+  //
+  // Gemma 4はreasoningが既定で有効なため、指定しないと毎回内部思考を生成する。
+  // RAiMはリアルタイムの会話コンパニオンなので、思考にトークンと時間を使うと
+  // 応答が遅くなり、Mantleの課金も増える。
+  //
+  // 実測例（Chat Completions・reasoning有効）:
+  //   「こんにちは」への挨拶1往復で completion_tokens 1135
+  //
+  // そのため既定では reasoning を抑制する。
+  // 会話品質と応答速度のバランスを実測で比較できるよう、環境変数で切り替える。
+  //
+  // MANTLE_REASONING_EFFORT:
+  //   none    思考しない（最速。雑談用途の既定値）
+  //   low     最小限だけ思考する
+  //   medium  標準
+  //   high    十分に思考する（品質重視。ただし遅い）
+  //   off     reasoningフィールド自体を送らずモデル既定に任せる
+  //
+  // 注意:
+  // Responses APIではreasoningの内容が本文とは別のreasoning itemとして返るため、
+  // Chat Completionsのように思考が content へ混ざり込むことはない。
+  const reasoningEffort = String(env.MANTLE_REASONING_EFFORT || 'none').trim();
+
+  if (reasoningEffort && reasoningEffort !== 'off') {
+    request.reasoning = { effort: reasoningEffort };
+  }
+
+  // ─────────────────────────────────────────────
+  // ツール定義（Function Calling）
+  // ─────────────────────────────────────────────
+  //
+  // Responses APIのツール定義はフラット形式:
+  //   { type: 'function', name, description, parameters }
+  //
+  // Chat Completionsのように function をネストしないので注意。
+  // 呼出側（core-chat-service）がツール利用の可否を判断し、
+  // 使わないターンでは tools を渡さない。
+  //
+  // 注意: Gemma 4は1ターンに複数ツール呼出をサポートしないため、
+  // parallel_tool_calls は有効にしない。
+  if (Array.isArray(tools) && tools.length > 0) {
+    request.tools = tools;
+    request.tool_choice = 'auto';
+  }
 
   // response_idが有効なときだけ指定する。
   // 初回や期限切れ後の再試行では、このフィールド自体を送らない。
@@ -372,6 +432,27 @@ async function consumeMantleStream(body, {
   let rawText = '';
   let completedResponse = null;
 
+  // Responses APIのツール呼出は、本文deltaではなくoutput itemとして返る。
+  // call_id をキーに重複登録を防ぎながら集める。
+  const toolCalls = [];
+  const seenCallIds = new Set();
+
+  const collectToolCall = (item) => {
+    if (!item || item.type !== 'function_call') return;
+
+    const callId = String(item.call_id || item.id || '');
+    if (callId && seenCallIds.has(callId)) return;
+    if (callId) seenCallIds.add(callId);
+
+    toolCalls.push({
+      callId,
+      name: String(item.name || ''),
+      // Responses APIはargumentsをJSON文字列で返す。
+      // 呼出側の parseToolArguments() がobject/stringの両方を吸収する。
+      arguments: item.arguments,
+    });
+  };
+
   for await (const event of iterateMantleSseEvents(body)) {
     if (typeof onStreamEvent === 'function') {
       await onStreamEvent(event);
@@ -388,6 +469,11 @@ async function consumeMantleStream(body, {
 
     if (event.type === 'response.output_text.done' && !rawText) {
       rawText = String(event.text || '');
+    }
+
+    // ツール呼出のoutput itemが確定したタイミング
+    if (event.type === 'response.output_item.done' && event.item) {
+      collectToolCall(event.item);
     }
 
     if (event.response && typeof event.response === 'object') {
@@ -413,6 +499,14 @@ async function consumeMantleStream(body, {
     }
   }
 
+  // output_item.doneを送らない互換実装のためのフォールバック。
+  // completed eventのoutput配列から直接ツール呼出を拾う。
+  if (toolCalls.length === 0 && completedResponse && Array.isArray(completedResponse.output)) {
+    for (const item of completedResponse.output) {
+      collectToolCall(item);
+    }
+  }
+
   // deltaが送られない互換実装では、completed eventの完全responseから本文を取り出す。
   if (!rawText && completedResponse) {
     rawText = extractMantleOutputText(completedResponse);
@@ -423,6 +517,7 @@ async function consumeMantleStream(body, {
     rawText,
     createdAt: createdAt || new Date().toISOString(),
     finishReason,
+    toolCalls,
   };
 }
 
@@ -454,6 +549,9 @@ function createMantleClient({
     store = true,
     onStreamEvent,
     onTextDelta,
+    // ツールを使うターンだけ渡す。
+    // 渡さなければ通常の会話生成として動作する。
+    tools = null,
   }) {
     if (!mantleInput || typeof mantleInput !== 'object') {
       throw new Error('mantleInput is required');
@@ -498,6 +596,7 @@ function createMantleClient({
           method: 'POST',
           headers,
           body: JSON.stringify(buildMantleRequest({
+            tools,
             mantleInput,
             previousResponseId,
             store,
@@ -540,7 +639,12 @@ function createMantleClient({
         throw error;
       }
 
-      if (!rawText) {
+      const toolCalls = Array.isArray(streamed.toolCalls) ? streamed.toolCalls : [];
+
+      // Gemmaはツール呼出を返すとき、本文（content）が空になる。
+      // ローカル実装での検証で確認済みの挙動で、仕様どおり。
+      // そのため「本文が空 かつ ツール呼出も無い」場合だけ異常として扱う。
+      if (!rawText && toolCalls.length === 0) {
         const error = new Error('Mantle response text is missing');
         error.code = 'MANTLE_RESPONSE_INVALID';
         error.coreErrorCode = 'LLM_ERROR';
@@ -551,6 +655,7 @@ function createMantleClient({
       return {
         responseId,
         rawText,
+        toolCalls,
         createdAt: streamed.createdAt,
         store: store !== false,
         mode: mantleInput.mode || 'initial',

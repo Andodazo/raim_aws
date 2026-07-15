@@ -37,6 +37,7 @@
 const {
   RAIM_SYSTEM_PROMPT_VERSION,
   RAIM_SYSTEM_PROMPT,
+  buildSystemPrompt,
 } = require('./prompts/raim-system-prompt');
 
 // ─────────────────────────────────────────────
@@ -205,21 +206,35 @@ function buildFewShotMessages(scene) {
       content: toSafeString(fs.user),
     });
 
+    // v13: Mantleへ要求する出力形式は emotions Map + overall_intensity。
+    // few-shotの応答例も同じ形式で見せないと、モデルが旧形式を真似てしまう。
+    //
+    // few_shots が emotions Map を持たない旧形式の場合は、
+    // 単一の emotion / intensity からMapを合成して形式を揃える。
+    const hasEmotions = Object.keys(emotions).length > 0;
+
+    const exampleEmotions = hasEmotions
+      ? emotions
+      : {
+          [pickPrimaryEmotion(emotions, toSafeString(fs.emotion || 'neutral'))]:
+            pickPrimaryIntensity(
+              emotions,
+              typeof fs.intensity === 'number' ? fs.intensity : 0.5
+            ),
+        };
+
+    // overall_intensity が明示されていない場合は、
+    // 感情強度の合計（最大1.0）を全体強度の目安として使う。
+    const exampleOverall = typeof fs.overall_intensity === 'number'
+      ? Math.max(0, Math.min(1, fs.overall_intensity))
+      : Math.max(0, Math.min(1, Object.values(exampleEmotions).reduce((a, b) => a + b, 0)));
+
     messages.push({
       role: 'assistant',
       content: JSON.stringify({
         text: toSafeString(fs.raim),
-        // 新形式のfew_shotsでは `emotions` Mapを持つ。
-        // Mantleの出力形式は単一emotion/intensityなので、最も強い感情を代表値として渡す。
-        // 旧形式の `emotion` / `intensity` も残っている場合はfallbackとして扱う。
-        emotion: pickPrimaryEmotion(emotions, toSafeString(fs.emotion || 'neutral')),
-        intensity: pickPrimaryIntensity(
-          emotions,
-          typeof fs.intensity === 'number' ? fs.intensity : 0.5
-        ),
-        // 複数感情の情報も失わないように残す。
-        // System promptでは単一emotion出力を要求しているため、これはあくまで参考情報。
-        emotions,
+        emotions: exampleEmotions,
+        overall_intensity: exampleOverall,
       }),
     });
   }
@@ -348,13 +363,22 @@ function buildInitialMantleInput({
   images = [],
   sessionSummary = '',
   scene = null,
+  withTools = false,
 }) {
   const messages = [];
+
+  // ツール有効時はsystemプロンプトにツールの使い方と、
+  // ツール結果の扱い方（結果を無視して挨拶を始めない）を含める。
+  // 画像がある場合はimage_descriptionの指示も追加する。
+  const systemPrompt = buildSystemPrompt({
+    withTools,
+    hasImages: hasImages(images),
+  });
 
   messages.push({
     role: 'system',
     content: [
-      RAIM_SYSTEM_PROMPT,
+      systemPrompt,
       '',
       '---',
       '',
@@ -463,6 +487,7 @@ function buildMantleInput({
   sessionSummary = '',
   scene = null,
   usePreviousResponseId = false,
+  withTools = false,
 }) {
   if (usePreviousResponseId) {
     return buildFollowupMantleInput({
@@ -477,6 +502,7 @@ function buildMantleInput({
     images,
     sessionSummary,
     scene,
+    withTools,
   });
 }
 

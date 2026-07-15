@@ -44,12 +44,16 @@ test('buildFewShotMessages converts emotions map into Mantle output example', ()
 
   const assistantExample = JSON.parse(messages[1].content);
   assert.equal(assistantExample.text, 'うーん、無茶振りだなぁ。ふふっ、何のお題？');
-  assert.equal(assistantExample.emotion, 'happy');
-  assert.equal(assistantExample.intensity, 0.4);
+  // v13: few-shot例もMantleへ要求する形式（emotions Map + overall_intensity）で見せる。
+  // 旧形式の単一 emotion / intensity は出力例に含めない。
+  assert.equal(assistantExample.emotion, undefined);
+  assert.equal(assistantExample.intensity, undefined);
   assert.deepEqual(assistantExample.emotions, {
     embarrassed: 0.3,
     happy: 0.4,
   });
+  // overall_intensity は強度合計（0.3 + 0.4 = 0.7）を目安に入る。
+  assert.equal(assistantExample.overall_intensity, 0.7);
 });
 
 test('buildFollowupMantleInput includes scene hint without exposing it as user text', () => {

@@ -49,11 +49,87 @@ const { createMantleResponse } = require('./mantle-client');
 const { normalizeMantleOutput } = require('./response-validator');
 const { MESSAGE_TYPES } = require('./types');
 const {
+  TOOL_DEFINITIONS,
+  executeTool,
+  pickToolIntro,
+  getToolDescription,
+  parseToolArguments,
+  makeToolCallKey,
+} = require('./tools');
+const { getToolSecrets } = require('./tool-secret-provider');
+const {
   CoreEventError,
   getCoreRequestId,
   normalizeCoreEvent,
 } = require('./core-event');
 const { createCoreChat, createCoreError } = require('./core-response');
+
+// ─────────────────────────────────────────────
+// ツールループの設定
+// ─────────────────────────────────────────────
+//
+// MAX_TOOL_TURNS:
+//   ツール呼出の上限。ローカル実装と同じく2。
+//   3にすると「もう一度調べる」を繰り返してレイテンシとコストが跳ねるため、
+//   実測の結果2に落としている。
+
+const MAX_TOOL_TURNS = Number(process.env.MAX_TOOL_TURNS || 2);
+
+/**
+ * ツールが利用可能かを判定する。
+ *
+ * Secrets Managerに外部APIキーが登録されていない場合はツールを無効化し、
+ * ツールなしの通常会話として動作する。
+ * これにより、ツール用Secretを作る前でもCore Lambdaをデプロイできる。
+ */
+async function isToolUseEnabled() {
+  if (String(process.env.TOOLS_ENABLED || 'true').toLowerCase() === 'false') {
+    return false;
+  }
+
+  try {
+    const secrets = await getToolSecrets();
+    return Boolean(secrets && (secrets.tavilyApiKey || secrets.openWeatherMapApiKey));
+  } catch (error) {
+    // Secret取得に失敗しても会話自体は継続させる。
+    console.warn(`[Tool] disabled (secret unavailable): ${error.message}`);
+    return false;
+  }
+}
+
+/**
+ * Secrets Managerのキーを渡してツールを実行する。
+ */
+async function executeToolWithSecrets(toolName, toolArgs) {
+  const secrets = await getToolSecrets();
+  return executeTool(toolName, toolArgs, secrets || {});
+}
+
+/**
+ * ツール結果を踏まえた最終応答を強制生成させるプロンプト。
+ *
+ * ツール上限や重複検知でループを抜けたとき、本文が無い状態になる。
+ * 「これ以上ツールを使うな」「結果を使って答えろ」を明示しないと、
+ * Gemmaは再びツールを呼ぼうとしたり、ツール結果を無視して挨拶を始める。
+ */
+function buildForcedFinalPrompt({ toolFailed = false } = {}) {
+  const base = toolFailed
+    ? '上記でいくつかツールを実行しました。一部失敗もありますが、得られた情報を踏まえて、ユーザーへの最終応答を生成してください。'
+    : '上記のツール実行結果を踏まえて、ユーザーへの最終応答を生成してください。ツール結果の情報を活用して、ユーザーの質問に具体的に答えてください。';
+
+  return `${base}ツールはこれ以上使わないでください。応答はライムのまま、JSON形式 {"text":"...","emotions":{"感情名":強さ,...}} で返してください。`;
+}
+
+/**
+ * ツール呼出開始をクライアントへ通知する既定実装。
+ *
+ * SQS経路ではsqs-core-handlerが上書きし、Response Queueへ
+ * 前置きセリフとtool_callイベントを流す。
+ * Lambdaコンソールからの直接実行では何もしない。
+ */
+async function onToolCallStart() {
+  // 既定では何もしない
+}
 
 const defaultDependencies = Object.freeze({
   clearMantleResponseState,
@@ -67,6 +143,18 @@ const defaultDependencies = Object.freeze({
   buildMantleInput,
   createMantleResponse,
   normalizeMantleOutput,
+
+  // ツールループ
+  maxToolTurns: MAX_TOOL_TURNS,
+  isToolUseEnabled,
+  getToolDefinitions: () => TOOL_DEFINITIONS,
+  executeTool: executeToolWithSecrets,
+  pickToolIntro,
+  getToolDescription,
+  parseToolArguments,
+  makeToolCallKey,
+  buildForcedFinalPrompt,
+  onToolCallStart,
 });
 
 /**
@@ -88,7 +176,13 @@ function createCoreChatService(dependencyOverrides = {}) {
     fallbackRequestId,
     onMantleStreamEvent,
     onMantleTextDelta,
+    // SQS経路ではsqs-core-handlerが渡す。
+    // Lambdaコンソールからの直接実行では未指定となり、既定の何もしない実装が使われる。
+    onToolCallStart,
   } = {}) {
+    const notifyToolCall = typeof onToolCallStart === 'function'
+      ? onToolCallStart
+      : dependencies.onToolCallStart;
     let input;
 
     // 入力不正は外部サービスを呼ぶ前に確定させ、再試行不要のerrorとして返す。
@@ -127,6 +221,10 @@ function createCoreChatService(dependencyOverrides = {}) {
     // 選ばれたSceneだけに絞ってGetItemする。
     const selectedScene = await dependencies.getSceneById(sceneSelection.sceneId);
 
+    // ツールを使えるか先に判定する。
+    // systemプロンプトにツールの説明を入れるかどうかがここで決まる。
+    const toolsEnabled = await dependencies.isToolUseEnabled();
+
     // 4. 初回ならsystem prompt・要約・Few-shotを含める。
     // 継続時はprevious_response_idを使うため、今回の発話を中心に組み立てる。
     let mantleInput = dependencies.buildMantleInput({
@@ -135,6 +233,7 @@ function createCoreChatService(dependencyOverrides = {}) {
       sessionSummary: session.sessionSummary || '',
       scene: selectedScene,
       usePreviousResponseId: sessionState.usePreviousResponseId,
+      withTools: toolsEnabled,
     });
     // policyが期限・存在状態を確認済みの時だけprevious_response_idを送る。
     let previousResponseId = sessionState.usePreviousResponseId
@@ -142,42 +241,181 @@ function createCoreChatService(dependencyOverrides = {}) {
       : '';
     let mantleResponse;
 
-    // 4. Mantle Responses APIを実際に呼び出す。
-    // 保存済みresponse_idがMantle側で期限切れだった場合だけ状態をクリアし、
-    // 初回用promptを再構築して1回だけ再試行する。
-    try {
-      mantleResponse = await dependencies.createMantleResponse({
-        mantleInput,
-        previousResponseId,
+    // ─────────────────────────────────────────────
+    // 4. Mantle呼び出し（ツールループ）
+    // ─────────────────────────────────────────────
+    //
+    // 【なぜループするか】
+    // Gemmaはツールを使うと判断した場合、本文を返さずツール呼出だけを返す。
+    // ツールを実行し、その結果をMantleへ戻して、もう一度生成させる必要がある。
+    //
+    // 【Gemma固有の制約】
+    // - ツール呼出時、content が空になる
+    //   → 「調べるね」に相当する発話をLLMに作らせられない。
+    //     サーバー側の固定セリフ（pickToolIntro）をライムの発話として先に送る。
+    // - 1ターンに複数ツールを呼べない
+    //   → 呼出は1件ずつ処理する。
+    //
+    // 【ループ制御】
+    // - MAX_TOOL_TURNS で上限を設ける（無限ループとコスト暴走の防止）
+    // - 同じツールを同じ引数で呼んだら打ち切る（重複検知）
+    // - 上限や重複で抜けた場合は、ツール結果を踏まえた最終応答を強制生成する
+    //
+    // 【previous_response_idとの関係】
+    // ツール結果を返す2回目以降の呼出では、直前のresponse_idを使って会話を継続する。
+    // これによりツール呼出のコンテキストがMantle側に保持される。
+    // ツールを使わない構成では、従来どおり1回だけ呼んで終わる。
+    const callMantle = async ({ input: currentInput, previousId, tools }) => {
+      return dependencies.createMantleResponse({
+        mantleInput: currentInput,
+        previousResponseId: previousId,
         store: true,
         onStreamEvent: onMantleStreamEvent,
         onTextDelta: onMantleTextDelta,
+        tools,
       });
-    } catch (error) {
-      // 404等すべてを再試行するのではなく、response_id失効と判定できた時だけ復旧する。
-      const canRecover = Boolean(previousResponseId) &&
-        dependencies.isMantleResponseExpiredError(error);
+    };
 
-      if (!canRecover) {
-        throw error;
+    // Mantle側のresponse_idが失効していた場合だけ、初回promptで1回再試行する。
+    const callMantleWithRecovery = async ({ input: currentInput, previousId, tools }) => {
+      try {
+        return await callMantle({ input: currentInput, previousId, tools });
+      } catch (error) {
+        const canRecover = Boolean(previousId) &&
+          dependencies.isMantleResponseExpiredError(error);
+
+        if (!canRecover) {
+          throw error;
+        }
+
+        // 次回Invocationでも同じ失効IDを使わないよう、再試行より先にDynamoDBをクリアする。
+        await dependencies.clearMantleResponseState(input.sub);
+        previousResponseId = '';
+
+        const rebuiltInput = dependencies.buildMantleInput({
+          userText: input.text,
+          images: input.images,
+          sessionSummary: session.sessionSummary || '',
+          scene: selectedScene,
+          usePreviousResponseId: false,
+          withTools: toolsEnabled,
+        });
+
+        mantleInput = rebuiltInput;
+
+        return callMantle({ input: rebuiltInput, previousId: '', tools });
+      }
+    };
+
+    const toolDefinitions = toolsEnabled ? dependencies.getToolDefinitions() : null;
+    const seenToolCalls = new Set();
+
+    let toolTurn = 0;
+    let toolExecuted = false;
+    let toolFailed = false;
+    let exitedDueToDuplicate = false;
+
+    mantleResponse = await callMantleWithRecovery({
+      input: mantleInput,
+      previousId: previousResponseId,
+      tools: toolDefinitions,
+    });
+
+    while (
+      toolsEnabled &&
+      Array.isArray(mantleResponse.toolCalls) &&
+      mantleResponse.toolCalls.length > 0 &&
+      toolTurn < dependencies.maxToolTurns
+    ) {
+      toolTurn += 1;
+
+      // Gemmaは並列ツール呼出に非対応なので、先頭の1件だけを処理する。
+      const toolCall = mantleResponse.toolCalls[0];
+      const toolName = toolCall.name;
+      const toolArgs = dependencies.parseToolArguments(toolCall.arguments);
+      const callKey = dependencies.makeToolCallKey(toolName, toolArgs);
+
+      // 同じツールを同じ引数で呼び直すループを検知して打ち切る。
+      if (seenToolCalls.has(callKey)) {
+        exitedDueToDuplicate = true;
+        break;
       }
 
-      // 次回Invocationでも同じ失効IDを使わないよう、再試行より先にDynamoDBをクリアする。
-      await dependencies.clearMantleResponseState(input.sub);
-      previousResponseId = '';
-      mantleInput = dependencies.buildMantleInput({
-        userText: input.text,
-        images: input.images,
-        sessionSummary: session.sessionSummary || '',
-        scene: selectedScene,
-        usePreviousResponseId: false,
+      seenToolCalls.add(callKey);
+
+      // ツール呼出中であることをクライアントへ知らせる。
+      // Gemmaは本文を返せないため、ここはサーバー側の固定セリフ。
+      await notifyToolCall({
+        toolName,
+        toolArgs,
+        turn: toolTurn,
+        introText: dependencies.pickToolIntro(toolName, toolTurn),
+        description: dependencies.getToolDescription(toolName, toolArgs),
       });
-      mantleResponse = await dependencies.createMantleResponse({
-        mantleInput,
-        previousResponseId,
-        store: true,
-        onStreamEvent: onMantleStreamEvent,
-        onTextDelta: onMantleTextDelta,
+
+      const toolResult = await dependencies.executeTool(toolName, toolArgs);
+
+      toolExecuted = true;
+
+      if (toolResult && toolResult.error) {
+        toolFailed = true;
+      }
+
+      // ツール結果をResponses APIの形式でMantleへ戻す。
+      // previous_response_idで会話を継続するため、直前の呼出のcall_idと対応させる。
+      previousResponseId = mantleResponse.responseId;
+
+      const toolResultInput = {
+        ...mantleInput,
+        messages: [
+          {
+            type: 'function_call_output',
+            call_id: toolCall.callId,
+            output: JSON.stringify(toolResult),
+          },
+        ],
+      };
+
+      mantleResponse = await callMantle({
+        input: toolResultInput,
+        previousId: previousResponseId,
+        tools: toolDefinitions,
+      });
+    }
+
+    // ─────────────────────────────────────────────
+    // ツール後の最終応答を強制生成する
+    // ─────────────────────────────────────────────
+    //
+    // 次のどちらかに該当すると、本文のない状態でループを抜ける。
+    //
+    //   - 重複ツール呼出を検知して打ち切った
+    //   - MAX_TOOL_TURNS に到達した
+    //
+    // このままだと返す本文が無いので、「ツールはもう使わず、
+    // 得られた結果で最終応答を作れ」と明示して1回だけ生成させる。
+    const needsForcedFinalResponse =
+      toolExecuted &&
+      (!mantleResponse.rawText || exitedDueToDuplicate);
+
+    if (needsForcedFinalResponse) {
+      previousResponseId = mantleResponse.responseId;
+
+      const forcedInput = {
+        ...mantleInput,
+        messages: [
+          {
+            role: 'user',
+            content: dependencies.buildForcedFinalPrompt({ toolFailed }),
+          },
+        ],
+      };
+
+      // toolsを渡さないことで、これ以上のツール呼出を構造的に不可能にする。
+      mantleResponse = await callMantle({
+        input: forcedInput,
+        previousId: previousResponseId,
+        tools: null,
       });
     }
 
@@ -205,6 +443,9 @@ function createCoreChatService(dependencyOverrides = {}) {
     return createCoreChat({
       requestId: input.requestId,
       text: output.text,
+      // v13: 比率Map + 全体強度。emotion / intensity は後方互換で保持する。
+      emotions: output.emotions,
+      overallIntensity: output.overall_intensity,
       emotion: output.emotion,
       intensity: output.intensity,
     });
