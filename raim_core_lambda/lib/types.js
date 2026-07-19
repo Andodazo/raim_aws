@@ -157,6 +157,19 @@ function clampIntensity(v) {
   return Math.max(0, Math.min(1, v));
 }
 
+// 感情比率は割り算の結果なので、そのままだと 0.5555555555555556 のような
+// 17桁の値になる。WebSocketで毎回送るには冗長で、ログも読みにくい。
+//
+// Unityの表情制御に必要な精度は3桁で十分（BlendShapeの重みは
+// emotions[key] × overall_intensity × 100 で百分率になるため、
+// 3桁あれば 0.1% 単位で表現できる）。
+//
+// 丸めによって比率の合計が 1.0 から僅かにずれる場合があるが、
+// 表情表現には影響しない範囲。
+function roundRatio(v) {
+  return Math.round(v * 1000) / 1000;
+}
+
 // ─────────────────────────────────────────────
 // emotions 正規化（v13 仕様）
 // ─────────────────────────────────────────────
@@ -222,11 +235,11 @@ function normalizeEmotions(rawEmotions) {
   // 比率へ正規化（合計 1.0）
   const emotions = {};
   for (const [name, value] of Object.entries(valid)) {
-    emotions[name] = value / sum;
+    emotions[name] = roundRatio(value / sum);
   }
 
   // 全体強度は素の合計をクランプしたもの
-  const overallIntensity = clampIntensity(sum);
+  const overallIntensity = roundRatio(clampIntensity(sum));
 
   // ドミナント感情（後方互換用）
   let emotion = EMOTIONS.NEUTRAL;
@@ -242,7 +255,7 @@ function normalizeEmotions(rawEmotions) {
     emotions,
     overallIntensity,
     emotion,
-    intensity: clampIntensity(topRatio * overallIntensity),
+    intensity: roundRatio(clampIntensity(topRatio * overallIntensity)),
   };
 }
 
@@ -274,7 +287,7 @@ function createChat({
   // overallIntensity が明示指定されている場合はそちらを優先する。
   // （LLMが overall_intensity を直接返してきたケース）
   const finalOverall = typeof overallIntensity === 'number' && !isNaN(overallIntensity)
-    ? clampIntensity(overallIntensity)
+    ? roundRatio(clampIntensity(overallIntensity))
     : normalized.overallIntensity;
 
   const dominantRatio = normalized.emotions[normalized.emotion] || 0;
@@ -289,7 +302,7 @@ function createChat({
 
     // 後方互換: ドミナント感情 × 全体強度
     emotion: normalized.emotion,
-    intensity: clampIntensity(dominantRatio * finalOverall),
+    intensity: roundRatio(clampIntensity(dominantRatio * finalOverall)),
   };
 }
 

@@ -79,3 +79,34 @@ test('still accepts the legacy single-emotion output format', () => {
   assert.equal(output.emotion, 'happy');
   assert.equal(output.intensity, 0.6);
 });
+
+test('rounds emotion ratios to 3 decimals for compact transmission', () => {
+  // 0.5 / 0.9 = 0.5555555555555556 のような長い小数を避ける
+  const output = normalizeMantleOutput(JSON.stringify({
+    text: 'ふふっ、またまた挨拶だね',
+    emotions: { amused: 0.5, curious: 0.4 },
+  }));
+
+  assert.equal(output.emotions.amused, 0.556);
+  assert.equal(output.emotions.curious, 0.444);
+  assert.equal(output.overall_intensity, 0.9);
+
+  // 後方互換フィールドも丸める
+  assert.equal(output.intensity, 0.5);
+
+  // 丸めた値をJSONにしても桁が増えない
+  const json = JSON.stringify(output);
+  assert.ok(!/\d\.\d{5,}/.test(json), `長い小数が残っている: ${json}`);
+});
+
+test('rounding keeps the ratio sum close enough to 1.0', () => {
+  const output = normalizeMantleOutput(JSON.stringify({
+    text: 'テスト',
+    emotions: { happy: 1, caring: 1, curious: 1 },
+  }));
+
+  const sum = Object.values(output.emotions).reduce((a, b) => a + b, 0);
+
+  // 3等分は 0.333 × 3 = 0.999 になる。表情表現には影響しない範囲。
+  assert.ok(Math.abs(sum - 1.0) <= 0.002, `合計が離れすぎ: ${sum}`);
+});

@@ -37,6 +37,7 @@
 const {
   RAIM_SYSTEM_PROMPT_VERSION,
   RAIM_SYSTEM_PROMPT,
+  PERSONA_DIGEST,
   buildSystemPrompt,
 } = require('./prompts/raim-system-prompt');
 
@@ -51,6 +52,23 @@ function toSafeString(value) {
 function hasText(value) {
   return toSafeString(value).trim().length > 0;
 }
+
+// ─────────────────────────────────────────────
+// 継続会話の人格再注入設定
+// ─────────────────────────────────────────────
+//
+// FOLLOWUP_PERSONA_MODE : 'digest'（既定）| 'full' | 'none'
+// FOLLOWUP_FEW_SHOT_COUNT : 継続会話へ入れるfew-shot組数（既定1、0で無効）
+//
+// どちらも環境変数なので、デプロイし直さずに口調を実測比較できる。
+
+const FOLLOWUP_PERSONA_MODE =
+  String(process.env.FOLLOWUP_PERSONA_MODE || 'digest').trim().toLowerCase();
+
+const FOLLOWUP_FEW_SHOT_COUNT = Math.max(
+  0,
+  Number(process.env.FOLLOWUP_FEW_SHOT_COUNT ?? 1)
+);
 
 function hasImages(images) {
   return Array.isArray(images) && images.length > 0;
@@ -431,8 +449,36 @@ function buildFollowupMantleInput({
   images = [],
   scene = null,
   includeSceneHint = true,
+  personaMode = FOLLOWUP_PERSONA_MODE,
+  fewShotCount = FOLLOWUP_FEW_SHOT_COUNT,
 }) {
   const messages = [];
+
+  // ─────────────────────────────────────────────
+  // 人格の再注入
+  // ─────────────────────────────────────────────
+  //
+  // previous_response_id があってもGemmaは人格から乖離するため、
+  // 継続会話でも人格を毎回送り直す。
+  //
+  // personaMode:
+  //   'digest' 口調・禁止事項・出力形式だけの圧縮版（約470文字、既定）
+  //   'full'   初回と同じ固定プロンプト全文（約2200文字）
+  //   'none'   送らない（当初の設計。人格が崩れるため非推奨）
+  //
+  // 環境変数 FOLLOWUP_PERSONA_MODE で切り替えられるので、
+  // デプロイし直さずに実測比較できる。
+  if (personaMode === 'full') {
+    messages.push({
+      role: 'system',
+      content: buildSystemPrompt({ hasImages: hasImages(images) }),
+    });
+  } else if (personaMode !== 'none') {
+    messages.push({
+      role: 'system',
+      content: PERSONA_DIGEST,
+    });
+  }
 
   if (includeSceneHint && scene) {
     messages.push({
@@ -448,6 +494,19 @@ function buildFollowupMantleInput({
         'ユーザーにScene名やembedding_textを説明する必要はありません。',
       ].join('\n'),
     });
+  }
+
+  // few-shotは口調のアンカーとして強力なので、継続会話でも少しだけ入れる。
+  // 全部入れると文脈が膨らむため、既定は1組だけ。
+  // FOLLOWUP_FEW_SHOT_COUNT=0 で無効にできる。
+  if (fewShotCount > 0 && scene) {
+    const limitedScene = {
+      ...scene,
+      few_shots: Array.isArray(scene.few_shots)
+        ? scene.few_shots.slice(0, fewShotCount)
+        : [],
+    };
+    messages.push(...buildFewShotMessages(limitedScene));
   }
 
   messages.push(

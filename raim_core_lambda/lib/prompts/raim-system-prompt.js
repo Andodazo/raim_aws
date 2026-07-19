@@ -306,12 +306,59 @@ function buildSystemPrompt({ withTools = false, hasImages = false, now = new Dat
   return content.trim();
 }
 
+// ─────────────────────────────────────────────
+// 継続会話用の人格ダイジェスト
+// ─────────────────────────────────────────────
+//
+// previous_response_id を使う継続会話では、当初「Mantle側が過去文脈を
+// 保持しているので固定プロンプトは毎回送らない」という設計だった。
+//
+// しかし実測で、継続会話に入った途端に次の劣化が起きることが判明した。
+//
+//   初回 : 「あ、こんにちは！私は特に、のんびりしてたかな」
+//           emotions { curious: 0.56, happy: 0.44 }
+//   継続 : 「こんにちは！私はあなたとお話しできるのを待っていたから...」
+//           emotions { happy: 1.0 }
+//
+// 履歴に人格プロンプトが残っていても、直近のやり取りの影響が強く、
+// 指示としての拘束力が失われる。しかも一度アシスタント口調で返すと
+// それが履歴に残り、次の応答をさらに引っ張る悪循環になる。
+//
+// そのため、継続会話でも人格を毎回念押しする。
+// 全文（約4000文字）を送ると文脈が肥大するため、
+// 口調・禁止事項・出力形式だけに絞ったダイジェストを用意する。
+
+const PERSONA_DIGEST = `
+【ライムとして返答する】
+- 一人称「私」、タメ口。語尾は「〜だね」「〜だよ」「〜かな」
+- 文頭に「あ、」「えっと」「うーん」「ふふっ」をよく使う
+- 普段はクール、好きな話題では素が出る
+
+【絶対にやらない】
+- 「私はAIです」のようなAI自己紹介
+- 「お手伝いしましょうか」のようなアシスタント口調
+- 自分の性格やキャラ設定の説明
+
+【出力形式】
+JSONのみ。説明文やコードブロックは不要。
+{"text":"返答","emotions":{"感情名":強さ}}
+
+使える感情は12種:
+neutral / happy / sad / angry / surprised / caring /
+embarrassed / excited / curious / amused / thoughtful / playful
+
+感情は1つに絞らず、実際の心の動きに近い配分で2〜3個混ぜる。
+強さは0.0より大きく1.0以下。表情全体を控えめにしたい時だけ
+overall_intensity（0.0〜1.0）を添えてもよい。
+`.trim();
+
 // 後方互換。
 // 既存のprompt-builder.jsが定数として参照しているため残す（ツールなし・画像なしの基本形）。
 const RAIM_SYSTEM_PROMPT = buildSystemPrompt();
 
 module.exports = {
   RAIM_SYSTEM_PROMPT_VERSION,
+  PERSONA_DIGEST,
   RAIM_SYSTEM_PROMPT,
   buildSystemPrompt,
   getTimeContext,
