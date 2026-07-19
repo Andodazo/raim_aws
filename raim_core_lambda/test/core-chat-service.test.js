@@ -56,6 +56,10 @@ test('Core chat service runs the existing conversation flow and returns a Core r
     ok: true,
     type: 'chat',
     text: 'やあ',
+    // v13: emotions Map + overall_intensity が付与される。
+    // 後方互換の emotion / intensity も引き続き返る。
+    emotions: { happy: 1 },
+    overall_intensity: 0.6,
     emotion: 'happy',
     intensity: 0.6,
     requestId: 'req-1',

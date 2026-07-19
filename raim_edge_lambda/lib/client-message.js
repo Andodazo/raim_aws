@@ -167,7 +167,17 @@ function toClientMessage(coreEvent) {
         text: String(coreEvent.textDelta || ''),
         chunk_id: createChunkId(coreEvent),
         is_first: coreEvent.sequence === 1,
-        is_filler: false,
+        // ツール呼出前の固定セリフ（「調べてくるね」等）は is_filler: true。
+        // Core Lambda が stream.delta に isFiller を付けて送ってくる。
+        is_filler: Boolean(coreEvent.isFiller),
+      };
+
+    // ツール intro の後に届く区切り。
+    // クライアントは現在の吹き出しを確定し、次の text_chunk を新しい吹き出しにする。
+    case 'stream.bubble_break':
+      return {
+        ...base,
+        type: 'bubble_break',
       };
 
     case 'stream.completed':
