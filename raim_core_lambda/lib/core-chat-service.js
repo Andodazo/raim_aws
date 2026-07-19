@@ -55,6 +55,7 @@ const {
   getToolDescription,
   parseToolArguments,
   makeToolCallKey,
+  isKnownTool,
 } = require('./tools');
 const { getToolSecrets } = require('./tool-secret-provider');
 const {
@@ -74,6 +75,12 @@ const { createCoreChat, createCoreError } = require('./core-response');
 //   実測の結果2に落としている。
 
 const MAX_TOOL_TURNS = Number(process.env.MAX_TOOL_TURNS || 2);
+
+// MULTI_TURN_TOOLS:
+// ツール結果を返す呼出でも tools を渡すかどうか。
+// 既定 false（＝渡さない）。詳細はツールループ内のコメントを参照。
+const MULTI_TURN_TOOLS =
+  String(process.env.MULTI_TURN_TOOLS || 'false').trim().toLowerCase() === 'true';
 
 /**
  * ツールが利用可能かを判定する。
@@ -146,6 +153,7 @@ const defaultDependencies = Object.freeze({
 
   // ツールループ
   maxToolTurns: MAX_TOOL_TURNS,
+  multiTurnTools: MULTI_TURN_TOOLS,
   isToolUseEnabled,
   getToolDefinitions: () => TOOL_DEFINITIONS,
   executeTool: executeToolWithSecrets,
@@ -153,6 +161,7 @@ const defaultDependencies = Object.freeze({
   getToolDescription,
   parseToolArguments,
   makeToolCallKey,
+  isKnownTool,
   buildForcedFinalPrompt,
   onToolCallStart,
 });
@@ -314,6 +323,7 @@ function createCoreChatService(dependencyOverrides = {}) {
     let toolExecuted = false;
     let toolFailed = false;
     let exitedDueToDuplicate = false;
+    let exitedDueToUnknownTool = false;
 
     mantleResponse = await callMantleWithRecovery({
       input: mantleInput,
@@ -342,6 +352,23 @@ function createCoreChatService(dependencyOverrides = {}) {
       }
 
       seenToolCalls.add(callKey);
+
+      // ─────────────────────────────────────────────
+      // 未知ツール名のフィルタ（intro送信より前に行う）
+      // ─────────────────────────────────────────────
+      //
+      // Gemma 4は "tool_result" や "search" のような存在しないツール名を
+      // 捏造して呼ぶことがある。これをそのまま流すと、
+      // ライムが「調べてくるね」と喋った直後に実行が失敗し、
+      // ユーザーから見ると「調べると言ったのに何も起きない」状態になる。
+      //
+      // そのため、intro を送る前に実在するツールかを判定し、
+      // 捏造ツールなら発話せずにループを抜けて最終応答を生成させる。
+      if (!dependencies.isKnownTool(toolName)) {
+        console.warn(`[Tool] 未知のツール名を無視しました: ${toolName}`);
+        exitedDueToUnknownTool = true;
+        break;
+      }
 
       // ツール呼出中であることをクライアントへ知らせる。
       // Gemmaは本文を返せないため、ここはサーバー側の固定セリフ。
@@ -376,10 +403,29 @@ function createCoreChatService(dependencyOverrides = {}) {
         ],
       };
 
+      // ─────────────────────────────────────────────
+      // v16: ツール結果を返す呼出では tools を渡さない
+      // ─────────────────────────────────────────────
+      //
+      // ツール結果をmessagesへ入れた状態でtoolsも一緒に渡すと、
+      // Gemma 4が次のいずれかをやりがちで、1ターン無駄になる。
+      //
+      //   - 同じツールをもう一度呼ぶ
+      //   - "tool_result" のような存在しないツール名を捏造して呼ぶ
+      //
+      // ローカル実装（raim_serverside v16）では、この状態でLLM呼出が
+      // 3回・合計36秒かかっていた。toolsを外すと2回で済む。
+      //
+      // toolsを渡さなければ、モデルは構造的にツールを呼べないため、
+      // 「結果を読んで本文を返す」しか選べなくなる。
+      // プロンプトでの禁止指示より確実。
+      //
+      // 天気を見てから検索する等の多段ツール連鎖が必要になったら、
+      // MULTI_TURN_TOOLS=true で従来の挙動へ戻せる。
       mantleResponse = await callMantle({
         input: toolResultInput,
         previousId: previousResponseId,
-        tools: toolDefinitions,
+        tools: dependencies.multiTurnTools ? toolDefinitions : null,
       });
     }
 
@@ -396,7 +442,7 @@ function createCoreChatService(dependencyOverrides = {}) {
     // 得られた結果で最終応答を作れ」と明示して1回だけ生成させる。
     const needsForcedFinalResponse =
       toolExecuted &&
-      (!mantleResponse.rawText || exitedDueToDuplicate);
+      (!mantleResponse.rawText || exitedDueToDuplicate || exitedDueToUnknownTool);
 
     if (needsForcedFinalResponse) {
       previousResponseId = mantleResponse.responseId;

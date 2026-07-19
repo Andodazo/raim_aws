@@ -7,14 +7,143 @@
 // Core LambdaからResponse Queueへ流れてくる内部イベントを、
 // Flutter/Unityクライアントへ送りやすいWebSocketメッセージへ変換する。
 //
-// 内部イベントの例:
+// Core Lambda / Response Queue側の内部イベント:
 //   stream.start
 //   stream.delta
 //   stream.completed
 //   stream.error
 //
-// クライアントにはtype/requestId/sequenceを必ず付ける。
-// これにより、クライアント側で順序確認や重複除外を行いやすくする。
+// クライアントへ送る外部イベント:
+//   metadata   : ストリーミング表示の開始と感情メタ情報
+//   text_chunk : 画面へ追記する本文断片
+//   chat_end   : 最終本文と最終感情
+//   error      : エラー通知
+//
+// 変換境界をEdge Lambdaに置くことで、Core Lambdaの内部プロトコルを保ったまま、
+// Flutter/Unity側のクライアント統合仕様へ合わせる。
+
+const DEFAULT_EMOTION = 'neutral';
+const DEFAULT_INTENSITY = 0.5;
+const ERROR_EMOTION = 'sad';
+
+function toFiniteNumber(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Number(value);
+
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+
+  return null;
+}
+
+function clamp01(value, fallback = DEFAULT_INTENSITY) {
+  const number = toFiniteNumber(value);
+
+  if (number === null) {
+    return fallback;
+  }
+
+  return Math.max(0, Math.min(1, number));
+}
+
+function normalizeEmotionName(value, fallback = DEFAULT_EMOTION) {
+  const emotion = String(value || '').trim();
+
+  return emotion || fallback;
+}
+
+function normalizeEmotionMap(emotions, fallbackEmotion) {
+  if (!emotions || typeof emotions !== 'object' || Array.isArray(emotions)) {
+    return {
+      [normalizeEmotionName(fallbackEmotion)]: 1.0,
+    };
+  }
+
+  const entries = Object.entries(emotions)
+    .map(([emotion, value]) => {
+      const number = toFiniteNumber(value);
+
+      return [
+        normalizeEmotionName(emotion, ''),
+        number === null ? 0 : number,
+      ];
+    })
+    .filter(([emotion, value]) => emotion && value > 0);
+
+  if (entries.length === 0) {
+    return {
+      [normalizeEmotionName(fallbackEmotion)]: 1.0,
+    };
+  }
+
+  const total = entries.reduce((sum, [, value]) => sum + value, 0);
+
+  if (total <= 0) {
+    return {
+      [normalizeEmotionName(fallbackEmotion)]: 1.0,
+    };
+  }
+
+  return Object.fromEntries(
+    entries.map(([emotion, value]) => [emotion, value / total])
+  );
+}
+
+function pickPrimaryEmotion(emotions, fallbackEmotion = DEFAULT_EMOTION) {
+  let primaryEmotion = normalizeEmotionName(fallbackEmotion);
+  let primaryValue = -Infinity;
+
+  for (const [emotion, value] of Object.entries(emotions || {})) {
+    const number = toFiniteNumber(value);
+
+    if (number !== null && number > primaryValue) {
+      primaryEmotion = emotion;
+      primaryValue = number;
+    }
+  }
+
+  return primaryEmotion;
+}
+
+function createEmotionPayload(coreEvent, {
+  fallbackEmotion = DEFAULT_EMOTION,
+  fallbackIntensity = DEFAULT_INTENSITY,
+} = {}) {
+  const eventEmotion = normalizeEmotionName(coreEvent.emotion, fallbackEmotion);
+  const eventIntensity = clamp01(coreEvent.intensity, fallbackIntensity);
+  const emotions = normalizeEmotionMap(coreEvent.emotions, eventEmotion);
+  const overallIntensity = clamp01(
+    coreEvent.overall_intensity,
+    eventIntensity
+  );
+  const primaryEmotion = pickPrimaryEmotion(emotions, eventEmotion);
+  const primaryIntensity = clamp01(
+    emotions[primaryEmotion] * overallIntensity,
+    eventIntensity
+  );
+
+  return {
+    emotions,
+    overall_intensity: overallIntensity,
+    emotion: primaryEmotion,
+    intensity: primaryIntensity,
+  };
+}
+
+function createChunkId(coreEvent) {
+  const requestId = String(coreEvent.requestId || 'request');
+  const sequence = Number.isInteger(coreEvent.sequence)
+    ? coreEvent.sequence
+    : 0;
+
+  return `${requestId}_chunk_${sequence}`;
+}
 
 function toClientMessage(coreEvent) {
   const base = {
@@ -27,75 +156,54 @@ function toClientMessage(coreEvent) {
     case 'stream.start':
       return {
         ...base,
+        type: 'metadata',
+        ...createEmotionPayload(coreEvent),
       };
 
-    // v14: tool intro の後に届く区切り。Flutterはこれを受けたら
-    // 現在ストリーミング中の吹き出しを確定し、次のtext_chunkを新規吹き出しにする。
+    case 'stream.delta':
+      return {
+        ...base,
+        type: 'text_chunk',
+        text: String(coreEvent.textDelta || ''),
+        chunk_id: createChunkId(coreEvent),
+        is_first: coreEvent.sequence === 1,
+        // ツール呼出前の固定セリフ（「調べてくるね」等）は is_filler: true。
+        // Core Lambda が stream.delta に isFiller を付けて送ってくる。
+        is_filler: Boolean(coreEvent.isFiller),
+      };
+
+    // ツール intro の後に届く区切り。
+    // クライアントは現在の吹き出しを確定し、次の text_chunk を新しい吹き出しにする。
     case 'stream.bubble_break':
       return {
         ...base,
+        type: 'bubble_break',
       };
 
-    case 'stream.delta': {
-      const message = {
-        ...base,
-        textDelta: String(coreEvent.textDelta || ''),
-      };
-
-      // ツール呼出前の固定セリフ（つなぎの発話）であることを示す。
-      // クライアントは通常の発話として表示してよいが、
-      // 履歴へ残さない等の判断に使える。
-      if (coreEvent.isFiller) {
-        message.isFiller = true;
-      }
-
-      return message;
-    }
-
-    case 'stream.completed': {
-      const message = {
-        ...base,
-        text: String(coreEvent.text || ''),
-        // 後方互換フィールド。既存Flutter/Unity実装はここだけ見ていても動く。
-        emotion: String(coreEvent.emotion || 'neutral'),
-        intensity: typeof coreEvent.intensity === 'number'
-          ? coreEvent.intensity
-          : 0.5,
-      };
-
-      // v13: 12感情の比率Map + 全体強度。
-      // Unity BlendShape 重み = emotions[key] × overall_intensity
-      // Core側が未対応の場合はフィールドごと省略し、旧クライアントを壊さない。
-      if (coreEvent.emotions && typeof coreEvent.emotions === 'object') {
-        message.emotions = coreEvent.emotions;
-      }
-
-      if (typeof coreEvent.overall_intensity === 'number') {
-        message.overall_intensity = coreEvent.overall_intensity;
-      }
-
-      return message;
-    }
-
-    // ツール実行中の通知。
-    // クライアントは「調べています…」のようなUIを出すために使う。
-    case 'stream.tool':
+    case 'stream.completed':
       return {
         ...base,
-        tool: String(coreEvent.tool || ''),
-        description: String(coreEvent.description || ''),
-        estimatedSeconds: typeof coreEvent.estimatedSeconds === 'number'
-          ? coreEvent.estimatedSeconds
-          : 3,
+        type: 'chat_end',
+        full_text: String(coreEvent.text || ''),
+        ...createEmotionPayload(coreEvent),
       };
 
-    case 'stream.error':
+    case 'stream.error': {
+      const message = String(coreEvent.message || 'Internal server error');
+
       return {
         ...base,
+        type: 'error',
         code: String(coreEvent.code || 'INTERNAL_ERROR'),
-        message: String(coreEvent.message || 'Internal server error'),
+        message,
+        text: message,
+        ...createEmotionPayload(coreEvent, {
+          fallbackEmotion: ERROR_EMOTION,
+          fallbackIntensity: DEFAULT_INTENSITY,
+        }),
         retriable: Boolean(coreEvent.retriable),
       };
+    }
 
     default:
       return {
@@ -106,5 +214,6 @@ function toClientMessage(coreEvent) {
 }
 
 module.exports = {
+  createEmotionPayload,
   toClientMessage,
 };

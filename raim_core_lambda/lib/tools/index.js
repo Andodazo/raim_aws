@@ -246,6 +246,16 @@ function makeToolCallKey(toolName, args = {}) {
  * @param {Object} args
  * @param {Object} secrets { tavilyApiKey, openWeatherMapApiKey }
  */
+/**
+ * 実在するツール名かどうかを返す。
+ *
+ * Gemma 4 が "tool_result" 等の存在しないツール名を捏造することがあるため、
+ * intro を発話する前にこれで弾く。
+ */
+function isKnownTool(toolName) {
+  return Object.prototype.hasOwnProperty.call(TOOL_FUNCTIONS, toolName);
+}
+
 async function executeTool(toolName, args, secrets = {}) {
   const fn = TOOL_FUNCTIONS[toolName];
 
@@ -282,4 +292,5 @@ module.exports = {
   getToolDescription,
   parseToolArguments,
   makeToolCallKey,
+  isKnownTool,
 };
