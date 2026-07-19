@@ -134,6 +134,16 @@ stream.completed
 stream.error
 ```
 
+Response Queue内のイベント名はCore Lambda内部仕様として `stream.*` のまま維持します。
+Edge LambdaはWebSocketへ送信する直前に、クライアント統合仕様のイベント名へ変換します。
+
+| Response Queue内部イベント | WebSocket送信イベント | 用途 |
+|---|---|---|
+| `stream.start` | `metadata` | 応答開始と感情メタ情報 |
+| `stream.delta` | `text_chunk` | 逐次表示する本文断片 |
+| `stream.completed` | `chat_end` | 最終本文と最終感情 |
+| `stream.error` | `error` | エラー通知 |
+
 Edge LambdaはこのQueueをEvent Source Mappingで購読し、各イベントをWebSocketへpostします。
 
 作成済みのResponse Queue:
