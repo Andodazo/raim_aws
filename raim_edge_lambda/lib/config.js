@@ -49,6 +49,14 @@ function getEdgeConfig(env = process.env) {
 
     // 接続管理テーブルのTTL秒数。切断イベントが取りこぼされた場合の掃除用。
     connectionTtlSeconds: readPositiveInteger(env, 'CONNECTION_TTL_SECONDS', 86400),
+
+    // API Gateway WebSocketへ1回で送るJSONの最大サイズ。
+    // 音声Base64はCore Lambda側で分割される想定だが、Edge Lambda側でも最終防御する。
+    maxWebSocketMessageBytes: readPositiveInteger(
+      env,
+      'MAX_WEBSOCKET_MESSAGE_BYTES',
+      30 * 1024
+    ),
   };
 }
 

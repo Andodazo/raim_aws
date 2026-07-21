@@ -116,3 +116,40 @@ test('response queue handler returns partial batch failures for retriable errors
     ],
   });
 });
+
+test('response queue handler does not retry invalid audio events', async () => {
+  const posted = [];
+  const handler = createResponseQueueHandler({
+    postback: {
+      postJson: async (connectionId, payload) => {
+        posted.push({ connectionId, payload });
+        return { ok: true };
+      },
+    },
+    connectionStore: {
+      deleteConnection: async () => {},
+    },
+    logger: {
+      error: () => {},
+    },
+  });
+
+  const result = await handler({
+    Records: [
+      {
+        messageId: 'msg-001',
+        body: JSON.stringify({
+          type: 'stream.audio',
+          requestId: 'req-001',
+          connectionId: 'conn-001',
+          sequence: 1,
+          chunkId: '',
+          audio: 'AAAA',
+        }),
+      },
+    ],
+  });
+
+  assert.deepEqual(result, { batchItemFailures: [] });
+  assert.deepEqual(posted, []);
+});

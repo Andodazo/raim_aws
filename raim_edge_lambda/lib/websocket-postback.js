@@ -19,6 +19,25 @@ const {
 } = require('@aws-sdk/client-apigatewaymanagementapi');
 const { getEdgeConfig } = require('./config');
 
+function createPayloadTooLargeError(payload, payloadBytes, maximumBytes) {
+  const error = new Error(
+    `WebSocket payload exceeds limit: ${payloadBytes} bytes`
+  );
+
+  error.code = 'WEBSOCKET_PAYLOAD_TOO_LARGE';
+  error.retriable = false;
+  error.details = {
+    payloadBytes,
+    maximumBytes,
+    type: payload?.type,
+    requestId: payload?.requestId,
+    chunkId: payload?.chunk_id,
+    partIndex: payload?.part_index,
+  };
+
+  return error;
+}
+
 function createGoneErrorDetector(error) {
   return error?.name === 'GoneException' ||
     error?.$metadata?.httpStatusCode === 410;
@@ -32,10 +51,20 @@ function createWebSocketPostback({ client, env = process.env } = {}) {
   });
 
   async function postJson(connectionId, payload) {
+    const data = Buffer.from(JSON.stringify(payload), 'utf8');
+
+    if (data.byteLength > config.maxWebSocketMessageBytes) {
+      throw createPayloadTooLargeError(
+        payload,
+        data.byteLength,
+        config.maxWebSocketMessageBytes
+      );
+    }
+
     try {
       await apiClient.send(new PostToConnectionCommand({
         ConnectionId: connectionId,
-        Data: Buffer.from(JSON.stringify(payload)),
+        Data: data,
       }));
 
       return {
@@ -61,5 +90,6 @@ function createWebSocketPostback({ client, env = process.env } = {}) {
 
 module.exports = {
   createGoneErrorDetector,
+  createPayloadTooLargeError,
   createWebSocketPostback,
 };
