@@ -37,8 +37,14 @@ function removeInternalFields(value) {
  * Mantle出力をEdge Lambda向けの正常レスポンスへ変換する。
  * createChat()を通すため、emotion/intensityの基本的な型・範囲も統一される。
  */
-function createCoreChat({ requestId, text, emotion, intensity }) {
-  const chat = removeInternalFields(createChat({ text, emotion, intensity }));
+function createCoreChat({ requestId, text, emotion, intensity, emotions, overallIntensity }) {
+  const chat = removeInternalFields(createChat({
+    text,
+    emotion,
+    intensity,
+    emotions,
+    overallIntensity,
+  }));
 
   return {
     ok: true,

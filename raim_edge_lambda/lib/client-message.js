@@ -280,6 +280,14 @@ function toClientMessage(coreEvent) {
         // 待機メッセージと通常本文の区別は、tool_callやbubble_breakで表現する。
       };
 
+    // ツール intro の後に届く区切り。
+    // クライアントは現在の吹き出しを確定し、次の text_chunk を新しい吹き出しにする。
+    case 'stream.bubble_break':
+      return {
+        ...base,
+        type: 'bubble_break',
+      };
+
     case 'stream.audio':
       return createAudioChunkMessage(coreEvent, base);
 

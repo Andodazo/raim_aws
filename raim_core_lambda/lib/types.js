@@ -48,6 +48,10 @@ const MESSAGE_TYPES = Object.freeze({
   CHAT: 'chat',
   ERROR: 'error',
 
+  // v14: tool intro の後に送り、Flutterが本文を別吹き出しに分離するための区切り。
+  // Coreではストリーミングイベントとして stream.bubble_break を使う。
+  BUBBLE_BREAK: 'bubble_break',
+
   // 将来拡張・Edge Lambda向け
   // FILLER_AUDIO: 'filler_audio',
   // TOOL_CALL: 'tool_call',
@@ -75,6 +79,12 @@ const EMOTIONS = Object.freeze({
   CARING: 'caring',
   EMBARRASSED: 'embarrassed',
   EXCITED: 'excited',
+
+  // v13 追加感情（ライムの「クール + 素の反応」表現用）
+  CURIOUS: 'curious',       // 好奇心、興味津々
+  AMUSED: 'amused',         // くすっと笑い
+  THOUGHTFUL: 'thoughtful', // 思案
+  PLAYFUL: 'playful',       // からかい
 });
 
 // ─────────────────────────────────────────────
@@ -147,19 +157,152 @@ function clampIntensity(v) {
   return Math.max(0, Math.min(1, v));
 }
 
+// 感情比率は割り算の結果なので、そのままだと 0.5555555555555556 のような
+// 17桁の値になる。WebSocketで毎回送るには冗長で、ログも読みにくい。
+//
+// Unityの表情制御に必要な精度は3桁で十分（BlendShapeの重みは
+// emotions[key] × overall_intensity × 100 で百分率になるため、
+// 3桁あれば 0.1% 単位で表現できる）。
+//
+// 丸めによって比率の合計が 1.0 から僅かにずれる場合があるが、
+// 表情表現には影響しない範囲。
+function roundRatio(v) {
+  return Math.round(v * 1000) / 1000;
+}
+
+// ─────────────────────────────────────────────
+// emotions 正規化（v13 仕様）
+// ─────────────────────────────────────────────
+//
+// LLMは「各感情の強さ」を素のMapで返す。例: {"happy": 0.8}
+// これを2つの値に分解する。
+//
+//   emotions          : 各感情の「比率」。合計 1.0 に正規化。
+//   overall_intensity : 表情全体の「強さ」。0.0〜1.0。
+//
+// Unity側の BlendShape 重み = emotions[key] × overall_intensity
+// こうすると重みの合計が 1.0 を超えず、顔が崩れない。
+//
+// 変換例:
+//   {"happy":0.7,"caring":0.3} → emotions {happy:0.7, caring:0.3} / overall 1.0
+//   {"happy":0.8}              → emotions {happy:1.0}             / overall 0.8
+//   {"happy":1.0,"caring":0.5} → emotions {happy:0.667,caring:0.333} / overall 1.0
+//
+// 計算式:
+//   sum               = Σ raw
+//   overall_intensity = clamp(sum, 0, 1)
+//   emotions[key]     = raw[key] / sum
+
+const ALLOWED_EMOTION_VALUES = Object.freeze(Object.values(EMOTIONS));
+
+/**
+ * LLMが返した素のemotions Mapを、比率 + 全体強度へ正規化する。
+ *
+ * 未定義の感情キーは捨てる。
+ * 有効な感情が1つも無い場合は neutral 1.0 / overall 0.5 へフォールバックする。
+ *
+ * 戻り値: { emotions, overallIntensity, emotion, intensity }
+ *   emotion / intensity は後方互換用のドミナント感情。
+ */
+function normalizeEmotions(rawEmotions) {
+  const valid = {};
+  let sum = 0;
+
+  if (rawEmotions && typeof rawEmotions === 'object' && !Array.isArray(rawEmotions)) {
+    for (const [key, value] of Object.entries(rawEmotions)) {
+      const name = String(key).trim();
+
+      if (!ALLOWED_EMOTION_VALUES.includes(name)) continue;
+
+      const num = Number(value);
+      if (!Number.isFinite(num) || num <= 0) continue;
+
+      valid[name] = num;
+      sum += num;
+    }
+  }
+
+  // 有効な感情が無い場合のフォールバック
+  if (sum <= 0) {
+    return {
+      emotions: { [EMOTIONS.NEUTRAL]: 1.0 },
+      overallIntensity: 0.5,
+      emotion: EMOTIONS.NEUTRAL,
+      intensity: 0.5,
+    };
+  }
+
+  // 比率へ正規化（合計 1.0）
+  const emotions = {};
+  for (const [name, value] of Object.entries(valid)) {
+    emotions[name] = roundRatio(value / sum);
+  }
+
+  // 全体強度は素の合計をクランプしたもの
+  const overallIntensity = roundRatio(clampIntensity(sum));
+
+  // ドミナント感情（後方互換用）
+  let emotion = EMOTIONS.NEUTRAL;
+  let topRatio = 0;
+  for (const [name, ratio] of Object.entries(emotions)) {
+    if (ratio > topRatio) {
+      topRatio = ratio;
+      emotion = name;
+    }
+  }
+
+  return {
+    emotions,
+    overallIntensity,
+    emotion,
+    intensity: roundRatio(clampIntensity(topRatio * overallIntensity)),
+  };
+}
+
 /**
  * chat レスポンスを作成する。
  *
  * Core Lambdaの正常応答として、Edge Lambdaへ返す基本形式。
  * Flutter側は text をチャットUIに表示し、
- * emotion / intensity をUnity表情制御に利用する想定。
+ * emotions / overall_intensity をUnity表情制御に利用する想定。
+ *
+ * emotion / intensity は後方互換フィールド。
+ * emotions を渡さない旧呼び出しでも動くよう、単一emotionからMapを組み立てる。
  */
-function createChat({ text, emotion = EMOTIONS.NEUTRAL, intensity = 0.5 }) {
+function createChat({
+  text,
+  emotion = EMOTIONS.NEUTRAL,
+  intensity = 0.5,
+  emotions,
+  overallIntensity,
+}) {
+  // 呼び出し元がemotions Mapを渡していない場合は、
+  // 旧形式の emotion + intensity からMapを合成する。
+  const source = (emotions && typeof emotions === 'object' && !Array.isArray(emotions))
+    ? emotions
+    : { [String(emotion)]: clampIntensity(intensity) };
+
+  const normalized = normalizeEmotions(source);
+
+  // overallIntensity が明示指定されている場合はそちらを優先する。
+  // （LLMが overall_intensity を直接返してきたケース）
+  const finalOverall = typeof overallIntensity === 'number' && !isNaN(overallIntensity)
+    ? roundRatio(clampIntensity(overallIntensity))
+    : normalized.overallIntensity;
+
+  const dominantRatio = normalized.emotions[normalized.emotion] || 0;
+
   return {
     type: MESSAGE_TYPES.CHAT,
     text: String(text || ''),
-    emotion: String(emotion),
-    intensity: clampIntensity(intensity),
+
+    // v13: 比率 + 全体強度
+    emotions: normalized.emotions,
+    overall_intensity: finalOverall,
+
+    // 後方互換: ドミナント感情 × 全体強度
+    emotion: normalized.emotion,
+    intensity: roundRatio(clampIntensity(dominantRatio * finalOverall)),
   };
 }
 
@@ -449,4 +592,5 @@ module.exports = {
   normalizeLLMOutput,
   validateUpstream,
   clampIntensity,
+  normalizeEmotions,
 };
