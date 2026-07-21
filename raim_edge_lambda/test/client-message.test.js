@@ -36,11 +36,10 @@ test('toClientMessage maps stream.delta to client text_chunk', () => {
     text: 'こんにちは',
     chunk_id: 'req-001_chunk_1',
     is_first: true,
-    is_filler: false,
   });
 });
 
-test('stream.delta preserves Core-provided chunkId', () => {
+test('stream.delta preserves Core-provided chunkId and ignores isFiller', () => {
   const result = toClientMessage({
     type: 'stream.delta',
     requestId: 'req-001',
@@ -54,20 +53,19 @@ test('stream.delta preserves Core-provided chunkId', () => {
   assert.equal(result.type, 'text_chunk');
   assert.equal(result.chunk_id, 'req-001_chunk_2');
   assert.equal(result.is_first, false);
-  assert.equal(result.is_filler, true);
+  assert.equal(Object.prototype.hasOwnProperty.call(result, 'is_filler'), false);
 });
 
-test('stream.delta maps Core isFiller to client is_filler', () => {
+test('stream.delta omits is_filler when Core sends isFiller false', () => {
   const result = toClientMessage({
     type: 'stream.delta',
     requestId: 'req-001',
-    sequence: 1,
-    textDelta: '少々お待ちください',
-    isFiller: true,
+    sequence: 2,
+    textDelta: '通常の回答です',
+    isFiller: false,
   });
 
-  assert.equal(result.is_filler, true);
-  assert.equal(result.chunk_id, 'req-001_chunk_1');
+  assert.equal(Object.prototype.hasOwnProperty.call(result, 'is_filler'), false);
 });
 
 test('toClientMessage maps stream.audio to multipart audio_chunk', () => {

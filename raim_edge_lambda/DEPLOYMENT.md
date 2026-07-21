@@ -154,8 +154,8 @@ Edge LambdaはWebSocketへ送信する直前に、クライアント統合仕様
 
 Edge LambdaはBase64音声の分割・結合は行いません。将来Core/TTS側が分割して送った
 `stream.audio` の各パーツを、そのまま `audio_chunk` として中継します。
-Core Lambdaの `stream.tool` は `estimatedSeconds`、`stream.delta` の待機用発話は
-`isFiller` を使用し、Edgeがそれぞれクライアント形式へ変換します。
+Coreから `isFiller` または `is_filler` が届いても、Edgeはクライアント向けJSONへ含めません。
+待機中の表示は `tool_call`、吹き出しの区切りは `bubble_break` で表現します。
 WebSocket送信直前に `MAX_WEBSOCKET_MESSAGE_BYTES` を超えた場合は、再試行しても改善しないため非再試行エラーとして扱います。
 
 Edge LambdaはこのQueueをEvent Source Mappingで購読し、各イベントをWebSocketへpostします。

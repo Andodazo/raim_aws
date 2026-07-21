@@ -228,7 +228,9 @@ Edge LambdaではBase64音声の分割・結合は行わず、届いたパーツ
 
 Core Lambdaの `stream.tool` は `tool`、`description`、`estimatedSeconds`（camelCase）を
 送ります。Edge Lambdaはクライアント向けに `estimated_seconds`（snake_case）へ変換します。
-また、Coreの `stream.delta.isFiller` は `text_chunk.is_filler` へ変換します。
+Coreから `isFiller` または `is_filler` が届いた場合も、現在のクライアント仕様では
+Edgeはそのフィールドをクライアント向けJSONへ含めません。
+待機中の表示は `tool_call`、吹き出しの区切りは `bubble_break` で表現します。
 CoreがchunkIdを送らない場合、EdgeがrequestIdとsequenceからchunk_idを補います。
 
 `session_start` と `proactive_message` はクライアント統合仕様上のイベントですが、

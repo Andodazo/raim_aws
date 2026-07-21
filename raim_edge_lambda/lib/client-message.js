@@ -276,8 +276,8 @@ function toClientMessage(coreEvent) {
         text: String(coreEvent.textDelta || ''),
         chunk_id: resolveChunkId(coreEvent),
         is_first: Boolean(coreEvent.isFirst ?? coreEvent.sequence === 1),
-        // Core仕様はcamelCaseのisFiller。旧イベントのsnake_caseも読み取れるようにする。
-        is_filler: Boolean(coreEvent.isFiller ?? coreEvent.is_filler),
+        // CoreからisFiller/is_fillerが届いても、現在のクライアント仕様では使用しない。
+        // 待機メッセージと通常本文の区別は、tool_callやbubble_breakで表現する。
       };
 
     case 'stream.audio':

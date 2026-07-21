@@ -44,7 +44,6 @@ test('response queue handler posts client-facing text_chunk events to WebSocket'
     text: 'こんにちは',
     chunk_id: 'req-001_chunk_1',
     is_first: true,
-    is_filler: false,
   });
 });
 
