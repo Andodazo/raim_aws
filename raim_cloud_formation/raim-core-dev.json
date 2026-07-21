@@ -339,22 +339,6 @@
                 }
               ]
             }
-          },
-          {
-            "PolicyName": "RaimCoreXRayAccess",
-            "PolicyDocument": {
-              "Version": "2012-10-17",
-              "Statement": [
-                {
-                  "Effect": "Allow",
-                  "Action": [
-                    "xray:PutTraceSegments",
-                    "xray:PutTelemetryRecords"
-                  ],
-                  "Resource": "*"
-                }
-              ]
-            }
           }
         ]
       }
@@ -405,7 +389,6 @@
             "SCENE_SIMILARITY_THRESHOLD": { "Ref": "SceneSimilarityThreshold" }
           }
         },
-        "TracingConfig": { "Mode": "Active" },
         "EphemeralStorage": { "Size": 512 },
         "LoggingConfig": { "LogFormat": "JSON" }
       }

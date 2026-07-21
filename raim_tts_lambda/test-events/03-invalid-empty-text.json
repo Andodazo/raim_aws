@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "type": "tts.synthesize",
+  "requestId": "local-003",
+  "chunkId": "local-003_chunk_0",
+  "text": "   ",
+  "voiceParams": {
+    "speaker_id": 8
+  }
+}

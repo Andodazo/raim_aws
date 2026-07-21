@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "type": "tts.synthesize",
+  "requestId": "local-002",
+  "chunkId": "local-002_chunk_0",
+  "text": "無理しないでね。",
+  "voiceParams": {
+    "speaker_id": 8,
+    "speedScale": 0.95,
+    "pitchScale": 0.0,
+    "intonationScale": 0.9,
+    "volumeScale": 1.0
+  }
+}
