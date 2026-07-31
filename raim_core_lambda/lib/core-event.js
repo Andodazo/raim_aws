@@ -25,7 +25,8 @@
 //   connectionId: "websocket-connection-id", // 任意
 //   source: "websocket",
 //   text: "こんにちは",
-//   images: []
+//   images: [],
+//   threadId: "thread-xxxx" // 任意
 // }
 //
 // JSON解釈や入力検証に失敗した場合はCoreEventErrorを投げる。
@@ -235,7 +236,30 @@ function normalizeCoreEvent(event, { fallbackRequestId } = {}) {
     images: Array.isArray(validation.message.images)
       ? validation.message.images
       : [],
+    // 任意。クライアントが会話スレッドを指定した場合のみ入る。
+    // 未指定なら Core が UserSession の activeThreadId を使うか、新規作成する。
+    threadId: normalizeThreadId(payload.threadId),
   };
+}
+
+/**
+ * クライアントから渡された threadId を検証する。
+ *
+ * DynamoDB のソートキーになるため、想定外の値は受け付けず未指定扱いにする。
+ * 空文字や型違いで無効なキーを作らないための入口チェック。
+ */
+function normalizeThreadId(value) {
+  if (typeof value !== 'string') {
+    return '';
+  }
+
+  const trimmed = value.trim();
+
+  if (!trimmed || trimmed.length > 128) {
+    return '';
+  }
+
+  return trimmed;
 }
 
 module.exports = {
@@ -244,6 +268,7 @@ module.exports = {
   CoreEventError,
   getCoreRequestId,
   normalizeCoreEvent,
+  normalizeThreadId,
   validateCoreRequestEnvelope,
   unwrapCorePayload,
 };

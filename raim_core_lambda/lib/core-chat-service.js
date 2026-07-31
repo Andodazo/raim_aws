@@ -64,6 +64,10 @@ const {
   normalizeCoreEvent,
 } = require('./core-event');
 const { createCoreChat, createCoreError } = require('./core-response');
+const { resolveThread, ensureThreadTitle } = require('./thread-resolver');
+const { appendTurn } = require('./conversation-thread-store');
+const { shouldSummarize } = require('./summary-trigger');
+const { dispatchSummarization } = require('./summary-dispatcher');
 
 // ─────────────────────────────────────────────
 // ツールループの設定
@@ -142,6 +146,13 @@ const defaultDependencies = Object.freeze({
   clearMantleResponseState,
   getOrCreateUserSession,
   updateMantleResponseState,
+
+  // 会話履歴の自前保存（案A）
+  resolveThread,
+  ensureThreadTitle,
+  appendTurn,
+  shouldSummarize,
+  dispatchSummarization,
   getMantleSessionState,
   isMantleResponseExpiredError,
   getSceneById,
@@ -214,7 +225,22 @@ function createCoreChatService(dependencyOverrides = {}) {
     // 1. ユーザー単位の会話状態をDynamoDBから取得する。
     // lastResponseIdが有効ならMantle側の会話コンテキストを継続できる。
     const session = await dependencies.getOrCreateUserSession(input.sub);
-    const sessionState = dependencies.getMantleSessionState(session);
+
+    // 1-b. 今回の往復が属する会話スレッドを決める（案A: 履歴を自前保存）。
+    // クライアント指定 > UserSession の activeThreadId > 新規作成、の優先順位。
+    // スレッド側にも lastResponseId を持たせるため、Mantle の継続判定は
+    // スレッドの状態を優先する。
+    const threadContext = await dependencies.resolveThread({
+      sub: input.sub,
+      requestedThreadId: input.threadId,
+      userText: input.text,
+    });
+
+    // 継続判定はスレッド単位で行う。
+    // 別スレッドへ切り替えたときに前スレッドの response_id を使い回さないため。
+    const sessionState = dependencies.getMantleSessionState(
+      threadContext.thread || session
+    );
 
     // 2. Scene選択用の軽量候補を取得し、Titan Embeddingで今回のsceneIdを選ぶ。
     // ここではDynamoDBから `id` と `textCentroid` だけをScanする。
@@ -485,6 +511,66 @@ function createCoreChatService(dependencyOverrides = {}) {
       responseId: mantleResponse.responseId,
       createdAt: mantleResponse.createdAt,
     });
+
+    // 7. 会話履歴をスレッドへ追記する（案A）。
+    //
+    // Mantle 側の履歴は30日で消え、Core からは中身も読めないため、
+    // スレッド再開・要約の材料・画像の記憶のために自前で持つ。
+    //
+    // 画像はバイナリではなく image_description（マルチモーダルで生成済みの
+    // 説明文）を保存する。容量が軽く、過去に見せた画像を覚えていられる。
+    //
+    // 保存に失敗しても会話体験は壊さない。応答は既に生成できているため、
+    // ここで throw するとユーザーには「失敗」に見えてしまう。
+    try {
+      const updatedThread = await dependencies.appendTurn({
+        sub: input.sub,
+        threadId: threadContext.threadId,
+        userMessage: {
+          text: input.text,
+          imageDescription: output.image_description || '',
+        },
+        assistantMessage: {
+          text: output.text,
+          emotions: output.emotions,
+        },
+        inputTokens: mantleResponse.usage
+          ? Number(mantleResponse.usage.input_tokens) || 0
+          : 0,
+        responseId: mantleResponse.responseId,
+        responseCreatedAt: mantleResponse.createdAt,
+      });
+
+      // 「新しい会話」が並ばないよう、最初の発話からタイトルを付ける。
+      if (threadContext.isNew) {
+        await dependencies.ensureThreadTitle({
+          sub: input.sub,
+          threadId: threadContext.threadId,
+          thread: threadContext.thread,
+          userText: input.text,
+        });
+      }
+
+      // 8. 履歴が溜まっていれば要約を依頼する。
+      //
+      // appendTurn は更新後のスレッド（ALL_NEW）を返すので、
+      // 累積トークンと往復数はここで最新値を見られる。
+      //
+      // 実際の要約は Summary Lambda が別プロセスで行う。ここで待つと
+      // その往復だけ Mantle 呼び出しが2回になりレイテンシが倍近くなるため、
+      // 依頼を投げるだけにする。
+      const trigger = dependencies.shouldSummarize(updatedThread);
+
+      if (trigger.shouldSummarize) {
+        await dependencies.dispatchSummarization({
+          sub: input.sub,
+          threadId: threadContext.threadId,
+          reason: trigger.reason,
+        });
+      }
+    } catch (error) {
+      console.error(`[Thread] append failed (non-fatal): ${error.message}`);
+    }
 
     return createCoreChat({
       requestId: input.requestId,
