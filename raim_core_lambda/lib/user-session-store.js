@@ -405,8 +405,63 @@ async function startNewMantleSession(sub) {
   return updateResult.Attributes;
 }
 
+/**
+ * 今アクティブなスレッドの ID を取得する。
+ *
+ * UserSession は「どのスレッドを開いているか」だけを持ち、
+ * 会話の実体は ConversationThread テーブル側にある。
+ */
+async function getActiveThreadId(sub) {
+  if (!sub) {
+    throw new Error('sub is required');
+  }
+
+  const result = await docClient.send(
+    new GetCommand({
+      TableName: TABLE_NAME,
+      Key: { sub },
+    })
+  );
+
+  return result.Item ? String(result.Item.activeThreadId || '') : '';
+}
+
+/**
+ * アクティブスレッドを切り替える。
+ *
+ * 「新しい会話」で別スレッドを開いたときや、新規作成時に呼ぶ。
+ */
+async function setActiveThreadId(sub, threadId) {
+  if (!sub || !threadId) {
+    throw new Error('sub and threadId are required');
+  }
+
+  const now = new Date().toISOString();
+
+  const result = await docClient.send(
+    new UpdateCommand({
+      TableName: TABLE_NAME,
+      Key: { sub },
+      UpdateExpression: [
+        'SET activeThreadId = :threadId',
+        'lastAccessedAt = :now',
+        'updatedAt = :now',
+      ].join(', '),
+      ExpressionAttributeValues: {
+        ':threadId': threadId,
+        ':now': now,
+      },
+      ReturnValues: 'ALL_NEW',
+    })
+  );
+
+  return result.Attributes;
+}
+
 module.exports = {
   getOrCreateUserSession,
+  getActiveThreadId,
+  setActiveThreadId,
   updateMantleResponseState,
   clearMantleResponseState,
   updateSessionSummary,

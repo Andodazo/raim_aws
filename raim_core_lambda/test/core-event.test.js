@@ -14,6 +14,7 @@ test('normalizeCoreEvent normalizes a direct Core Lambda event', () => {
     connectionId: ' connection-1 ',
     text: 'こんにちは',
     images: [],
+    threadId: '',
     source: 'websocket',
   });
 
@@ -24,6 +25,7 @@ test('normalizeCoreEvent normalizes a direct Core Lambda event', () => {
     source: 'websocket',
     text: 'こんにちは',
     images: [],
+    threadId: '',
   });
 });
 
@@ -39,6 +41,7 @@ test('normalizeCoreEvent unwraps one SQS record', () => {
         source: 'websocket',
         text: 'hello',
         images: [],
+        threadId: '',
       }),
     }],
   });
@@ -63,6 +66,7 @@ test('normalizeCoreEvent accepts the Edge Lambda Request Queue message shape', (
         source: 'websocket',
         text: 'つまんないダジャレ言うぞ',
         images: [],
+        threadId: '',
         createdAt: '2026-06-30T00:00:00.000Z',
       }),
     }],
@@ -75,6 +79,7 @@ test('normalizeCoreEvent accepts the Edge Lambda Request Queue message shape', (
     source: 'websocket',
     text: 'つまんないダジャレ言うぞ',
     images: [],
+    threadId: '',
   });
 });
 

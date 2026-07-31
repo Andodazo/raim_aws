@@ -431,6 +431,8 @@ async function consumeMantleStream(body, {
   let finishReason = '';
   let rawText = '';
   let completedResponse = null;
+  // 要約トリガー（トークン数ベース）で使う。completed イベントに入る。
+  let usage = null;
 
   // Responses APIのツール呼出は、本文deltaではなくoutput itemとして返る。
   // call_id をキーに重複登録を防ぎながら集める。
@@ -485,6 +487,10 @@ async function consumeMantleStream(body, {
       if (event.type === 'response.completed') {
         completedResponse = event.response;
         finishReason = event.response.status || 'completed';
+        // Responses API の usage は completed イベントの response に入る。
+        if (event.response.usage && typeof event.response.usage === 'object') {
+          usage = event.response.usage;
+        }
       }
     }
 
@@ -518,6 +524,7 @@ async function consumeMantleStream(body, {
     createdAt: createdAt || new Date().toISOString(),
     finishReason,
     toolCalls,
+    usage,
   };
 }
 
@@ -661,6 +668,7 @@ function createMantleClient({
         mode: mantleInput.mode || 'initial',
         usedPreviousResponseId: Boolean(previousResponseId),
         finishReason: streamed.finishReason,
+        usage: streamed.usage || null,
       };
     } catch (error) {
       // AbortControllerによる中断だけは明示的なtimeoutエラーへ変換する。
