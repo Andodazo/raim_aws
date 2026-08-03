@@ -292,6 +292,112 @@ function toSummaryHistory(messages) {
     .filter(Boolean);
 }
 
+// ─────────────────────────────────────────────
+// タイトル
+// ─────────────────────────────────────────────
+//
+// スレッド作成時のタイトルは「最初のユーザー発話を20文字で切ったもの」だが、
+// 挨拶から始まる会話が多いと一覧が「こんにちは」だらけになり区別できない。
+//
+// そこで要約が生成されたタイミングで、要約の中身からタイトルを付け直す。
+// 要約は既に生成済みなので **追加の LLM 呼び出しは発生しない**。
+//
+// titleSource でタイトルの出所を管理する。
+//   'message' … 最初の発話から自動生成（差し替え対象）
+//   'summary' … 要約から生成（より新しい要約が出れば差し替える）
+//   'user'    … ユーザーが手で付けた（差し替えない）
+
+/**
+ * 要約テキストの【事実】1件目からタイトルを作る。
+ *
+ * 入力例:
+ *   【事実】
+ *   - ユーザーは卒業制作でAIコンパニオンアプリを制作している
+ *   - ...
+ *
+ * 出力例: 「卒業制作でAIコンパニオンアプリを制作」
+ *
+ * 主語の「ユーザーは」は一覧では冗長なので落とす。
+ */
+function deriveTitleFromSummary(summary) {
+  const text = String(summary || '');
+
+  // 【事実】セクションの最初の箇条書きを拾う。
+  // 【関係性】側は推測なのでタイトルには使わない。
+  const factsSection = text.split('【関係性】')[0];
+
+  const firstFact = factsSection
+    .split('\n')
+    .map((line) => line.trim())
+    .find((line) => line.startsWith('-'));
+
+  if (!firstFact) {
+    return '';
+  }
+
+  let title = firstFact.replace(/^-\s*/, '').trim();
+
+  // 「ユーザーは〜」「ユーザーが〜」は一覧で意味がないので落とす。
+  title = title.replace(/^ユーザー[はが]\s*/, '');
+
+  // 文末の句点は不要。
+  title = title.replace(/[。．]$/, '').trim();
+
+  if (!title) {
+    return '';
+  }
+
+  return title.length <= 20 ? title : `${title.slice(0, 20)}…`;
+}
+
+/**
+ * 要約からタイトルを付け直す。
+ *
+ * titleSource が 'user' の場合は上書きしない（手で付けた名前を尊重する）。
+ * 条件付き更新なので、読み取ってから判定する必要がない。
+ */
+async function updateTitleFromSummary(sub, threadId, summary, deps = {}) {
+  const title = deriveTitleFromSummary(summary);
+
+  if (!title) {
+    return null;
+  }
+
+  const client = deps.docClient || getDocClient();
+  const now = (deps.now ? deps.now() : new Date()).toISOString();
+
+  try {
+    const result = await client.send(
+      new UpdateCommand({
+        TableName: deps.tableName || TABLE_NAME,
+        Key: { sub, threadId },
+        UpdateExpression: 'SET title = :title, titleSource = :source, updatedAt = :now',
+        // ユーザーが手で付けたタイトルは上書きしない。
+        // titleSource が未設定の古いスレッドは対象に含める。
+        ConditionExpression:
+          'attribute_not_exists(titleSource) OR titleSource <> :user',
+        ExpressionAttributeValues: {
+          ':title': title,
+          ':source': 'summary',
+          ':now': now,
+          ':user': 'user',
+        },
+        ReturnValues: 'ALL_NEW',
+      })
+    );
+
+    console.log(`[Thread] title updated from summary: sub=${sub} threadId=${threadId} title=${title}`);
+    return result.Attributes;
+  } catch (error) {
+    // 条件不一致（ユーザー命名済み）は正常系。それ以外もタイトルなので致命的ではない。
+    if (error.name === 'ConditionalCheckFailedException') {
+      return null;
+    }
+    console.warn(`[Thread] title update failed (non-fatal): ${error.message}`);
+    return null;
+  }
+}
+
 module.exports = {
   TABLE_NAME,
   getThread,
@@ -300,4 +406,6 @@ module.exports = {
   saveThreadSummary,
   resetThreadSession,
   toSummaryHistory,
+  deriveTitleFromSummary,
+  updateTitleFromSummary,
 };

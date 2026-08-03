@@ -21,6 +21,8 @@
 const { createConnectionStore } = require('./connection-store');
 const { createRequestQueuePublisher } = require('./request-queue-publisher');
 const { normalizeWebSocketEvent, WebSocketEventError } = require('./websocket-event');
+const { createWebSocketPostback } = require('./websocket-postback');
+const threadListStore = require('./thread-list-store');
 const {
   createAcceptedResponse,
   createHttpResponse,
@@ -30,9 +32,16 @@ const {
 function createWebSocketHandler({
   connectionStore,
   requestPublisher,
+  postback,
+  threadStore,
 } = {}) {
   const getConnectionStore = () => connectionStore || createConnectionStore();
   const getRequestPublisher = () => requestPublisher || createRequestQueuePublisher();
+
+  // スレッド一覧・履歴は SQS を経由せず、Edge が DynamoDB を直接読んで
+  // WebSocket へ書き戻す。そのため postback と thread store が必要。
+  const getPostback = () => postback || createWebSocketPostback();
+  const getThreadListStore = () => threadStore || threadListStore;
 
   async function handleConnect(normalized) {
     await getConnectionStore().putConnection({
@@ -56,6 +65,89 @@ function createWebSocketHandler({
     });
   }
 
+  /**
+   * スレッド一覧を返す。
+   *
+   * SQS を経由しないため、そのまま WebSocket へ結果を書き戻す。
+   * 一覧取得に失敗しても接続は維持し、エラーメッセージだけ返す。
+   */
+  async function handleThreadList(sub, normalized) {
+    try {
+      const threads = await getThreadListStore().listThreads(sub);
+
+      // postJson(connectionId, payload) が公開API。
+      // エンドポイントは createWebSocketPostback が env から解決するため、
+      // domainName / stage をここで渡す必要はない。
+      await getPostback().postJson(normalized.connectionId, {
+        type: 'thread_list',
+        requestId: normalized.requestId,
+        threads,
+      });
+
+      return createAcceptedResponse({
+        type: 'accepted',
+        requestId: normalized.requestId,
+      });
+    } catch (error) {
+      console.error(`[ThreadList] failed: ${error.message}`);
+
+      return createHttpResponse(500, {
+        code: 'THREAD_LIST_FAILED',
+        message: 'Failed to list conversation threads',
+      });
+    }
+  }
+
+  /**
+   * スレッドの会話履歴を返す。
+   *
+   * 過去スレッドを選び直したとき、画面にメッセージを復元するために使う。
+   * 一覧と同じく読み取りのみなので Edge で直接処理する。
+   *
+   * 応答サイズは store 側で 32KB フレーム制限に収まるよう調整済み。
+   * 打ち切られた場合は hasMore=true が返る。
+   */
+  async function handleThreadHistory(sub, normalized) {
+    if (!normalized.threadId) {
+      return createHttpResponse(400, {
+        code: 'INVALID_INPUT',
+        message: 'threadId is required for thread.history',
+      });
+    }
+
+    try {
+      const history = await getThreadListStore().getThreadHistory(
+        sub,
+        normalized.threadId
+      );
+
+      if (!history) {
+        return createHttpResponse(404, {
+          code: 'THREAD_NOT_FOUND',
+          message: 'Conversation thread was not found',
+        });
+      }
+
+      await getPostback().postJson(normalized.connectionId, {
+        type: 'thread_history',
+        requestId: normalized.requestId,
+        ...history,
+      });
+
+      return createAcceptedResponse({
+        type: 'accepted',
+        requestId: normalized.requestId,
+      });
+    } catch (error) {
+      console.error(`[ThreadHistory] failed: ${error.message}`);
+
+      return createHttpResponse(500, {
+        code: 'THREAD_HISTORY_FAILED',
+        message: 'Failed to load conversation history',
+      });
+    }
+  }
+
   async function handleDefault(normalized) {
     let sub = normalized.sub;
 
@@ -74,6 +166,22 @@ function createWebSocketHandler({
       });
     }
 
+    // ─────────────────────────────────────────────
+    // スレッド一覧（読み取りのみ）は Edge で直接処理する
+    // ─────────────────────────────────────────────
+    //
+    // DynamoDB の Query 1回で終わるため、SQS 経由にすると
+    // Lambda 起動が3回必要になり不釣り合いに遅い。
+    // LLM 処理を伴う重い要求だけを非同期（SQS）にする方針。
+    if (normalized.action === 'thread.list') {
+      return handleThreadList(sub, normalized);
+    }
+
+    // 過去スレッドを開き直したときの履歴復元。これも読み取りのみ。
+    if (normalized.action === 'thread.history') {
+      return handleThreadHistory(sub, normalized);
+    }
+
     // Core Lambdaが必要とする最小イベント形式に変換してRequest Queueへ送る。
     // Core側のcore-event.jsは、このpayloadを `source: websocket` として受け取る。
     const request = await getRequestPublisher().publishChatRequest({
@@ -82,6 +190,9 @@ function createWebSocketHandler({
       sub,
       text: normalized.text,
       images: normalized.images,
+      // クライアントが会話スレッドを指定した場合のみ入る。
+      // 未指定なら Core が activeThreadId を使うか新規作成する。
+      threadId: normalized.threadId,
     });
 
     // WebSocketの入口では「受付完了」だけを返す。

@@ -110,6 +110,10 @@ async function ensureThread({ sub, threadId, title }, deps = {}) {
       UpdateExpression: [
         'SET createdAt = if_not_exists(createdAt, :now)',
         'title = if_not_exists(title, :title)',
+        // タイトルの出所。'message' は最初の発話から自動生成したもので、
+        // 要約が生成されたら Summary Lambda が 'summary' へ差し替える。
+        // ユーザーが手で付けた場合は 'user' になり、以後上書きされない。
+        'titleSource = if_not_exists(titleSource, :titleSource)',
         'messages = if_not_exists(messages, :emptyList)',
         'sessionSummary = if_not_exists(sessionSummary, :empty)',
         'lastResponseId = if_not_exists(lastResponseId, :empty)',
@@ -121,6 +125,7 @@ async function ensureThread({ sub, threadId, title }, deps = {}) {
       ExpressionAttributeValues: {
         ':now': now,
         ':title': title || '新しい会話',
+        ':titleSource': 'message',
         ':emptyList': [],
         ':empty': '',
         ':zero': 0,
@@ -332,7 +337,7 @@ async function trimMessages(sub, threadId, messages, deps = {}) {
  * 「新しい会話」のままだと一覧で区別がつかないため、
  * 最初のユーザー発話から生成するといった用途を想定。
  */
-async function updateThreadTitle(sub, threadId, title, deps = {}) {
+async function updateThreadTitle(sub, threadId, title, source = 'user', deps = {}) {
   if (!sub || !threadId || !title) {
     return null;
   }
@@ -343,9 +348,11 @@ async function updateThreadTitle(sub, threadId, title, deps = {}) {
     new UpdateCommand({
       TableName: deps.tableName || TABLE_NAME,
       Key: { sub, threadId },
-      UpdateExpression: 'SET title = :title, updatedAt = :now',
+      // 明示的なタイトル更新は 'user' 扱いにし、要約による自動差し替えを止める。
+      UpdateExpression: 'SET title = :title, titleSource = :source, updatedAt = :now',
       ExpressionAttributeValues: {
         ':title': String(title).slice(0, 100),
+        ':source': String(source || 'user'),
         ':now': nowIso(deps),
       },
       ReturnValues: 'ALL_NEW',

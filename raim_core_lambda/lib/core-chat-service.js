@@ -574,6 +574,7 @@ function createCoreChatService(dependencyOverrides = {}) {
 
     return createCoreChat({
       requestId: input.requestId,
+      threadId: threadContext.threadId,
       text: output.text,
       // v13: 比率Map + 全体強度。emotion / intensity は後方互換で保持する。
       emotions: output.emotions,
