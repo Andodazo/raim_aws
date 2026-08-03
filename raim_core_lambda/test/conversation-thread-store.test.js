@@ -212,12 +212,12 @@ test('appendTurn trims history when it exceeds the cap', async () => {
 
 test('updateThreadTitle caps the length', async () => {
   const client = fakeClient(() => ({ Attributes: {} }));
-  await updateThreadTitle('u', 't', 'あ'.repeat(200), { docClient: client });
+  await updateThreadTitle('u', 't', 'あ'.repeat(200), 'user', { docClient: client });
   assert.equal(client.calls[0].ExpressionAttributeValues[':title'].length, 100);
 });
 
 test('updateThreadTitle skips empty titles', async () => {
   const client = fakeClient(() => ({ Attributes: {} }));
-  assert.equal(await updateThreadTitle('u', 't', '', { docClient: client }), null);
+  assert.equal(await updateThreadTitle('u', 't', '', 'user', { docClient: client }), null);
   assert.equal(client.calls.length, 0);
 });

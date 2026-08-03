@@ -30,6 +30,7 @@ function createRequestQueuePublisher({ client, env = process.env } = {}) {
     sub,
     text,
     images = [],
+    threadId = '',
   }) {
     const message = {
       schemaVersion: REQUEST_SCHEMA_VERSION,
@@ -40,6 +41,8 @@ function createRequestQueuePublisher({ client, env = process.env } = {}) {
       source: 'websocket',
       text,
       images,
+      // 会話スレッドの指定。空ならCore側がactiveThreadIdを使うか新規作成する。
+      threadId,
       createdAt: new Date().toISOString(),
     };
 

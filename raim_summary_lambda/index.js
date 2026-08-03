@@ -36,6 +36,7 @@ const {
   saveThreadSummary,
   resetThreadSession,
   toSummaryHistory,
+  updateTitleFromSummary,
 } = require('./lib/conversation-thread-store');
 const { updateUserMemory } = require('./lib/user-memory-store');
 
@@ -100,6 +101,13 @@ async function summarizeThread({ sub, threadId }, deps = {}) {
   }
 
   await (deps.saveThreadSummary || saveThreadSummary)(sub, threadId, summary);
+
+  // 要約からタイトルを付け直す。
+  //
+  // 作成時のタイトルは最初の発話をそのまま切ったものなので、
+  // 挨拶から始まる会話だと一覧が「こんにちは」だらけになる。
+  // 要約は既に生成済みなので、ここでの LLM 呼び出しは発生しない。
+  await (deps.updateTitleFromSummary || updateTitleFromSummary)(sub, threadId, summary);
 
   if (shouldResetSession(env)) {
     await (deps.resetThreadSession || resetThreadSession)(sub, threadId);

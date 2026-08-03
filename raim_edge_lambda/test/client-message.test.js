@@ -205,6 +205,7 @@ test('toClientMessage maps stream.completed to client chat_end', () => {
     intensity: 0.6,
   }), {
     type: 'chat_end',
+    threadId: '',
     requestId: 'req-001',
     sequence: 2,
     full_text: 'こんにちは！',

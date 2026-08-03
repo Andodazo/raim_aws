@@ -118,6 +118,8 @@ function createResponseQueuePublisher({
 
   return {
     start() {
+      // threadId はこの時点では未確定（resolveThread は handleCoreChat の中で走る）。
+      // クライアントへは stream.completed で返す。
       return send('stream.start');
     },
 
@@ -144,6 +146,9 @@ function createResponseQueuePublisher({
       await maybeSendBubbleBreak();
       return send('stream.completed', {
         text: result.text,
+        // 会話スレッドの識別子。クライアントはこれを保持し、次回の送信で送り返す。
+        // 新規作成された場合も採番結果がここで分かる。
+        threadId: result.threadId || '',
         // v13: Unity BlendShape 用の比率Mapと全体強度。
         // 重み = emotions[key] × overall_intensity
         emotions: result.emotions,

@@ -304,6 +304,9 @@ function toClientMessage(coreEvent) {
       return {
         ...base,
         type: 'chat_end',
+        // 会話スレッドの識別子。クライアントはこれを保持し、
+        // 次回の送信で threadId として送り返す。
+        threadId: String(coreEvent.threadId || ''),
         full_text: String(coreEvent.text || ''),
         ...createEmotionPayload(coreEvent),
       };
