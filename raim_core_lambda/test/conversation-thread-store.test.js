@@ -189,9 +189,9 @@ test('appendTurn does nothing when no messages are given', async () => {
   assert.equal(client.calls.length, 0);
 });
 
-test('appendTurn trims history when it exceeds the cap', async () => {
+test('appendTurn trims history when it exceeds the count cap', async () => {
   // 1回目の更新で上限超過を返す → 2回目に切り詰めが走る
-  const over = Array.from({ length: 250 }, (_, i) => ({ role: 'user', text: `m${i}` }));
+  const over = Array.from({ length: 1200 }, (_, i) => ({ role: 'user', text: `m${i}` }));
   const client = fakeClient((input, n) =>
     n === 1 ? { Attributes: { messages: over } } : { Attributes: { messages: [] } }
   );
@@ -203,9 +203,53 @@ test('appendTurn trims history when it exceeds the cap', async () => {
 
   assert.equal(client.calls.length, 2);
   const trimmed = client.calls[1].ExpressionAttributeValues[':messages'];
-  assert.equal(trimmed.length, 200);
+  assert.equal(trimmed.length, 1000);
   // 古い方から落ちる（末尾が残る）
-  assert.equal(trimmed[trimmed.length - 1].text, 'm249');
+  assert.equal(trimmed[trimmed.length - 1].text, 'm1199');
+});
+
+test('appendTurn trims by bytes before hitting the DynamoDB item limit', async () => {
+  // 件数は上限内でも、長文が続くと 400KB を超えうる。
+  // 超えると書き込み自体が失敗して履歴が保存されなくなるため、
+  // バイト数でも必ず切り詰める。
+  const heavy = Array.from({ length: 500 }, (_, i) => ({
+    role: 'user',
+    text: 'あ'.repeat(500), // 1件あたり約1.5KB
+    createdAt: '2026-08-03T00:00:00.000Z',
+  }));
+
+  const client = fakeClient((input, n) =>
+    n === 1 ? { Attributes: { messages: heavy } } : { Attributes: { messages: [] } }
+  );
+
+  await appendTurn(
+    { sub: 'u', threadId: 't', userMessage: { text: 'x' } },
+    { docClient: client }
+  );
+
+  // 件数は 1000 以内なので、バイト超過で切り詰めが走る
+  assert.equal(client.calls.length, 2);
+
+  const trimmed = client.calls[1].ExpressionAttributeValues[':messages'];
+  const size = Buffer.byteLength(JSON.stringify(trimmed), 'utf8');
+
+  assert.ok(trimmed.length < 500, `切り詰められていない: ${trimmed.length}件`);
+  assert.ok(size <= 340000, `バイト上限を超えている: ${size}`);
+  // DynamoDB の 400KB に対して余裕がある
+  assert.ok(size < 400000);
+});
+
+test('appendTurn keeps history untouched when within both limits', async () => {
+  const few = Array.from({ length: 10 }, (_, i) => ({ role: 'user', text: `m${i}` }));
+  const client = fakeClient(() => ({ Attributes: { messages: few } }));
+
+  await appendTurn(
+    { sub: 'u', threadId: 't', userMessage: { text: 'x' } },
+    { docClient: client }
+  );
+
+  // 切り詰めの追加更新は走らない
+  assert.equal(client.calls.length, 1);
 });
 
 // ── updateThreadTitle ───────────────────────
