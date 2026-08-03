@@ -39,16 +39,23 @@ const REGION = process.env.AWS_REGION || 'ap-northeast-1';
 const MAX_THREADS = Number(process.env.THREAD_LIST_LIMIT || 50);
 
 // 履歴として返す最大件数。
-const MAX_HISTORY_MESSAGES = Number(process.env.THREAD_HISTORY_LIMIT || 50);
+const MAX_HISTORY_MESSAGES = Number(process.env.THREAD_HISTORY_LIMIT || 400);
 
 // 履歴応答のバイト予算。
 //
-// API Gateway WebSocket はフレーム上限が 32KB で、超えると接続が
-// コード 1009 で切断される（PostToConnection にも同じ制約がかかる）。
+// Edge Lambda は config.maxWebSocketMessageBytes（既定 30KB）を超える
+// 送信を PayloadTooLarge で弾く。これは API Gateway WebSocket の
+// フレーム上限 32KB に合わせた最終防御。
+//
 // 日本語は UTF-8 で 1文字3バイトのため、件数だけで制限すると
-// 長文が続いたときに上限を超えうる。
-// そのため件数とバイト数の両方で打ち切る。
-const MAX_HISTORY_BYTES = Number(process.env.THREAD_HISTORY_MAX_BYTES || 24000);
+// 長文が続いたときに上限を超える。そこで件数とバイト数の両方で打ち切る。
+//
+// 27KB にしているのは、応答の外枠（type / requestId / threadId / title /
+// hasMore / totalMessages）と JSON のエスケープ分を 30KB との差に残すため。
+//
+// 実測での目安（1往復あたり 296B〜1.4KB）:
+//   短文(20字)  約90往復 / 普通(50字) 約56往復 / 長め(100字) 約34往復
+const MAX_HISTORY_BYTES = Number(process.env.THREAD_HISTORY_MAX_BYTES || 27000);
 
 let cachedDocClient = null;
 

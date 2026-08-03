@@ -43,7 +43,19 @@ const REGION = process.env.AWS_REGION || 'ap-northeast-1';
 // 上限に張り付く前に古いものから落とす安全弁。
 // 要約が動いていれば古い内容は sessionSummary に残るため、履歴が消えても
 // 文脈は失われない。
-const MAX_MESSAGES = Number(process.env.THREAD_MAX_MESSAGES || 200);
+const MAX_MESSAGES = Number(process.env.THREAD_MAX_MESSAGES || 1000);
+
+// 履歴の合計バイト数の上限。
+//
+// DynamoDB の項目上限は 400KB で、これを超えると書き込み自体が
+// ValidationException で失敗する。会話は続くが履歴が保存されなくなるため、
+// 件数だけでなくバイト数でも必ず切り詰める。
+//
+// 実測では1往復あたり 300B（短文）〜1.4KB（長文200字）なので、
+// 件数上限だけだと長文の会話で 400KB を超えうる。
+//
+// 340KB に抑え、残りは sessionSummary・title・キー等の余裕とする。
+const MAX_MESSAGE_BYTES = Number(process.env.THREAD_MAX_MESSAGE_BYTES || 340000);
 
 let cachedDocClient = null;
 
@@ -297,8 +309,19 @@ async function appendTurn(
 
   // 項目サイズの暴走を防ぐため、上限を超えたら古い分を落とす。
   // 要約が効いていれば文脈は sessionSummary に残る。
-  if (Array.isArray(attributes.messages) && attributes.messages.length > MAX_MESSAGES) {
-    return trimMessages(sub, threadId, attributes.messages, deps);
+  // 件数超過、またはバイト数超過で切り詰める。
+  // バイト数の計測は履歴が大きいときだけ行い、毎回の往復では走らせない。
+  if (Array.isArray(attributes.messages)) {
+    const overCount = attributes.messages.length > MAX_MESSAGES;
+    const overBytes =
+      !overCount &&
+      attributes.messages.length > 0 &&
+      Buffer.byteLength(JSON.stringify(attributes.messages), 'utf8') >
+        MAX_MESSAGE_BYTES;
+
+    if (overCount || overBytes) {
+      return trimMessages(sub, threadId, attributes.messages, deps);
+    }
   }
 
   return attributes;
@@ -309,7 +332,30 @@ async function appendTurn(
  */
 async function trimMessages(sub, threadId, messages, deps = {}) {
   const client = deps.docClient || getDocClient();
-  const trimmed = messages.slice(-MAX_MESSAGES);
+
+  const maxMessages = deps.maxMessages ?? MAX_MESSAGES;
+  const maxBytes = deps.maxBytes ?? MAX_MESSAGE_BYTES;
+
+  // まず件数で切り、そのうえでバイト数でも切る。
+  // 新しい方から積み、予算を超えた時点で打ち切って時系列へ戻す。
+  const byCount = messages.slice(-maxMessages);
+
+  const picked = [];
+  let usedBytes = 0;
+
+  for (let i = byCount.length - 1; i >= 0; i -= 1) {
+    const size = Buffer.byteLength(JSON.stringify(byCount[i]), 'utf8');
+
+    // 1件目だけは予算を超えても残す（履歴が空になるのを避ける）
+    if (usedBytes + size > maxBytes && picked.length > 0) {
+      break;
+    }
+
+    picked.push(byCount[i]);
+    usedBytes += size;
+  }
+
+  const trimmed = picked.reverse();
 
   const result = await client.send(
     new UpdateCommand({
@@ -380,6 +426,7 @@ function deriveTitle(text) {
 module.exports = {
   TABLE_NAME,
   MAX_MESSAGES,
+  MAX_MESSAGE_BYTES,
   createThreadId,
   getThread,
   ensureThread,
