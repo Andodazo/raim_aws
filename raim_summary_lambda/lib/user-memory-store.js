@@ -112,8 +112,43 @@ async function updateUserMemory(sub, memory, deps = {}) {
   return result.Attributes;
 }
 
+/**
+ * ユーザー記憶を消す。
+ *
+ * updateUserMemory は空文字を弾く（要約生成が失敗したときに
+ * 既存の記憶を潰さないため）ので、意図的な消去は専用の関数にする。
+ *
+ * スレッドを全部削除したときに使う。ここで消さないと
+ * 「会話を全部消したのにライムが覚えている」状態になる。
+ */
+async function clearUserMemory(sub, deps = {}) {
+  if (!sub) {
+    throw new Error('sub is required');
+  }
+
+  const client = deps.docClient || getDocClient();
+  const now = (deps.now ? deps.now() : new Date()).toISOString();
+
+  const result = await client.send(
+    new UpdateCommand({
+      TableName: deps.tableName || TABLE_NAME,
+      Key: { sub },
+      UpdateExpression: [
+        'SET userMemory = :empty',
+        'userMemoryUpdatedAt = :now',
+        'updatedAt = :now',
+      ].join(', '),
+      ExpressionAttributeValues: { ':empty': '', ':now': now },
+      ReturnValues: 'ALL_NEW',
+    })
+  );
+
+  return result.Attributes;
+}
+
 module.exports = {
   TABLE_NAME,
   getUserMemory,
   updateUserMemory,
+  clearUserMemory,
 };

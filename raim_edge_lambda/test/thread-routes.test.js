@@ -20,8 +20,9 @@ const ENV = {
 /// テストが通ってしまう。実際に postJson の呼び出し方を間違えて
 /// `postToConnection is not a function` を本番で踏んだため、
 /// ここでは本物を通す。
-function setup({ listThreads, getThreadHistory } = {}) {
+function setup({ listThreads, getThreadHistory, deleteThread } = {}) {
   const sent = [];
+  const sqsSent = [];
 
   const postback = createWebSocketPostback({
     client: {
@@ -38,10 +39,17 @@ function setup({ listThreads, getThreadHistory } = {}) {
     threadStore: {
       listThreads: listThreads || (async () => []),
       getThreadHistory: getThreadHistory || (async () => null),
+      deleteThread: deleteThread || (async () => true),
     },
+    sqsClient: {
+      send: async (command) => {
+        sqsSent.push(JSON.parse(command.input.MessageBody));
+      },
+    },
+    memoryQueueUrl: 'https://sqs.example/summary.fifo',
   });
 
-  return { handler, sent };
+  return { handler, sent, sqsSent };
 }
 
 function event(body) {
@@ -126,4 +134,112 @@ test('a message without type is still treated as a chat request', async () => {
   assert.ok(wentToChat, 'type なしのメッセージがチャット経路へ流れていない');
   // thread 系の応答は送られていない
   assert.equal(sent.length, 0);
+});
+
+// ── thread.delete ───────────────────────────
+
+test('thread.delete removes the thread and asks for a memory refresh', async () => {
+  const deleted = [];
+  const { handler, sent, sqsSent } = setup({
+    deleteThread: async (sub, threadId) => {
+      deleted.push({ sub, threadId });
+      return true;
+    },
+  });
+
+  const response = await handler(event({ type: 'thread.delete', threadId: 't1' }));
+
+  assert.equal(response.statusCode, 202);
+  assert.deepEqual(deleted, [{ sub: 'user-1', threadId: 't1' }]);
+
+  assert.equal(sent[0].type, 'thread_deleted');
+  assert.equal(sent[0].threadId, 't1');
+  assert.equal(sent[0].memoryRefreshRequested, true);
+
+  // userMemory には削除したスレッドの内容が残るため、作り直しを依頼する
+  assert.equal(sqsSent.length, 1);
+  assert.equal(sqsSent[0].type, 'memory.refresh');
+  assert.equal(sqsSent[0].sub, 'user-1');
+});
+
+test('thread.delete without threadId is rejected', async () => {
+  const { handler, sent } = setup();
+  const response = await handler(event({ type: 'thread.delete' }));
+
+  assert.equal(response.statusCode, 400);
+  assert.equal(sent.length, 0);
+});
+
+test('thread.delete succeeds even if the memory refresh request fails', async () => {
+  const sent = [];
+  const postback = createWebSocketPostback({
+    client: {
+      send: async (command) => {
+        sent.push(JSON.parse(Buffer.from(command.input.Data).toString('utf8')));
+      },
+    },
+    env: ENV,
+  });
+
+  const handler = createWebSocketHandler({
+    connectionStore: { getConnection: async () => ({ sub: 'user-1' }) },
+    postback,
+    threadStore: { deleteThread: async () => true },
+    // SQS が落ちても削除自体は成立させる（週次バッチで回収される）
+    sqsClient: { send: async () => { throw new Error('SQS down'); } },
+    memoryQueueUrl: 'https://sqs.example/summary.fifo',
+  });
+
+  const response = await handler(event({ type: 'thread.delete', threadId: 't1' }));
+
+  assert.equal(response.statusCode, 202);
+  assert.equal(sent[0].type, 'thread_deleted');
+  assert.equal(sent[0].memoryRefreshRequested, false);
+});
+
+test('thread.history passes beforeIndex through to the store', async () => {
+  let captured;
+  const { handler, sent } = setup({
+    getThreadHistory: async (sub, threadId, options) => {
+      captured = options;
+      return {
+        threadId: 't1',
+        title: 'テスト',
+        messages: [{ role: 'user', text: '古い発話', createdAt: 'x' }],
+        startIndex: 0,
+        hasMore: false,
+        totalMessages: 100,
+      };
+    },
+  });
+
+  const response = await handler(
+    event({ type: 'thread.history', threadId: 't1', beforeIndex: 50 })
+  );
+
+  assert.equal(response.statusCode, 202);
+  assert.equal(captured.beforeIndex, 50);
+
+  // カーソルはクライアントへ返る
+  assert.equal(sent[0].type, 'thread_history');
+  assert.equal(sent[0].startIndex, 0);
+  assert.equal(sent[0].hasMore, false);
+});
+
+test('thread.history without beforeIndex asks for the latest window', async () => {
+  let captured;
+  const { handler } = setup({
+    getThreadHistory: async (sub, threadId, options) => {
+      captured = options;
+      return {
+        threadId: 't1', title: '', messages: [],
+        startIndex: 0, hasMore: false, totalMessages: 0,
+      };
+    },
+  });
+
+  await handler(event({ type: 'thread.history', threadId: 't1' }));
+
+  // 未指定なら store の既定（最新側）に任せる
+  assert.deepEqual(captured, {});
 });

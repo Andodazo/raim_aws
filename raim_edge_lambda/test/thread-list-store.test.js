@@ -132,3 +132,96 @@ test('getThreadHistory tolerates a thread with no messages', async () => {
 test('getThreadHistory requires sub and threadId', async () => {
   await assert.rejects(() => getThreadHistory('u', ''), /required/);
 });
+
+// ── 履歴の遡り（ページング）─────────────────
+
+test('getThreadHistory returns startIndex as a cursor', async () => {
+  const client = fakeClient(() => ({
+    Item: { threadId: 't', messages: makeMessages(200) },
+  }));
+
+  const first = await getThreadHistory('u', 't', {
+    docClient: client,
+    maxMessages: 50,
+  });
+
+  // 末尾50件（150〜199）が返り、次に遡る位置は 150
+  assert.equal(first.messages.length, 50);
+  assert.equal(first.messages[0].text, 'メッセージ150');
+  assert.equal(first.startIndex, 150);
+  assert.equal(first.hasMore, true);
+});
+
+test('getThreadHistory walks back through the whole history without gaps', async () => {
+  const client = fakeClient(() => ({
+    Item: { threadId: 't', messages: makeMessages(200) },
+  }));
+
+  const seen = [];
+  let before;
+
+  for (let page = 0; page < 10; page += 1) {
+    const result = await getThreadHistory('u', 't', {
+      docClient: client,
+      maxMessages: 50,
+      beforeIndex: before,
+    });
+
+    // 取得したものを先頭へ積む（古い順に並ぶ）
+    seen.unshift(...result.messages.map((m) => m.text));
+
+    if (!result.hasMore) break;
+    before = result.startIndex;
+  }
+
+  // 重複も欠落もなく全件そろう
+  assert.equal(seen.length, 200);
+  assert.equal(seen[0], 'メッセージ0');
+  assert.equal(seen[199], 'メッセージ199');
+  assert.equal(new Set(seen).size, 200);
+});
+
+test('getThreadHistory reports hasMore=false at the beginning', async () => {
+  const client = fakeClient(() => ({
+    Item: { threadId: 't', messages: makeMessages(30) },
+  }));
+
+  const result = await getThreadHistory('u', 't', {
+    docClient: client,
+    maxMessages: 50,
+    beforeIndex: 20,
+  });
+
+  assert.equal(result.messages.length, 20);
+  assert.equal(result.startIndex, 0);
+  assert.equal(result.hasMore, false);
+});
+
+test('getThreadHistory ignores an out-of-range cursor', async () => {
+  const client = fakeClient(() => ({
+    Item: { threadId: 't', messages: makeMessages(10) },
+  }));
+
+  // 実際の件数より大きい値を渡しても末尾から返す（壊れない）
+  const result = await getThreadHistory('u', 't', {
+    docClient: client,
+    beforeIndex: 9999,
+  });
+
+  assert.equal(result.messages.length, 10);
+  assert.equal(result.startIndex, 0);
+});
+
+test('getThreadHistory treats a zero cursor as the beginning', async () => {
+  const client = fakeClient(() => ({
+    Item: { threadId: 't', messages: makeMessages(10) },
+  }));
+
+  const result = await getThreadHistory('u', 't', {
+    docClient: client,
+    beforeIndex: 0,
+  });
+
+  assert.deepEqual(result.messages, []);
+  assert.equal(result.hasMore, false);
+});
