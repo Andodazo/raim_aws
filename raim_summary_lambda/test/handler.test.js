@@ -298,14 +298,6 @@ test('refreshUserMemory aggregates thread summaries', async () => {
   assert.ok(captured.history[0].content.includes('AWSの相談'));
 });
 
-test('refreshUserMemory does nothing when no summaries exist', async () => {
-  const updated = await refreshUserMemory('u1', {
-    env: ENV,
-    listThreads: async () => [{ threadId: 't1', sessionSummary: '' }],
-    generateSummary: async () => { throw new Error('should not be called'); },
-  });
-  assert.equal(updated, false);
-});
 
 // ── memory.refresh ──────────────────────────
 
@@ -378,4 +370,41 @@ test('a summarize request without threadId is discarded', async () => {
   );
 
   assert.deepEqual(result.batchItemFailures, []);
+});
+
+test('refreshUserMemory clears the memory when every thread is deleted', async () => {
+  const cleared = [];
+  let updateCalled = false;
+
+  // 全スレッドを削除した状態。ここで記憶を消さないと
+  // 「会話を全部消したのにライムが覚えている」状態になる
+  const updated = await refreshUserMemory('u1', {
+    env: ENV,
+    listThreads: async () => [],
+    clearUserMemory: async (sub) => { cleared.push(sub); },
+    updateUserMemory: async () => { updateCalled = true; },
+    generateSummary: async () => { throw new Error('should not summarize'); },
+  });
+
+  assert.equal(updated, true);
+  assert.deepEqual(cleared, ['u1']);
+  assert.equal(updateCalled, false);
+});
+
+test('refreshUserMemory clears the memory when threads have no summary yet', async () => {
+  const cleared = [];
+
+  // スレッドは残っているが、まだ要約が生成されていない場合も
+  // 集約する材料が無いので記憶は空にする
+  const updated = await refreshUserMemory('u1', {
+    env: ENV,
+    listThreads: async () => [
+      { threadId: 't1', title: '新しい会話', sessionSummary: '' },
+    ],
+    clearUserMemory: async (sub) => { cleared.push(sub); },
+    updateUserMemory: async () => {},
+  });
+
+  assert.equal(updated, true);
+  assert.deepEqual(cleared, ['u1']);
 });

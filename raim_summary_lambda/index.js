@@ -38,7 +38,7 @@ const {
   toSummaryHistory,
   updateTitleFromSummary,
 } = require('./lib/conversation-thread-store');
-const { updateUserMemory } = require('./lib/user-memory-store');
+const { updateUserMemory, clearUserMemory } = require('./lib/user-memory-store');
 
 // ─────────────────────────────────────────────
 // 設定
@@ -285,8 +285,13 @@ async function refreshUserMemory(sub, deps = {}) {
       content: `【${t.title || 'スレッド'}】\n${t.sessionSummary}`,
     }));
 
+  // 要約が1件も無い＝スレッドを全部消した状態。
+  // ここで記憶を消さないと「会話を全部消したのにライムが覚えている」
+  // 状態になる。削除機能の目的そのものが崩れるため必ず消す。
   if (summaries.length === 0) {
-    return false;
+    await (deps.clearUserMemory || clearUserMemory)(sub);
+    console.log(`[Summary] userMemory cleared: sub=${sub} (no threads left)`);
+    return true;
   }
 
   // スレッド要約たちを入力として、さらに1段圧縮する。
