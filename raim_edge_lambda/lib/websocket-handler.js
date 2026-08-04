@@ -131,7 +131,11 @@ function createWebSocketHandler({
     try {
       const history = await getThreadListStore().getThreadHistory(
         sub,
-        normalized.threadId
+        normalized.threadId,
+        // 未指定なら最新側から。指定されるとその手前（より古い側）を返す
+        normalized.beforeIndex === null
+          ? {}
+          : { beforeIndex: normalized.beforeIndex }
       );
 
       if (!history) {

@@ -196,3 +196,50 @@ test('thread.delete succeeds even if the memory refresh request fails', async ()
   assert.equal(sent[0].type, 'thread_deleted');
   assert.equal(sent[0].memoryRefreshRequested, false);
 });
+
+test('thread.history passes beforeIndex through to the store', async () => {
+  let captured;
+  const { handler, sent } = setup({
+    getThreadHistory: async (sub, threadId, options) => {
+      captured = options;
+      return {
+        threadId: 't1',
+        title: 'テスト',
+        messages: [{ role: 'user', text: '古い発話', createdAt: 'x' }],
+        startIndex: 0,
+        hasMore: false,
+        totalMessages: 100,
+      };
+    },
+  });
+
+  const response = await handler(
+    event({ type: 'thread.history', threadId: 't1', beforeIndex: 50 })
+  );
+
+  assert.equal(response.statusCode, 202);
+  assert.equal(captured.beforeIndex, 50);
+
+  // カーソルはクライアントへ返る
+  assert.equal(sent[0].type, 'thread_history');
+  assert.equal(sent[0].startIndex, 0);
+  assert.equal(sent[0].hasMore, false);
+});
+
+test('thread.history without beforeIndex asks for the latest window', async () => {
+  let captured;
+  const { handler } = setup({
+    getThreadHistory: async (sub, threadId, options) => {
+      captured = options;
+      return {
+        threadId: 't1', title: '', messages: [],
+        startIndex: 0, hasMore: false, totalMessages: 0,
+      };
+    },
+  });
+
+  await handler(event({ type: 'thread.history', threadId: 't1' }));
+
+  // 未指定なら store の既定（最新側）に任せる
+  assert.deepEqual(captured, {});
+});

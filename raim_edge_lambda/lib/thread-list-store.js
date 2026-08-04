@@ -135,6 +135,28 @@ async function listThreads(sub, deps = {}) {
  * @returns {Promise<{threadId, title, messages, hasMore, totalMessages}|null>}
  *          スレッドが存在しなければ null
  */
+/**
+ * スレッドの会話履歴を取得する。
+ *
+ * 【返す範囲】
+ *
+ * 既定では最新側から件数とバイト予算に収まるぶんだけ返す。
+ * `beforeIndex` を渡すと、そのインデックスより前（＝より古い側）を対象にする。
+ * クライアントが上スクロールで遡るときに使う。
+ *
+ *   1回目: beforeIndex なし        → 末尾から一定量
+ *   2回目: beforeIndex = startIndex → その手前から一定量
+ *
+ * 【カーソルにインデックスを使う理由】
+ *
+ * messages は1項目内の配列なので、DynamoDB のキーによるページングが使えない。
+ * createdAt は1往復の user / assistant が同じ値になりうるため一意にならない。
+ * そのため配列インデックスを位置として返す。
+ *
+ * 履歴が上限を超えて古い側から切り詰められると、インデックスはずれる。
+ * ただし切り詰めは 1000件 / 340KB に達したときだけで、遡っている最中に
+ * 起きる可能性は低い。ずれても取得位置が多少前後するだけで壊れはしない。
+ */
 async function getThreadHistory(sub, threadId, deps = {}) {
   if (!sub || !threadId) {
     throw new Error('sub and threadId are required');
@@ -159,17 +181,27 @@ async function getThreadHistory(sub, threadId, deps = {}) {
   const limit = deps.maxMessages || MAX_HISTORY_MESSAGES;
   const byteBudget = deps.maxBytes || MAX_HISTORY_BYTES;
 
+  // どこより前を対象にするか。未指定なら末尾から。
+  const rawBefore = Number(deps.beforeIndex);
+  const upperBound =
+    Number.isFinite(rawBefore) && rawBefore >= 0
+      ? Math.min(rawBefore, all.length)
+      : all.length;
+
   // 新しい方から詰めていき、件数かバイト予算のどちらかに達したら止める。
   const picked = [];
   let usedBytes = 0;
+  let startIndex = upperBound;
 
-  for (let i = all.length - 1; i >= 0; i -= 1) {
+  for (let i = upperBound - 1; i >= 0; i -= 1) {
     if (picked.length >= limit) {
       break;
     }
 
     const message = normalizeHistoryMessage(all[i]);
     if (!message) {
+      // 壊れた要素は飛ばすが、位置は進める
+      startIndex = i;
       continue;
     }
 
@@ -182,6 +214,7 @@ async function getThreadHistory(sub, threadId, deps = {}) {
 
     picked.push(message);
     usedBytes += size;
+    startIndex = i;
   }
 
   // 詰めるときに新しい順で走査したので、時系列へ戻す。
@@ -191,7 +224,11 @@ async function getThreadHistory(sub, threadId, deps = {}) {
     threadId,
     title: String(item.title || ''),
     messages: picked,
-    hasMore: picked.length < all.length,
+    // 返した中で最も古いメッセージの位置。
+    // これを次の beforeIndex に渡すとさらに古い分が取れる。
+    startIndex,
+    // startIndex より前にまだメッセージが残っているか
+    hasMore: startIndex > 0,
     totalMessages: all.length,
   };
 }
