@@ -306,3 +306,76 @@ test('refreshUserMemory does nothing when no summaries exist', async () => {
   });
   assert.equal(updated, false);
 });
+
+// ── memory.refresh ──────────────────────────
+
+test('memory.refresh rebuilds user memory without needing a threadId', async () => {
+  const memories = [];
+
+  const result = await handleSqsEvent(
+    {
+      Records: [
+        {
+          messageId: 'm1',
+          eventSource: 'aws:sqs',
+          // スレッド削除後に Edge から送られる。threadId は無い
+          body: JSON.stringify({
+            type: 'memory.refresh',
+            sub: 'u1',
+            reason: 'thread_deleted',
+          }),
+        },
+      ],
+    },
+    {
+      env: ENV,
+      // 削除後に残っているスレッドの要約だけを集める
+      listThreads: async () => [
+        { threadId: 't2', title: '残った会話', sessionSummary: '【事実】\n- 残っている' },
+      ],
+      generateSummary: async () => ({ summary: '【事実】\n- 残っている' }),
+      updateUserMemory: async (sub, m) => { memories.push({ sub, m }); },
+      // 要約は呼ばれないはず
+      getThread: async () => { throw new Error('should not summarize a thread'); },
+    }
+  );
+
+  assert.deepEqual(result.batchItemFailures, []);
+  assert.equal(memories.length, 1);
+  assert.equal(memories[0].sub, 'u1');
+  assert.ok(memories[0].m.includes('残っている'));
+});
+
+test('memory.refresh is retried when it fails', async () => {
+  const result = await handleSqsEvent(
+    {
+      Records: [
+        {
+          messageId: 'm1',
+          eventSource: 'aws:sqs',
+          body: JSON.stringify({ type: 'memory.refresh', sub: 'u1' }),
+        },
+      ],
+    },
+    {
+      env: ENV,
+      listThreads: async () => { throw new Error('DynamoDB down'); },
+    }
+  );
+
+  assert.deepEqual(result.batchItemFailures, [{ itemIdentifier: 'm1' }]);
+});
+
+test('a summarize request without threadId is discarded', async () => {
+  // memory.refresh 以外は threadId が必須。無い場合は再試行しても直らない
+  const result = await handleSqsEvent(
+    {
+      Records: [
+        { messageId: 'm1', eventSource: 'aws:sqs', body: JSON.stringify({ sub: 'u1' }) },
+      ],
+    },
+    { env: ENV }
+  );
+
+  assert.deepEqual(result.batchItemFailures, []);
+});

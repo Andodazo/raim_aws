@@ -44,6 +44,12 @@ const { updateUserMemory } = require('./lib/user-memory-store');
 // 設定
 // ─────────────────────────────────────────────
 
+/// ユーザー記憶の再生成を要求するメッセージ種別
+///
+/// スレッド削除後に Edge Lambda から送られる。
+/// 要約の生成（既定）と違い threadId を必要としない。
+const MEMORY_REFRESH_TYPE = 'memory.refresh';
+
 function isEnabled(env) {
   return String(env.SUMMARIZE_ENABLED || 'false').trim().toLowerCase() === 'true';
 }
@@ -145,19 +151,38 @@ async function handleSqsEvent(event, deps = {}) {
       continue;
     }
 
-    const { sub, threadId, reason } = payload;
+    const { type, sub, threadId, reason } = payload;
 
-    if (!sub || !threadId) {
-      console.error(`[Summary] missing sub/threadId: ${record.messageId}`);
+    if (!sub) {
+      console.error(`[Summary] missing sub: ${record.messageId}`);
+      continue;
+    }
+
+    // ユーザー記憶の再生成だけを行う要求。
+    //
+    // スレッドを削除したときに使う。削除したスレッドの内容は
+    // userMemory へ既に取り込まれているため、残っているスレッドの
+    // 要約から作り直さないと「消したのにライムが覚えている」状態になる。
+    const isMemoryRefresh = type === MEMORY_REFRESH_TYPE;
+
+    if (!isMemoryRefresh && !threadId) {
+      console.error(`[Summary] missing threadId: ${record.messageId}`);
       continue;
     }
 
     try {
-      const result = await summarizeThread({ sub, threadId }, { ...deps, env });
-      console.log(
-        `[Summary] sqs processed: sub=${sub} threadId=${threadId} ` +
-        `reason=${reason || '-'} ok=${result.ok} ${result.reason || ''}`
-      );
+      if (isMemoryRefresh) {
+        const updated = await refreshUserMemory(sub, { ...deps, env });
+        console.log(
+          `[Summary] memory refreshed: sub=${sub} reason=${reason || '-'} updated=${updated}`
+        );
+      } else {
+        const result = await summarizeThread({ sub, threadId }, { ...deps, env });
+        console.log(
+          `[Summary] sqs processed: sub=${sub} threadId=${threadId} ` +
+          `reason=${reason || '-'} ok=${result.ok} ${result.reason || ''}`
+        );
+      }
     } catch (error) {
       // 一時的な障害の可能性があるので再試行させる。
       console.error(
@@ -337,6 +362,7 @@ exports.handler = async (event) => {
 };
 
 // テスト用に内部関数も公開する。
+exports.MEMORY_REFRESH_TYPE = MEMORY_REFRESH_TYPE;
 exports.summarizeThread = summarizeThread;
 exports.handleSqsEvent = handleSqsEvent;
 exports.handleScheduledEvent = handleScheduledEvent;

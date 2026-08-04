@@ -25,6 +25,7 @@
 
 const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
 const {
+  DeleteCommand,
   DynamoDBDocumentClient,
   GetCommand,
   QueryCommand,
@@ -231,10 +232,40 @@ function normalizeHistoryMessage(raw) {
   return message;
 }
 
+/**
+ * スレッドを削除する。
+ *
+ * 本文（messages）とスレッド要約（sessionSummary）はこの項目に入っているため、
+ * 項目ごと消せば会話の中身は残らない。
+ *
+ * ただし UserSession の userMemory には、このスレッドの要約が集約された
+ * 内容が残る。「消したのにライムが覚えている」状態を避けるため、
+ * 呼び出し側は削除後に userMemory の再生成を依頼すること。
+ *
+ * @returns {Promise<boolean>} 削除を実行したら true（元から無い場合も true）
+ */
+async function deleteThread(sub, threadId, deps = {}) {
+  if (!sub || !threadId) {
+    throw new Error('sub and threadId are required');
+  }
+
+  const client = deps.docClient || getDocClient();
+
+  await client.send(
+    new DeleteCommand({
+      TableName: deps.tableName || TABLE_NAME,
+      Key: { sub, threadId },
+    })
+  );
+
+  return true;
+}
+
 module.exports = {
   TABLE_NAME,
   MAX_THREADS,
   listThreads,
   getThreadHistory,
+  deleteThread,
   normalizeHistoryMessage,
 };

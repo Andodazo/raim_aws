@@ -23,6 +23,7 @@ const { createRequestQueuePublisher } = require('./request-queue-publisher');
 const { normalizeWebSocketEvent, WebSocketEventError } = require('./websocket-event');
 const { createWebSocketPostback } = require('./websocket-postback');
 const threadListStore = require('./thread-list-store');
+const { SQSClient, SendMessageCommand } = require('@aws-sdk/client-sqs');
 const {
   createAcceptedResponse,
   createHttpResponse,
@@ -34,6 +35,8 @@ function createWebSocketHandler({
   requestPublisher,
   postback,
   threadStore,
+  sqsClient,
+  memoryQueueUrl,
 } = {}) {
   const getConnectionStore = () => connectionStore || createConnectionStore();
   const getRequestPublisher = () => requestPublisher || createRequestQueuePublisher();
@@ -42,6 +45,16 @@ function createWebSocketHandler({
   // WebSocket へ書き戻す。そのため postback と thread store が必要。
   const getPostback = () => postback || createWebSocketPostback();
   const getThreadListStore = () => threadStore || threadListStore;
+
+  // スレッド削除後にユーザー記憶の再生成を依頼するために使う
+  let cachedSqs = null;
+  const getSqsClient = () => {
+    if (sqsClient) return sqsClient;
+    cachedSqs ||= new SQSClient({
+      region: process.env.AWS_REGION || 'ap-northeast-1',
+    });
+    return cachedSqs;
+  };
 
   async function handleConnect(normalized) {
     await getConnectionStore().putConnection({
@@ -148,6 +161,100 @@ function createWebSocketHandler({
     }
   }
 
+  /**
+   * スレッドを削除する。
+   *
+   * 【ユーザー記憶も作り直す理由】
+   *
+   * 会話の内容は2箇所に残る。
+   *
+   *   ConversationThread … 本文とスレッド要約（削除で消える）
+   *   UserSession.userMemory … スレッドを跨いだ記憶（削除しても残る）
+   *
+   * userMemory は各スレッドの要約を集約したものなので、スレッドだけ消すと
+   * 「消したのにライムが覚えている」状態になる。
+   * そのため削除後に Summary Lambda へ再生成を依頼する。
+   * 再生成は残っているスレッドの要約だけから作り直すので、
+   * 消したスレッドの内容は記憶からも消える。
+   *
+   * 再生成の依頼に失敗しても削除自体は成功扱いにする。
+   * 週次バッチでも userMemory は作り直されるため、最悪そこで回収される。
+   */
+  async function handleThreadDelete(sub, normalized) {
+    if (!normalized.threadId) {
+      return createHttpResponse(400, {
+        code: 'INVALID_INPUT',
+        message: 'threadId is required for thread.delete',
+      });
+    }
+
+    try {
+      await getThreadListStore().deleteThread(sub, normalized.threadId);
+
+      // 記憶の作り直しを依頼する（失敗しても削除は成立させる）
+      let memoryRefreshRequested = false;
+      try {
+        memoryRefreshRequested = await requestMemoryRefresh(sub);
+      } catch (error) {
+        console.warn(`[ThreadDelete] memory refresh request failed: ${error.message}`);
+      }
+
+      await getPostback().postJson(normalized.connectionId, {
+        type: 'thread_deleted',
+        requestId: normalized.requestId,
+        threadId: normalized.threadId,
+        memoryRefreshRequested,
+      });
+
+      return createAcceptedResponse({
+        type: 'accepted',
+        requestId: normalized.requestId,
+      });
+    } catch (error) {
+      console.error(`[ThreadDelete] failed: ${error.message}`);
+
+      return createHttpResponse(500, {
+        code: 'THREAD_DELETE_FAILED',
+        message: 'Failed to delete conversation thread',
+      });
+    }
+  }
+
+  /**
+   * Summary Lambda へユーザー記憶の再生成を依頼する。
+   *
+   * キューが未設定なら何もしない（週次バッチに任せる）。
+   */
+  async function requestMemoryRefresh(sub) {
+    const queueUrl = String(
+      (memoryQueueUrl ?? process.env.SUMMARY_REQUEST_QUEUE_URL) || ''
+    ).trim();
+
+    if (!queueUrl) {
+      console.warn('[ThreadDelete] SUMMARY_REQUEST_QUEUE_URL is not set; skipping refresh');
+      return false;
+    }
+
+    await getSqsClient().send(
+      new SendMessageCommand({
+        QueueUrl: queueUrl,
+        MessageBody: JSON.stringify({
+          type: 'memory.refresh',
+          sub,
+          reason: 'thread_deleted',
+          requestedAt: new Date().toISOString(),
+        }),
+        // ユーザー単位で順序を保つ
+        MessageGroupId: sub,
+        // 短時間に複数削除しても再生成は1回で足りる（5分の重複排除）
+        MessageDeduplicationId: `memory-refresh:${sub}`,
+      })
+    );
+
+    return true;
+  }
+
+
   async function handleDefault(normalized) {
     let sub = normalized.sub;
 
@@ -178,6 +285,10 @@ function createWebSocketHandler({
     }
 
     // 過去スレッドを開き直したときの履歴復元。これも読み取りのみ。
+    if (normalized.action === 'thread.delete') {
+      return handleThreadDelete(sub, normalized);
+    }
+
     if (normalized.action === 'thread.history') {
       return handleThreadHistory(sub, normalized);
     }
