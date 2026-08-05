@@ -366,3 +366,65 @@ test('Core chat service does not dispatch below the threshold', async () => {
 
   assert.equal(dispatched.length, 0);
 });
+
+test('Core chat service feeds the thread summary into the prompt, not the user session', async () => {
+  // 要約はスレッド単位に保存される。UserSession 側を見ていると常に空になり、
+  // 圧縮でセッションをリセットした直後に文脈が丸ごと失われる
+  let captured;
+
+  const service = createCoreChatService({
+    getOrCreateUserSession: async () => ({
+      sub: 'user-1',
+      sessionSummary: '',              // UserSession 側は空
+      userMemory: '【事実】\n- タピオカが好き',
+    }),
+    getMantleSessionState: () => ({
+      // 圧縮でリセットされた直後を想定（初回モードへ落ちる）
+      canUsePreviousResponse: false,
+      usePreviousResponseId: false,
+      previousResponseId: '',
+    }),
+    listSceneCandidates: async () => [],
+    selectScene: async () => ({ sceneId: 'default', similarity: 1 }),
+    getSceneById: async () => ({ id: 'default', few_shots: [] }),
+    buildMantleInput: (params) => {
+      captured = params;
+      return { mode: 'initial', messages: [] };
+    },
+    createMantleResponse: async () => ({
+      responseId: 'resp-1',
+      rawText: '{"text":"ok","emotions":{"happy":1}}',
+      createdAt: '2026-08-04T00:00:00.000Z',
+      toolCalls: [],
+    }),
+    normalizeMantleOutput: () => ({
+      ok: true, text: 'ok', emotions: { happy: 1 },
+      overall_intensity: 1, emotion: 'happy', intensity: 1,
+    }),
+    updateMantleResponseState: async () => {},
+    resolveThread: async () => ({
+      threadId: 'thread-x',
+      thread: { sessionSummary: '【事実】\n- ユーザーは東京にいる' },
+      isNew: false,
+    }),
+    ensureThreadTitle: async () => {},
+    appendTurn: async () => ({}),
+    shouldSummarize: () => ({ shouldSummarize: false, reason: null }),
+    dispatchSummarization: async () => true,
+  });
+
+  await service({
+    schemaVersion: 1,
+    type: 'chat.request',
+    sub: 'user-1',
+    requestId: 'req-1',
+    source: 'websocket',
+    text: '気温ってどんなもん？',
+    images: [],
+  });
+
+  // スレッドの要約が渡る
+  assert.match(captured.sessionSummary, /東京にいる/);
+  // スレッドを跨いだ記憶も渡る
+  assert.match(captured.userMemory, /タピオカ/);
+});
