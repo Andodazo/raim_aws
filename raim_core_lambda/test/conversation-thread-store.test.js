@@ -162,7 +162,8 @@ test('appendTurn accumulates tokens and turn count atomically', async () => {
   );
 
   const input = client.calls[0];
-  assert.ok(input.UpdateExpression.includes('ADD cumulativeInputTokens :tokens, turnCount :one'));
+  assert.ok(input.UpdateExpression.includes('ADD cumulativeInputTokens :tokens'));
+  assert.ok(input.UpdateExpression.includes('turnCount :one'));
   assert.equal(input.ExpressionAttributeValues[':tokens'], 1800);
   assert.equal(input.ExpressionAttributeValues[':one'], 1);
 });
@@ -264,4 +265,21 @@ test('updateThreadTitle skips empty titles', async () => {
   const client = fakeClient(() => ({ Attributes: {} }));
   assert.equal(await updateThreadTitle('u', 't', '', 'user', { docClient: client }), null);
   assert.equal(client.calls.length, 0);
+});
+
+test('appendTurn tracks two separate token counters', async () => {
+  const client = fakeClient(() => ({ Attributes: { messages: [] } }));
+
+  await appendTurn(
+    { sub: 'u', threadId: 't', userMessage: { text: 'a' }, inputTokens: 1500 },
+    { docClient: client }
+  );
+
+  const expr = client.calls[0].UpdateExpression;
+
+  // cumulativeInputTokens … 要約の間隔を測る（要約のたびに 0 へ戻る）
+  // sessionInputTokens    … Mantle 側の文脈量を測る（鎖を切るまで積み上がる）
+  assert.ok(expr.includes('ADD cumulativeInputTokens :tokens'));
+  assert.ok(expr.includes('sessionInputTokens :tokens'));
+  assert.equal(client.calls[0].ExpressionAttributeValues[':tokens'], 1500);
 });

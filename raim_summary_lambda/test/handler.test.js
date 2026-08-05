@@ -67,7 +67,7 @@ test('toSummaryHistory tolerates missing messages', () => {
 
 // ── summarizeThread ─────────────────────────
 
-test('summarizeThread saves summary and resets session', async () => {
+test('summarizeThread saves the summary without cutting the Mantle chain', async () => {
   const saved = [];
   const reset = [];
 
@@ -75,32 +75,60 @@ test('summarizeThread saves summary and resets session', async () => {
     { sub: 'user-1', threadId: 'thread-1' },
     {
       env: ENV,
-      getThread: async () => makeThread(),
+      // まだ文脈は小さい
+      getThread: async () => makeThread({ sessionInputTokens: 9000 }),
       generateSummary: async () => ({ summary: '【事実】\n- テスト', usage: null }),
       saveThreadSummary: async (sub, tid, s) => { saved.push({ sub, tid, s }); },
       resetThreadSession: async (sub, tid) => { reset.push({ sub, tid }); },
+      updateTitleFromSummary: async () => {},
     }
   );
 
   assert.equal(result.ok, true);
   assert.equal(saved.length, 1);
-  assert.equal(reset.length, 1);   // 既定でセッションリセット
+
+  // 30日以内は Mantle が完全な会話を持っているので鎖は切らない
+  assert.equal(reset.length, 0);
 });
 
-test('summarizeThread can skip session reset', async () => {
+test('summarizeThread cuts the chain once the context grows large', async () => {
   const reset = [];
+
+  await summarizeThread(
+    { sub: 'user-1', threadId: 'thread-1' },
+    {
+      env: { ...ENV, SUMMARY_RESET_TOKEN_THRESHOLD: '150000' },
+      // 256K に近づいてきた状態
+      getThread: async () => makeThread({ sessionInputTokens: 151000 }),
+      generateSummary: async () => ({ summary: 'x', usage: null }),
+      saveThreadSummary: async () => {},
+      resetThreadSession: async (sub, tid) => { reset.push({ sub, tid }); },
+      updateTitleFromSummary: async () => {},
+    }
+  );
+
+  assert.equal(reset.length, 1);
+});
+
+test('summarizeThread never cuts the chain when reset is disabled', async () => {
+  const reset = [];
+
   await summarizeThread(
     { sub: 'user-1', threadId: 'thread-1' },
     {
       env: { ...ENV, SUMMARY_RESET_SESSION: 'false' },
-      getThread: async () => makeThread(),
+      // 閾値を超えていても切らない
+      getThread: async () => makeThread({ sessionInputTokens: 999999 }),
       generateSummary: async () => ({ summary: 'x', usage: null }),
       saveThreadSummary: async () => {},
       resetThreadSession: async () => { reset.push(1); },
+      updateTitleFromSummary: async () => {},
     }
   );
+
   assert.equal(reset.length, 0);
 });
+
 
 test('summarizeThread reports missing thread', async () => {
   const result = await summarizeThread(

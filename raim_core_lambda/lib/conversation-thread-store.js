@@ -131,6 +131,9 @@ async function ensureThread({ sub, threadId, title }, deps = {}) {
         'lastResponseId = if_not_exists(lastResponseId, :empty)',
         'lastResponseCreatedAt = if_not_exists(lastResponseCreatedAt, :empty)',
         'cumulativeInputTokens = if_not_exists(cumulativeInputTokens, :zero)',
+        // Mantle のセッションを開始してからの累積。
+        // 要約ではリセットされず、鎖を切ったときだけ 0 に戻る。
+        'sessionInputTokens = if_not_exists(sessionInputTokens, :zero)',
         'turnCount = if_not_exists(turnCount, :zero)',
         'updatedAt = :now',
       ].join(', '),
@@ -290,7 +293,10 @@ async function appendTurn(
 
   // ADD はアトミックな加算。読み取り不要で並行更新にも強い。
   const updateExpression =
-    `SET ${setParts.join(', ')} ADD cumulativeInputTokens :tokens, turnCount :one`;
+    `SET ${setParts.join(', ')} ` +
+    // cumulativeInputTokens は要約のたびに 0 へ戻る（要約の間隔を測る）。
+    // sessionInputTokens は鎖を切るまで積み上がる（Mantle 側の文脈量を測る）。
+    'ADD cumulativeInputTokens :tokens, sessionInputTokens :tokens, turnCount :one';
 
   values[':tokens'] = Number(inputTokens) || 0;
   values[':one'] = 1;

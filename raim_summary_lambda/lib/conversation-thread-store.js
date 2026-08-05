@@ -104,7 +104,7 @@ async function listThreads(sub, options = {}, deps = {}) {
   if (!options.includeMessages) {
     params.ProjectionExpression =
       '#sub, threadId, title, sessionSummary, lastResponseId, ' +
-      'lastResponseCreatedAt, cumulativeInputTokens, turnCount, createdAt, updatedAt';
+      'lastResponseCreatedAt, cumulativeInputTokens, sessionInputTokens, turnCount, createdAt, updatedAt';
   }
 
   const items = [];
@@ -245,9 +245,11 @@ async function resetThreadSession(sub, threadId, deps = {}) {
       UpdateExpression: [
         'SET lastResponseId = :empty',
         'lastResponseCreatedAt = :empty',
+        // 鎖を切ったので Mantle 側の文脈もゼロから積み直しになる
+        'sessionInputTokens = :zero',
         'updatedAt = :now',
       ].join(', '),
-      ExpressionAttributeValues: { ':empty': '', ':now': now },
+      ExpressionAttributeValues: { ':empty': '', ':zero': 0, ':now': now },
       ReturnValues: 'ALL_NEW',
     })
   );

@@ -277,6 +277,26 @@ function buildFewShotMessages(scene) {
  * この場合、Mantleは過去の会話状態を参照できないため、
  * DynamoDBに保存済みの sessionSummary を固定プロンプトと一緒に渡す。
  */
+/**
+ * スレッドを跨いだユーザー記憶をMantleへ渡すテキストにする。
+ *
+ * sessionSummary が「このスレッドで何を話したか」なのに対し、
+ * userMemory は「この人はどんな人か」。別スレッドで得た情報を
+ * 持ち込むためのもので、週次バッチが各スレッドの要約から作る。
+ */
+function buildUserMemoryContext(userMemory) {
+  if (!hasText(userMemory)) {
+    return '';
+  }
+
+  return [
+    '【ユーザーについて覚えていること】',
+    '過去の会話から分かっていること。今回の話題と関係なければ無理に持ち出さない。',
+    '',
+    String(userMemory).trim(),
+  ].join('\n');
+}
+
 function buildSessionSummaryContext(sessionSummary) {
   if (!hasText(sessionSummary)) {
     return [
@@ -380,6 +400,7 @@ function buildInitialMantleInput({
   userText,
   images = [],
   sessionSummary = '',
+  userMemory = '',
   scene = null,
   withTools = false,
 }) {
@@ -397,6 +418,10 @@ function buildInitialMantleInput({
     role: 'system',
     content: [
       systemPrompt,
+      '',
+      '---',
+      '',
+      buildUserMemoryContext(userMemory),
       '',
       '---',
       '',
@@ -544,11 +569,14 @@ function buildMantleInput({
   userText,
   images = [],
   sessionSummary = '',
+  userMemory = '',
   scene = null,
   usePreviousResponseId = false,
   withTools = false,
 }) {
   if (usePreviousResponseId) {
+    // 継続モードでは Mantle 側が文脈を保持しているため、
+    // 要約や記憶を毎回送り直す必要はない。
     return buildFollowupMantleInput({
       userText,
       images,
@@ -560,6 +588,7 @@ function buildMantleInput({
     userText,
     images,
     sessionSummary,
+    userMemory,
     scene,
     withTools,
   });
@@ -593,6 +622,7 @@ module.exports = {
   buildSceneContext,
   buildFewShotMessages,
   buildSessionSummaryContext,
+  buildUserMemoryContext,
   buildUserContent,
   buildUserMessage,
   buildInitialMantleInput,

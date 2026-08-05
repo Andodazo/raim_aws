@@ -63,11 +63,45 @@ function weeklyLimit(env) {
   return Number(env.SUMMARY_WEEKLY_LIMIT || 50);
 }
 
-function shouldResetSession(env) {
-  // 要約後に lastResponseId をクリアして初回モードへ戻すか。
-  // 初回モードでは人格全文 + few-shot + 要約が送られるため、
-  // 履歴の積み上がりがリセットされつつ文脈は引き継がれる。
+function isSessionResetAllowed(env) {
+  // 鎖を切る機能そのものの ON/OFF。false にすると絶対に切らない。
   return String(env.SUMMARY_RESET_SESSION || 'true').trim().toLowerCase() === 'true';
+}
+
+/**
+ * Mantle のセッションを切る判断をする。
+ *
+ * 【要約の頻度と切る頻度を分ける理由】
+ *
+ * 30日以内なら previous_response_id で Mantle が完全な会話を持っている。
+ * わざわざ鎖を切って圧縮版（要約）へ置き換えると、細部が落ちるだけで得がない。
+ *
+ * 一方で永久に切らないと Gemma 4 の 256K に到達する。
+ *
+ * そこで
+ *   要約 … 5〜6往復ごと（タイトルと userMemory を新鮮に保つ）
+ *   切る … 文脈が大きくなったときだけ
+ * と分ける。
+ *
+ * 判定には sessionInputTokens を使う。
+ * cumulativeInputTokens は要約のたびに 0 へ戻るため、
+ * Mantle 側にどれだけ積み上がっているかを測れない。
+ *
+ * 既定 150000 の根拠: 1往復あたり約1500トークン送るので約100往復。
+ * 応答分を足しても 256K に対して十分な余裕が残る。
+ */
+function shouldResetSession(thread, env) {
+  if (!isSessionResetAllowed(env)) {
+    return false;
+  }
+
+  const threshold = Number(env.SUMMARY_RESET_TOKEN_THRESHOLD || 150000);
+  if (!Number.isFinite(threshold) || threshold <= 0) {
+    return false;
+  }
+
+  const used = Number(thread?.sessionInputTokens) || 0;
+  return used >= threshold;
 }
 
 // ─────────────────────────────────────────────
@@ -115,8 +149,12 @@ async function summarizeThread({ sub, threadId }, deps = {}) {
   // 要約は既に生成済みなので、ここでの LLM 呼び出しは発生しない。
   await (deps.updateTitleFromSummary || updateTitleFromSummary)(sub, threadId, summary);
 
-  if (shouldResetSession(env)) {
+  if (shouldResetSession(thread, env)) {
     await (deps.resetThreadSession || resetThreadSession)(sub, threadId);
+    console.log(
+      `[Summary] session reset: sub=${sub} threadId=${threadId} ` +
+      `sessionInputTokens=${thread.sessionInputTokens || 0}`
+    );
   }
 
   console.log(

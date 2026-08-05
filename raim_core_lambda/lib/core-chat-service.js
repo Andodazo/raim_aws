@@ -265,7 +265,12 @@ function createCoreChatService(dependencyOverrides = {}) {
     let mantleInput = dependencies.buildMantleInput({
       userText: input.text,
       images: input.images,
-      sessionSummary: session.sessionSummary || '',
+      // 要約はスレッド単位（ConversationThread.sessionSummary）に保存される。
+      // UserSession 側の sessionSummary は使われないため、ここで参照すると
+      // 常に空になり、圧縮でセッションをリセットした直後に文脈が失われる。
+      sessionSummary: threadContext.thread?.sessionSummary || '',
+      // スレッドを跨いだ記憶。別スレッドで話した内容をライムが覚えている状態にする。
+      userMemory: session.userMemory || '',
       scene: selectedScene,
       usePreviousResponseId: sessionState.usePreviousResponseId,
       withTools: toolsEnabled,
@@ -330,7 +335,9 @@ function createCoreChatService(dependencyOverrides = {}) {
         const rebuiltInput = dependencies.buildMantleInput({
           userText: input.text,
           images: input.images,
-          sessionSummary: session.sessionSummary || '',
+          // 要約はスレッド単位に保存される（§ 上のコメント参照）
+          sessionSummary: threadContext.thread?.sessionSummary || '',
+          userMemory: session.userMemory || '',
           scene: selectedScene,
           usePreviousResponseId: false,
           withTools: toolsEnabled,
