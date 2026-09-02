@@ -12,7 +12,9 @@
 //
 // 出口:
 //   Core LambdaがResponse Queueへ流した `stream.start` / `stream.delta` /
+//   `stream.bubble_break` / `stream.tool` /
 //   `stream.completed` / `stream.error` を受け取り、WebSocket接続へpostする。
+//   stream.audioはTTS連携時の将来イベントとしてclient-message.jsが対応する。
 //
 // つまり、このファイルはイベントの種類を見分け、実処理を専用Handlerへ振り分ける。
 

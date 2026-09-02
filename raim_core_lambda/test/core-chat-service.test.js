@@ -36,6 +36,16 @@ function createDependencies(calls) {
       emotion: 'happy',
       intensity: 0.6,
     }),
+    // 案A: 会話履歴の自前保存。テストでは AWS を叩かないようスタブ化する。
+    resolveThread: async () => ({
+      threadId: 'thread-test',
+      thread: null,
+      isNew: false,
+    }),
+    ensureThreadTitle: async () => {},
+    appendTurn: async () => ({}),
+    shouldSummarize: () => ({ shouldSummarize: false, reason: null }),
+    dispatchSummarization: async () => true,
     updateMantleResponseState: async (sub, state) => {
       calls.push(['save', sub, state]);
     },
@@ -56,6 +66,11 @@ test('Core chat service runs the existing conversation flow and returns a Core r
     ok: true,
     type: 'chat',
     text: 'やあ',
+    threadId: 'thread-test',
+    // v13: emotions Map + overall_intensity が付与される。
+    // 後方互換の emotion / intensity も引き続き返る。
+    emotions: { happy: 1 },
+    overall_intensity: 0.6,
     emotion: 'happy',
     intensity: 0.6,
     requestId: 'req-1',
@@ -171,4 +186,245 @@ test('Core chat service forwards Mantle text deltas to the caller in order', asy
   });
 
   assert.deepEqual(receivedDeltas, ['こん', 'にちは']);
+});
+
+test('Core chat service records the turn into the conversation thread', async () => {
+  const appended = [];
+
+  const service = createCoreChatService({
+    getOrCreateUserSession: async () => ({ sub: 'user-1' }),
+    getMantleSessionState: () => ({ canUsePreviousResponse: false, previousResponseId: '' }),
+    listSceneCandidates: async () => [],
+    selectScene: async () => ({ sceneId: 'default', similarity: 1 }),
+    getSceneById: async () => ({ id: 'default', few_shots: [] }),
+    buildMantleInput: () => ({ mode: 'initial', messages: [] }),
+    createMantleResponse: async () => ({
+      responseId: 'resp-1',
+      rawText: '{"text":"あ、こんにちは","emotions":{"happy":1}}',
+      createdAt: '2026-07-30T00:00:00.000Z',
+      toolCalls: [],
+      usage: { input_tokens: 1800 },
+    }),
+    normalizeMantleOutput: () => ({
+      ok: true,
+      text: 'あ、こんにちは',
+      emotions: { happy: 1 },
+      overall_intensity: 0.6,
+      emotion: 'happy',
+      intensity: 0.6,
+    }),
+    updateMantleResponseState: async () => {},
+    resolveThread: async () => ({ threadId: 'thread-x', thread: { title: '新しい会話' }, isNew: true }),
+    ensureThreadTitle: async () => {},
+    appendTurn: async (params) => { appended.push(params); },
+  });
+
+  await service({
+    schemaVersion: 1,
+    type: 'chat.request',
+    sub: 'user-1',
+    requestId: 'req-1',
+    source: 'websocket',
+    text: 'こんにちは',
+    images: [],
+  });
+
+  assert.equal(appended.length, 1);
+  assert.equal(appended[0].threadId, 'thread-x');
+  assert.equal(appended[0].userMessage.text, 'こんにちは');
+  assert.equal(appended[0].assistantMessage.text, 'あ、こんにちは');
+  // 要約トリガー用のトークン累積も渡っている
+  assert.equal(appended[0].inputTokens, 1800);
+  assert.equal(appended[0].responseId, 'resp-1');
+});
+
+test('Core chat service still answers when thread persistence fails', async () => {
+  const service = createCoreChatService({
+    getOrCreateUserSession: async () => ({ sub: 'user-1' }),
+    getMantleSessionState: () => ({ canUsePreviousResponse: false, previousResponseId: '' }),
+    listSceneCandidates: async () => [],
+    selectScene: async () => ({ sceneId: 'default', similarity: 1 }),
+    getSceneById: async () => ({ id: 'default', few_shots: [] }),
+    buildMantleInput: () => ({ mode: 'initial', messages: [] }),
+    createMantleResponse: async () => ({
+      responseId: 'resp-1',
+      rawText: '{"text":"ok","emotions":{"happy":1}}',
+      createdAt: '2026-07-30T00:00:00.000Z',
+      toolCalls: [],
+    }),
+    normalizeMantleOutput: () => ({
+      ok: true, text: 'ok', emotions: { happy: 1 },
+      overall_intensity: 1, emotion: 'happy', intensity: 1,
+    }),
+    updateMantleResponseState: async () => {},
+    resolveThread: async () => ({ threadId: 't', thread: null, isNew: false }),
+    ensureThreadTitle: async () => {},
+    // 保存が落ちても応答は返す
+    appendTurn: async () => { throw new Error('DynamoDB down'); },
+  });
+
+  const result = await service({
+    schemaVersion: 1,
+    type: 'chat.request',
+    sub: 'user-1',
+    requestId: 'req-1',
+    source: 'websocket',
+    text: 'こんにちは',
+    images: [],
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.text, 'ok');
+});
+
+test('Core chat service dispatches a summary request when the thread grows', async () => {
+  const dispatched = [];
+
+  const service = createCoreChatService({
+    getOrCreateUserSession: async () => ({ sub: 'user-1' }),
+    getMantleSessionState: () => ({ canUsePreviousResponse: false, previousResponseId: '' }),
+    listSceneCandidates: async () => [],
+    selectScene: async () => ({ sceneId: 'default', similarity: 1 }),
+    getSceneById: async () => ({ id: 'default', few_shots: [] }),
+    buildMantleInput: () => ({ mode: 'initial', messages: [] }),
+    createMantleResponse: async () => ({
+      responseId: 'resp-1',
+      rawText: '{"text":"ok","emotions":{"happy":1}}',
+      createdAt: '2026-07-30T00:00:00.000Z',
+      toolCalls: [],
+      usage: { input_tokens: 1800 },
+    }),
+    normalizeMantleOutput: () => ({
+      ok: true, text: 'ok', emotions: { happy: 1 },
+      overall_intensity: 1, emotion: 'happy', intensity: 1,
+    }),
+    updateMantleResponseState: async () => {},
+    resolveThread: async () => ({ threadId: 'thread-x', thread: null, isNew: false }),
+    ensureThreadTitle: async () => {},
+    // 更新後のスレッドが閾値を超えている状態を返す
+    appendTurn: async () => ({ cumulativeInputTokens: 9000, turnCount: 5 }),
+    shouldSummarize: (thread) => ({
+      shouldSummarize: thread.cumulativeInputTokens >= 8000,
+      reason: 'token_threshold',
+    }),
+    dispatchSummarization: async (params) => { dispatched.push(params); return true; },
+  });
+
+  await service({
+    schemaVersion: 1,
+    type: 'chat.request',
+    sub: 'user-1',
+    requestId: 'req-1',
+    source: 'websocket',
+    text: 'こんにちは',
+    images: [],
+  });
+
+  assert.equal(dispatched.length, 1);
+  assert.equal(dispatched[0].threadId, 'thread-x');
+  assert.equal(dispatched[0].reason, 'token_threshold');
+});
+
+test('Core chat service does not dispatch below the threshold', async () => {
+  const dispatched = [];
+
+  const service = createCoreChatService({
+    getOrCreateUserSession: async () => ({ sub: 'user-1' }),
+    getMantleSessionState: () => ({ canUsePreviousResponse: false, previousResponseId: '' }),
+    listSceneCandidates: async () => [],
+    selectScene: async () => ({ sceneId: 'default', similarity: 1 }),
+    getSceneById: async () => ({ id: 'default', few_shots: [] }),
+    buildMantleInput: () => ({ mode: 'initial', messages: [] }),
+    createMantleResponse: async () => ({
+      responseId: 'resp-1',
+      rawText: '{"text":"ok","emotions":{"happy":1}}',
+      createdAt: '2026-07-30T00:00:00.000Z',
+      toolCalls: [],
+      usage: { input_tokens: 500 },
+    }),
+    normalizeMantleOutput: () => ({
+      ok: true, text: 'ok', emotions: { happy: 1 },
+      overall_intensity: 1, emotion: 'happy', intensity: 1,
+    }),
+    updateMantleResponseState: async () => {},
+    resolveThread: async () => ({ threadId: 't', thread: null, isNew: false }),
+    ensureThreadTitle: async () => {},
+    appendTurn: async () => ({ cumulativeInputTokens: 500, turnCount: 1 }),
+    shouldSummarize: () => ({ shouldSummarize: false, reason: null }),
+    dispatchSummarization: async (params) => { dispatched.push(params); return true; },
+  });
+
+  await service({
+    schemaVersion: 1,
+    type: 'chat.request',
+    sub: 'user-1',
+    requestId: 'req-1',
+    source: 'websocket',
+    text: 'こんにちは',
+    images: [],
+  });
+
+  assert.equal(dispatched.length, 0);
+});
+
+test('Core chat service feeds the thread summary into the prompt, not the user session', async () => {
+  // 要約はスレッド単位に保存される。UserSession 側を見ていると常に空になり、
+  // 圧縮でセッションをリセットした直後に文脈が丸ごと失われる
+  let captured;
+
+  const service = createCoreChatService({
+    getOrCreateUserSession: async () => ({
+      sub: 'user-1',
+      sessionSummary: '',              // UserSession 側は空
+      userMemory: '【事実】\n- タピオカが好き',
+    }),
+    getMantleSessionState: () => ({
+      // 圧縮でリセットされた直後を想定（初回モードへ落ちる）
+      canUsePreviousResponse: false,
+      usePreviousResponseId: false,
+      previousResponseId: '',
+    }),
+    listSceneCandidates: async () => [],
+    selectScene: async () => ({ sceneId: 'default', similarity: 1 }),
+    getSceneById: async () => ({ id: 'default', few_shots: [] }),
+    buildMantleInput: (params) => {
+      captured = params;
+      return { mode: 'initial', messages: [] };
+    },
+    createMantleResponse: async () => ({
+      responseId: 'resp-1',
+      rawText: '{"text":"ok","emotions":{"happy":1}}',
+      createdAt: '2026-08-04T00:00:00.000Z',
+      toolCalls: [],
+    }),
+    normalizeMantleOutput: () => ({
+      ok: true, text: 'ok', emotions: { happy: 1 },
+      overall_intensity: 1, emotion: 'happy', intensity: 1,
+    }),
+    updateMantleResponseState: async () => {},
+    resolveThread: async () => ({
+      threadId: 'thread-x',
+      thread: { sessionSummary: '【事実】\n- ユーザーは東京にいる' },
+      isNew: false,
+    }),
+    ensureThreadTitle: async () => {},
+    appendTurn: async () => ({}),
+    shouldSummarize: () => ({ shouldSummarize: false, reason: null }),
+    dispatchSummarization: async () => true,
+  });
+
+  await service({
+    schemaVersion: 1,
+    type: 'chat.request',
+    sub: 'user-1',
+    requestId: 'req-1',
+    source: 'websocket',
+    text: '気温ってどんなもん？',
+    images: [],
+  });
+
+  // スレッドの要約が渡る
+  assert.match(captured.sessionSummary, /東京にいる/);
+  // スレッドを跨いだ記憶も渡る
+  assert.match(captured.userMemory, /タピオカ/);
 });

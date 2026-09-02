@@ -66,6 +66,8 @@ function createResponseQueuePublisher({
   let textChunkIndex = 0;
   let textBuffer = '';
   let audioDeliveryChain = Promise.resolve();
+  // v14: tool intro を送ったら true。本文の最初のdeltaで bubble_break を発火して false に戻す。
+  let bubbleBreakPending = false;
   const messageGroupId = requestId.length <= 128
     ? requestId
     : crypto.createHash('sha256').update(requestId).digest('hex');
@@ -215,6 +217,8 @@ function createResponseQueuePublisher({
     let chunk;
 
     while ((chunk = takeNextTextChunk(force)) !== null) {
+      // ツールの前置きセリフと本文を別吹き出しにする。
+      await maybeSendBubbleBreak();
       lastMessage = await publishTextChunk(chunk);
       force = false;
     }
@@ -222,8 +226,19 @@ function createResponseQueuePublisher({
     return lastMessage;
   }
 
+  // v14: tool intro 送信後にtrueになり、本文開始時にfalseへ戻る。
+  async function maybeSendBubbleBreak() {
+    if (!bubbleBreakPending) {
+      return null;
+    }
+    bubbleBreakPending = false;
+    return send('stream.bubble_break');
+  }
+
   return {
     start() {
+      // threadId はこの時点では未確定（resolveThread は handleCoreChat の中で走る）。
+      // クライアントへは stream.completed で返す。
       return send('stream.start');
     },
 
@@ -244,11 +259,52 @@ function createResponseQueuePublisher({
 
     async completed(result) {
       await flushText(true);
+      // 本文がdeltaで一度も流れなかった場合でも、introの後に区切りを入れる。
+      await maybeSendBubbleBreak();
       await audioDeliveryChain;
       return send('stream.completed', {
         text: result.text,
+        // 会話スレッドの識別子。クライアントはこれを保持し、次回の送信で送り返す。
+        // 新規作成された場合も採番結果がここで分かる。
+        threadId: result.threadId || '',
+        // v13: Unity BlendShape 用の比率Mapと全体強度。
+        // 重み = emotions[key] × overall_intensity
+        emotions: result.emotions,
+        overall_intensity: result.overall_intensity,
+        // 後方互換: 旧Flutter/Unity実装はこの2つだけ見ていても動く。
         emotion: result.emotion,
         intensity: result.intensity,
+      });
+    },
+
+    // ─────────────────────────────────────────────
+    // ツール呼出の通知
+    // ─────────────────────────────────────────────
+    //
+    // Gemmaはツール呼出時に本文を返せないため、
+    // 「調べるね」に相当する発話はサーバー側の固定セリフを送る。
+    //
+    //   1. stream.delta   前置きセリフ（ライムの発話としてUIに出す）
+    //   2. stream.tool    ツール実行中であることの通知（UIのローディング表示用）
+    //
+    // 前置きセリフを通常のtextとして流すことで、
+    // クライアントは特別な処理をしなくても発話として表示できる。
+    async toolCall({ toolName, description, introText, estimatedSeconds = 3 }) {
+      if (introText) {
+        // バッファを経由せず即時に送る。ツール実行の待ち時間より先に届かせたい。
+        await flushText();
+        await send('stream.delta', {
+          textDelta: introText,
+          isFiller: true,
+        });
+        // v14: introを送ったので、本文開始時にbubble_breakを挟む。
+        bubbleBreakPending = true;
+      }
+
+      return send('stream.tool', {
+        tool: toolName,
+        description,
+        estimatedSeconds,
       });
     },
 

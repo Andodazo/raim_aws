@@ -358,7 +358,8 @@ async function askUserText() {
  *
  * --executeで接続直後にRAiM形式のJSONを1件送り、--waitで指定した時間だけ
  * 接続を維持する。Edge Lambdaでクライアント向けに変換された
- * metadata / text_chunk / chat_end / error は、wscatの標準出力へ到着順に表示される。
+ * metadata / text_chunk / audio_chunk / bubble_break / tool_call /
+ * chat_end / error は、wscatの標準出力へ到着順に表示される。
  */
 async function runWscat({ accessToken, endpoint, text, waitSeconds }) {
   const wscatCli = resolveWscatCli();

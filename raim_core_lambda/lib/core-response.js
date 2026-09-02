@@ -37,13 +37,22 @@ function removeInternalFields(value) {
  * Mantle出力をEdge Lambda向けの正常レスポンスへ変換する。
  * createChat()を通すため、emotion/intensityの基本的な型・範囲も統一される。
  */
-function createCoreChat({ requestId, text, emotion, intensity }) {
-  const chat = removeInternalFields(createChat({ text, emotion, intensity }));
+function createCoreChat({ requestId, threadId, text, emotion, intensity, emotions, overallIntensity }) {
+  const chat = removeInternalFields(createChat({
+    text,
+    emotion,
+    intensity,
+    emotions,
+    overallIntensity,
+  }));
 
   return {
     ok: true,
     ...chat,
     requestId: String(requestId || ''),
+    // クライアントが「今どのスレッドにいるか」を知るために返す。
+    // 新規作成された場合もこれで採番結果が分かる。
+    threadId: String(threadId || ''),
   };
 }
 

@@ -93,6 +93,11 @@ function createSqsCoreHandler(dependencyOverrides = {}) {
 
       // Mantleのraw JSON deltaからtext値だけを抽出し、Response Queueへ順次送る。
       const result = await dependencies.handleCoreChat(input, {
+        // ツール呼出時に前置きセリフとtool通知をResponse Queueへ流す。
+        // Core Lambdaの既定実装は何もしないので、SQS経路でだけ有効になる。
+        onToolCallStart: async ({ toolName, description, introText }) => {
+          await publisher.toolCall({ toolName, description, introText });
+        },
         fallbackRequestId: record.messageId,
         onMantleTextDelta: (delta) => extractor.push(delta),
         onSceneSelected: async (scene) => {

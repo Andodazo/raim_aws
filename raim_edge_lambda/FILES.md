@@ -39,7 +39,8 @@ raim_edge_lambda/
     ├── index.test.js                 ← WebSocket/SQSイベント判定のテスト
     ├── response-queue-handler.test.js ← Response QueueからWebSocket返信までのテスト
     ├── websocket-event.test.js       ← WebSocketイベント正規化のテスト
-    └── websocket-handler.test.js     ← $connect/$disconnect/$default処理のテスト
+    ├── websocket-handler.test.js     ← $connect/$disconnect/$default処理のテスト
+    └── websocket-postback.test.js    ← WebSocket送信サイズ制限のテスト
 ```
 
 まず全体を把握するなら、`index.js` → `lib/websocket-handler.js` → `lib/request-queue-publisher.js` → `lib/response-queue-handler.js` の順に読むと流れを追いやすいです。
@@ -113,6 +114,7 @@ Edge Lambdaの各ファイルの役割を把握するための引き継ぎ資料
 - `CONNECTION_TABLE_NAME`
 - `WEBSOCKET_API_ENDPOINT`
 - `CONNECTION_TTL_SECONDS`
+- `MAX_WEBSOCKET_MESSAGE_BYTES`
 
 ### `lib/websocket-event.js`
 
@@ -200,8 +202,13 @@ Core Lambda内部のstreamイベントを、クライアントへ送りやすい
 - `stream.start`
 - `stream.delta`
 - `stream.audio`
+- `stream.bubble_break`
+- `stream.tool`
 - `stream.completed`
 - `stream.error`
+
+`stream.audio` はTTS連携時にCore Lambdaから送信される音声イベントです。
+Edge側では受信した音声パーツをクライアント向けの `audio_chunk` に変換します。
 
 変換後にWebSocketへ送るクライアント向けイベント:
 
@@ -210,11 +217,30 @@ Core Lambda内部のstreamイベントを、クライアントへ送りやすい
 | `stream.start` | `metadata` | 応答開始と感情メタ情報を伝える |
 | `stream.delta` | `text_chunk` | 画面へ追記する本文断片を伝える |
 | `stream.audio` | `audio_chunk` | 対応するWAV音声のBase64。分割時はpart情報を含む |
+| `stream.bubble_break` | `bubble_break` | 表示上の吹き出し区切りを伝える |
+| `stream.tool` | `tool_call` | ツール実行中のローディング表示に使う情報を伝える |
 | `stream.completed` | `chat_end` | 最終本文と最終感情を伝える |
 | `stream.error` | `error` | エラー内容と再試行可否を伝える |
 
 `stream.audio`は`audio_chunk`へ変換されます。クライアントは`chunk_id`ごとに
-`part_index`順でBase64を連結してWAVを再構成してください。`tool_call`は未対応です。
+`part_index`順でBase64を連結してWAVを再構成してください。
+
+`audio_chunk` はCore/TTS側がResponse Queueへ送る `stream.audio` を変換して送ります。
+Edge LambdaではBase64音声の分割・結合は行わず、届いたパーツをそのまま中継します。
+
+`tool_call` は、Core LambdaがResponse Queueへ送った `stream.tool` を変換して送ります。
+実際のTool Lambda呼び出し自体はCore Lambda側の責務で、Edge Lambdaは表示用イベントを中継するだけです。
+
+Core Lambdaの `stream.tool` は `tool`、`description`、`estimatedSeconds`（camelCase）を
+送ります。Edge Lambdaはクライアント向けに `estimated_seconds`（snake_case）へ変換します。
+Coreから `isFiller` または `is_filler` が届いた場合も、現在のクライアント仕様では
+Edgeはそのフィールドをクライアント向けJSONへ含めません。
+待機中の表示は `tool_call`、吹き出しの区切りは `bubble_break` で表現します。
+CoreがchunkIdを送らない場合、EdgeがrequestIdとsequenceからchunk_idを補います。
+
+`session_start` と `proactive_message` はクライアント統合仕様上のイベントですが、
+現時点のEdge Lambdaではまだ生成しません。
+上流イベント設計が決まった段階で追加する想定です。
 
 `RAiM-CoreResponse-dev.fifo` は、LambdaのSQSトリガーとしてEdge Lambdaへ紐づけます。
 Edge Lambdaの環境変数にResponse Queue URLを設定する必要はありません。
@@ -247,6 +273,11 @@ Core Response QueueからWebSocket postまでの処理を確認します。
 ### `test/client-message.test.js`
 
 Coreのstreamイベントをクライアント向けJSONへ変換できることを確認します。
+
+### `test/websocket-postback.test.js`
+
+WebSocketへ送るJSONがサイズ上限を超えた場合に、
+非再試行エラーとして止められることを確認します。
 
 ## Core Lambdaとの接続点
 

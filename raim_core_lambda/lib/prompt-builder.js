@@ -37,6 +37,8 @@
 const {
   RAIM_SYSTEM_PROMPT_VERSION,
   RAIM_SYSTEM_PROMPT,
+  PERSONA_DIGEST,
+  buildSystemPrompt,
 } = require('./prompts/raim-system-prompt');
 
 // ─────────────────────────────────────────────
@@ -50,6 +52,23 @@ function toSafeString(value) {
 function hasText(value) {
   return toSafeString(value).trim().length > 0;
 }
+
+// ─────────────────────────────────────────────
+// 継続会話の人格再注入設定
+// ─────────────────────────────────────────────
+//
+// FOLLOWUP_PERSONA_MODE : 'digest'（既定）| 'full' | 'none'
+// FOLLOWUP_FEW_SHOT_COUNT : 継続会話へ入れるfew-shot組数（既定1、0で無効）
+//
+// どちらも環境変数なので、デプロイし直さずに口調を実測比較できる。
+
+const FOLLOWUP_PERSONA_MODE =
+  String(process.env.FOLLOWUP_PERSONA_MODE || 'digest').trim().toLowerCase();
+
+const FOLLOWUP_FEW_SHOT_COUNT = Math.max(
+  0,
+  Number(process.env.FOLLOWUP_FEW_SHOT_COUNT ?? 1)
+);
 
 function hasImages(images) {
   return Array.isArray(images) && images.length > 0;
@@ -205,21 +224,35 @@ function buildFewShotMessages(scene) {
       content: toSafeString(fs.user),
     });
 
+    // v13: Mantleへ要求する出力形式は emotions Map + overall_intensity。
+    // few-shotの応答例も同じ形式で見せないと、モデルが旧形式を真似てしまう。
+    //
+    // few_shots が emotions Map を持たない旧形式の場合は、
+    // 単一の emotion / intensity からMapを合成して形式を揃える。
+    const hasEmotions = Object.keys(emotions).length > 0;
+
+    const exampleEmotions = hasEmotions
+      ? emotions
+      : {
+          [pickPrimaryEmotion(emotions, toSafeString(fs.emotion || 'neutral'))]:
+            pickPrimaryIntensity(
+              emotions,
+              typeof fs.intensity === 'number' ? fs.intensity : 0.5
+            ),
+        };
+
+    // overall_intensity が明示されていない場合は、
+    // 感情強度の合計（最大1.0）を全体強度の目安として使う。
+    const exampleOverall = typeof fs.overall_intensity === 'number'
+      ? Math.max(0, Math.min(1, fs.overall_intensity))
+      : Math.max(0, Math.min(1, Object.values(exampleEmotions).reduce((a, b) => a + b, 0)));
+
     messages.push({
       role: 'assistant',
       content: JSON.stringify({
         text: toSafeString(fs.raim),
-        // 新形式のfew_shotsでは `emotions` Mapを持つ。
-        // Mantleの出力形式は単一emotion/intensityなので、最も強い感情を代表値として渡す。
-        // 旧形式の `emotion` / `intensity` も残っている場合はfallbackとして扱う。
-        emotion: pickPrimaryEmotion(emotions, toSafeString(fs.emotion || 'neutral')),
-        intensity: pickPrimaryIntensity(
-          emotions,
-          typeof fs.intensity === 'number' ? fs.intensity : 0.5
-        ),
-        // 複数感情の情報も失わないように残す。
-        // System promptでは単一emotion出力を要求しているため、これはあくまで参考情報。
-        emotions,
+        emotions: exampleEmotions,
+        overall_intensity: exampleOverall,
       }),
     });
   }
@@ -244,6 +277,26 @@ function buildFewShotMessages(scene) {
  * この場合、Mantleは過去の会話状態を参照できないため、
  * DynamoDBに保存済みの sessionSummary を固定プロンプトと一緒に渡す。
  */
+/**
+ * スレッドを跨いだユーザー記憶をMantleへ渡すテキストにする。
+ *
+ * sessionSummary が「このスレッドで何を話したか」なのに対し、
+ * userMemory は「この人はどんな人か」。別スレッドで得た情報を
+ * 持ち込むためのもので、週次バッチが各スレッドの要約から作る。
+ */
+function buildUserMemoryContext(userMemory) {
+  if (!hasText(userMemory)) {
+    return '';
+  }
+
+  return [
+    '【ユーザーについて覚えていること】',
+    '過去の会話から分かっていること。今回の話題と関係なければ無理に持ち出さない。',
+    '',
+    String(userMemory).trim(),
+  ].join('\n');
+}
+
 function buildSessionSummaryContext(sessionSummary) {
   if (!hasText(sessionSummary)) {
     return [
@@ -347,14 +400,28 @@ function buildInitialMantleInput({
   userText,
   images = [],
   sessionSummary = '',
+  userMemory = '',
   scene = null,
+  withTools = false,
 }) {
   const messages = [];
+
+  // ツール有効時はsystemプロンプトにツールの使い方と、
+  // ツール結果の扱い方（結果を無視して挨拶を始めない）を含める。
+  // 画像がある場合はimage_descriptionの指示も追加する。
+  const systemPrompt = buildSystemPrompt({
+    withTools,
+    hasImages: hasImages(images),
+  });
 
   messages.push({
     role: 'system',
     content: [
-      RAIM_SYSTEM_PROMPT,
+      systemPrompt,
+      '',
+      '---',
+      '',
+      buildUserMemoryContext(userMemory),
       '',
       '---',
       '',
@@ -407,8 +474,36 @@ function buildFollowupMantleInput({
   images = [],
   scene = null,
   includeSceneHint = true,
+  personaMode = FOLLOWUP_PERSONA_MODE,
+  fewShotCount = FOLLOWUP_FEW_SHOT_COUNT,
 }) {
   const messages = [];
+
+  // ─────────────────────────────────────────────
+  // 人格の再注入
+  // ─────────────────────────────────────────────
+  //
+  // previous_response_id があってもGemmaは人格から乖離するため、
+  // 継続会話でも人格を毎回送り直す。
+  //
+  // personaMode:
+  //   'digest' 口調・禁止事項・出力形式だけの圧縮版（約470文字、既定）
+  //   'full'   初回と同じ固定プロンプト全文（約2200文字）
+  //   'none'   送らない（当初の設計。人格が崩れるため非推奨）
+  //
+  // 環境変数 FOLLOWUP_PERSONA_MODE で切り替えられるので、
+  // デプロイし直さずに実測比較できる。
+  if (personaMode === 'full') {
+    messages.push({
+      role: 'system',
+      content: buildSystemPrompt({ hasImages: hasImages(images) }),
+    });
+  } else if (personaMode !== 'none') {
+    messages.push({
+      role: 'system',
+      content: PERSONA_DIGEST,
+    });
+  }
 
   if (includeSceneHint && scene) {
     messages.push({
@@ -424,6 +519,19 @@ function buildFollowupMantleInput({
         'ユーザーにScene名やembedding_textを説明する必要はありません。',
       ].join('\n'),
     });
+  }
+
+  // few-shotは口調のアンカーとして強力なので、継続会話でも少しだけ入れる。
+  // 全部入れると文脈が膨らむため、既定は1組だけ。
+  // FOLLOWUP_FEW_SHOT_COUNT=0 で無効にできる。
+  if (fewShotCount > 0 && scene) {
+    const limitedScene = {
+      ...scene,
+      few_shots: Array.isArray(scene.few_shots)
+        ? scene.few_shots.slice(0, fewShotCount)
+        : [],
+    };
+    messages.push(...buildFewShotMessages(limitedScene));
   }
 
   messages.push(
@@ -461,10 +569,14 @@ function buildMantleInput({
   userText,
   images = [],
   sessionSummary = '',
+  userMemory = '',
   scene = null,
   usePreviousResponseId = false,
+  withTools = false,
 }) {
   if (usePreviousResponseId) {
+    // 継続モードでは Mantle 側が文脈を保持しているため、
+    // 要約や記憶を毎回送り直す必要はない。
     return buildFollowupMantleInput({
       userText,
       images,
@@ -476,7 +588,9 @@ function buildMantleInput({
     userText,
     images,
     sessionSummary,
+    userMemory,
     scene,
+    withTools,
   });
 }
 
@@ -508,6 +622,7 @@ module.exports = {
   buildSceneContext,
   buildFewShotMessages,
   buildSessionSummaryContext,
+  buildUserMemoryContext,
   buildUserContent,
   buildUserMessage,
   buildInitialMantleInput,

@@ -38,6 +38,7 @@ MantleやTitanはEdge Lambdaでは呼びません。
 | `CONNECTION_TABLE_NAME` | `RAiM-WebSocketConnection-dev` | WebSocket connectionIdを保存するDynamoDBテーブル名 |
 | `WEBSOCKET_API_ENDPOINT` | `https://DUMMY_WEBSOCKET_API_ID.execute-api.ap-northeast-1.amazonaws.com/dev` | ApiGatewayManagementApiのendpoint |
 | `CONNECTION_TTL_SECONDS` | `86400` | 接続情報をDynamoDB TTLで掃除するまでの秒数 |
+| `MAX_WEBSOCKET_MESSAGE_BYTES` | `30720` | WebSocketへ1回で送るJSONの最大サイズ |
 
 `WEBSOCKET_API_ENDPOINT` は、WebSocket APIのInvoke URLです。
 
@@ -131,9 +132,15 @@ Core Lambdaが送る想定イベント:
 stream.start
 stream.delta
 stream.audio
+stream.bubble_break
+stream.tool
 stream.completed
 stream.error
 ```
+
+`stream.audio` はTTS連携時にCore Lambdaが送信する音声イベントです。
+`stream.bubble_break` はツール前置きと本文を分ける吹き出し区切り、`stream.tool` は
+ツール実行中の表示通知です。
 
 Response Queue内のイベント名はCore Lambda内部仕様として `stream.*` のまま維持します。
 Edge LambdaはWebSocketへ送信する直前に、クライアント統合仕様のイベント名へ変換します。
@@ -143,8 +150,16 @@ Edge LambdaはWebSocketへ送信する直前に、クライアント統合仕様
 | `stream.start` | `metadata` | 応答開始と感情メタ情報 |
 | `stream.delta` | `text_chunk` | 逐次表示する本文断片 |
 | `stream.audio` | `audio_chunk` | 対応するWAV音声。分割時はpart情報を含む |
+| `stream.bubble_break` | `bubble_break` | 表示上の吹き出し区切り |
+| `stream.tool` | `tool_call` | ツール実行中のローディング表示 |
 | `stream.completed` | `chat_end` | 最終本文と最終感情 |
 | `stream.error` | `error` | エラー通知 |
+
+Edge LambdaはBase64音声の分割・結合は行いません。将来Core/TTS側が分割して送った
+`stream.audio` の各パーツを、そのまま `audio_chunk` として中継します。
+Coreから `isFiller` または `is_filler` が届いても、Edgeはクライアント向けJSONへ含めません。
+待機中の表示は `tool_call`、吹き出しの区切りは `bubble_break` で表現します。
+WebSocket送信直前に `MAX_WEBSOCKET_MESSAGE_BYTES` を超えた場合は、再試行しても改善しないため非再試行エラーとして扱います。
 
 Edge LambdaはこのQueueをEvent Source Mappingで購読し、各イベントをWebSocketへpostします。
 

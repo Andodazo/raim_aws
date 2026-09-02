@@ -44,7 +44,6 @@ test('response queue handler posts client-facing text_chunk events to WebSocket'
     text: 'こんにちは',
     chunk_id: 'req-001_chunk_1',
     is_first: true,
-    is_filler: false,
   });
 });
 
@@ -115,4 +114,41 @@ test('response queue handler returns partial batch failures for retriable errors
       { itemIdentifier: 'msg-001' },
     ],
   });
+});
+
+test('response queue handler does not retry invalid audio events', async () => {
+  const posted = [];
+  const handler = createResponseQueueHandler({
+    postback: {
+      postJson: async (connectionId, payload) => {
+        posted.push({ connectionId, payload });
+        return { ok: true };
+      },
+    },
+    connectionStore: {
+      deleteConnection: async () => {},
+    },
+    logger: {
+      error: () => {},
+    },
+  });
+
+  const result = await handler({
+    Records: [
+      {
+        messageId: 'msg-001',
+        body: JSON.stringify({
+          type: 'stream.audio',
+          requestId: 'req-001',
+          connectionId: 'conn-001',
+          sequence: 1,
+          chunkId: '',
+          audio: 'AAAA',
+        }),
+      },
+    ],
+  });
+
+  assert.deepEqual(result, { batchItemFailures: [] });
+  assert.deepEqual(posted, []);
 });

@@ -65,6 +65,50 @@ function normalizeImages(images) {
   return images;
 }
 
+/**
+ * クライアントが指定した threadId を検証する。
+ *
+ * DynamoDB のソートキーになるため、想定外の値は未指定扱いにする。
+ * 未指定なら Core 側で activeThreadId が使われるか、新規スレッドが作られる。
+ */
+function normalizeThreadId(value) {
+  if (typeof value !== 'string') {
+    return '';
+  }
+
+  const trimmed = value.trim();
+
+  if (!trimmed || trimmed.length > 128) {
+    return '';
+  }
+
+  return trimmed;
+}
+
+/**
+ * クライアント要求の種別を取り出す。
+ *
+ * 従来のチャット送信は type を持たないため、未指定は 'chat' 扱いにする。
+ * これにより既存クライアントの送信形式を壊さずに新しい要求を足せる。
+ */
+/**
+ * 履歴を遡る位置を検証する。
+ *
+ * 負数や数値以外は未指定扱いにして、最新側から返す動作へ落とす。
+ */
+function normalizeBeforeIndex(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) {
+    return null;
+  }
+  return Math.floor(n);
+}
+
+function normalizeAction(value) {
+  const action = String(value || '').trim().toLowerCase();
+  return action || 'chat';
+}
+
 function normalizeWebSocketEvent(event, lambdaContext = {}) {
   const requestContext = event?.requestContext || {};
   const connectionId = String(requestContext.connectionId || '').trim();
@@ -88,8 +132,13 @@ function normalizeWebSocketEvent(event, lambdaContext = {}) {
 
   const text = String(payload.text || payload.message || '').trim();
   const images = normalizeImages(payload.images);
+  const action = normalizeAction(payload.type);
+  const threadId = normalizeThreadId(payload.threadId);
+  const beforeIndex = normalizeBeforeIndex(payload.beforeIndex);
 
-  if (routeKey === '$default' && !text && images.length === 0) {
+  // text/images が要るのはチャット送信のときだけ。
+  // thread.list のような読み取り要求は本文を持たない。
+  if (routeKey === '$default' && action === 'chat' && !text && images.length === 0) {
     throw new WebSocketEventError('text or images is required');
   }
 
@@ -100,14 +149,21 @@ function normalizeWebSocketEvent(event, lambdaContext = {}) {
     stage,
     sub,
     requestId,
+    action,
     text,
     images,
+    threadId,
+    // 履歴を遡る位置。null なら最新側から返す
+    beforeIndex,
     rawPayload: payload,
   };
 }
 
 module.exports = {
   WebSocketEventError,
+  normalizeThreadId,
+  normalizeAction,
+  normalizeBeforeIndex,
   normalizeWebSocketEvent,
   parseJsonBody,
   extractSub,

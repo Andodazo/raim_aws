@@ -84,6 +84,7 @@ test('$default publishes a chat request to Core request queue', async () => {
     sub: 'user-001',
     text: 'つまんないダジャレ言うぞ',
     images: [],
+    threadId: '',
   });
 });
 

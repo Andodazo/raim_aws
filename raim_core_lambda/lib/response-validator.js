@@ -254,11 +254,32 @@ function normalizeMantlePayload(parsed) {
     });
   }
 
-  const chat = createChat({
-    text: normalizeText(parsed.text),
-    emotion: normalizeEmotion(parsed.emotion),
-    intensity: normalizeIntensity(parsed.intensity),
-  });
+  // v13: Mantleには emotions Map + overall_intensity を返すよう指示している。
+  // ただしLLM出力は揺れるため、次の優先順位で受け取る。
+  //
+  //   1. emotions Map があればそれを使う（正規化は types.js が行う）
+  //   2. 無ければ旧形式の emotion + intensity から単一感情Mapを合成する
+  //
+  // これによりプロンプト更新前後のどちらの出力形式でも壊れない。
+  const hasEmotionsMap =
+    parsed.emotions &&
+    typeof parsed.emotions === 'object' &&
+    !Array.isArray(parsed.emotions) &&
+    Object.keys(parsed.emotions).length > 0;
+
+  const chat = hasEmotionsMap
+    ? createChat({
+        text: normalizeText(parsed.text),
+        emotions: parsed.emotions,
+        overallIntensity: typeof parsed.overall_intensity === 'number'
+          ? parsed.overall_intensity
+          : undefined,
+      })
+    : createChat({
+        text: normalizeText(parsed.text),
+        emotion: normalizeEmotion(parsed.emotion),
+        intensity: normalizeIntensity(parsed.intensity),
+      });
 
   // 画像が含まれる場合、Mantleが image_description を返す可能性がある。
   // これはクライアントへ表示するためではなく、将来の履歴保存用の内部情報。
@@ -317,6 +338,8 @@ function summarizeValidatedResponse(output) {
     isError: output.type === MESSAGE_TYPES.ERROR,
     emotion: output.emotion || '',
     intensity: typeof output.intensity === 'number' ? output.intensity : null,
+    emotions: output.emotions || null,
+    overallIntensity: typeof output.overall_intensity === 'number' ? output.overall_intensity : null,
     textLength: typeof output.text === 'string' ? output.text.length : 0,
     hasImageDescription: Boolean(output._imageDescription),
   };
