@@ -2,7 +2,7 @@
 
 このドキュメントは、`raim_core_lambda` 配下の各ファイルが何を担当しているかを整理したものです。
 
-Core Lambdaは、Edge Lambdaから渡されたユーザー入力を受け取り、DynamoDBの会話状態とFewShot Scene情報を参照しながら、Titan Text Embeddings V2でSceneを選択し、Bedrock Mantleへ会話生成を依頼します。SQS経由で呼ばれる場合は、生成中のテキストをResponse Queueへストリーミング通知します。
+Core Lambdaは、Edge Lambdaから渡されたユーザー入力を受け取り、DynamoDBの会話状態とFewShot Scene情報を参照しながら、Titan Text Embeddings V2でSceneを選択し、Bedrock Mantleへ会話生成を依頼します。SQS経由で呼ばれる場合は、生成中のテキストを文・チャンク単位でResponse Queueへ通知し、各チャンクのTTSを並列実行します。
 
 ## 目次
 
@@ -41,7 +41,9 @@ raim_core_lambda/
 │   ├── mantle-session-policy.js      ← previous_response_idを使えるか判定する
 │   ├── prompt-builder.js             ← Mantleへ渡すsystem/user/few-shotメッセージを作る
 │   ├── request-state-store.js        ← SQSリクエストの冪等性・処理状態をDynamoDBで管理する
-│   ├── response-queue-publisher.js   ← 生成中/完了/エラーイベントをResponse Queueへ送る
+│   ├── response-queue-publisher.js   ← テキスト/TTS/完了/エラーイベントをResponse Queueへ送る
+│   ├── tts-client.js                 ← TTS Lambdaをチャンク単位でInvokeする
+│   ├── voice-mapper.js               ← Sceneのdefault_emotionsから音声パラメータを作る
 │   ├── response-validator.js         ← MantleのJSON出力を検証し、emotion/intensityを補正する
 │   ├── scene-repository.js           ← FewShotテーブルからScene候補と選択後のScene詳細を取得する
 │   ├── scene-selector.js             ← ユーザー入力EmbeddingとtextCentroidを比較してsceneIdを選ぶ
@@ -457,6 +459,8 @@ Node.js Lambdaとして必要な依存パッケージとテストコマンドを
   - Response Queueへの送信に使用
 - `@aws-sdk/client-secrets-manager`
   - Mantle API KeyをSecrets Managerから取得するために使用
+- `@aws-sdk/client-lambda`
+  - 文・チャンクごとのTTS Lambda Invokeに使用
 
 テストは次で実行します。
 
@@ -706,11 +710,28 @@ Core LambdaからEdge Lambda側へ、SQS Response Queue経由でストリーミ�
 主な役割:
 
 - `stream.start` を送る
-- Mantle生成中のテキスト差分を `stream.delta` として送る
+- Mantle生成中のテキストを文・チャンク単位で `stream.delta` として送る
+- 各 `stream.delta` と同じ `chunkId` のTTSを非同期で開始する
+- TTS合成は並列、`stream.audio` の送信はチャンク順にする
+- 長いBase64音声を同じチャンクのpartへ分割する
 - 最終結果を `stream.completed` として送る
 - エラーを `stream.error` として送る
 - FIFO Queue向けにMessageGroupIdやDeduplicationIdを設定する
 - 小さすぎるdeltaをまとめて送る
+
+`stream.audio`はTTS Lambdaが返したWAV Base64を表します。`chunkId`で対応する
+`stream.delta`と紐づけ、`partIndex` / `partCount` / `isLast`で通信上の分割を表します。
+
+### `lib/tts-client.js` / `lib/voice-mapper.js`
+
+`tts-client.js`は`TTS_FUNCTION_NAME`で指定したTTS Lambdaへ、
+`schemaVersion=1`、`type=tts.synthesize`、`requestId`、`chunkId`、`text`、
+`voiceParams`を送ります。`voice-mapper.js`は`raim_serverside`の
+`voice-config.json`と同じ考え方で、Sceneの`default_emotions`からドミナント感情を
+選び、TTS Lambdaへ渡す話者・速度・音高・抑揚・音量を決めます。
+
+TTS Lambdaの失敗はテキストストリームを失敗扱いにせず、CloudWatch Logsへ記録して
+音声だけを省略します。
 
 WebSocketへ直接返さず、SQSを介してEdge Lambdaへ戻す構成に対応するためのファイルです。
 

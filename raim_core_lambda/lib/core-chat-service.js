@@ -88,6 +88,7 @@ function createCoreChatService(dependencyOverrides = {}) {
     fallbackRequestId,
     onMantleStreamEvent,
     onMantleTextDelta,
+    onSceneSelected,
   } = {}) {
     let input;
 
@@ -126,6 +127,12 @@ function createCoreChatService(dependencyOverrides = {}) {
     // prompt-builderが必要とする description / default_emotions / few_shots は、
     // 選ばれたSceneだけに絞ってGetItemする。
     const selectedScene = await dependencies.getSceneById(sceneSelection.sceneId);
+
+    // ストリーミングTTSは最終的なemotionが確定する前に開始するため、
+    // raim_serversideと同じく選択Sceneのdefault_emotionsを呼び出し側へ渡す。
+    if (typeof onSceneSelected === 'function') {
+      await onSceneSelected(selectedScene);
+    }
 
     // 4. 初回ならsystem prompt・要約・Few-shotを含める。
     // 継続時はprevious_response_idを使うため、今回の発話を中心に組み立てる。

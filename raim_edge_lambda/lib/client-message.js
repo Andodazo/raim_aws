@@ -10,6 +10,7 @@
 // Core Lambda / Response Queue側の内部イベント:
 //   stream.start
 //   stream.delta
+//   stream.audio
 //   stream.completed
 //   stream.error
 //
@@ -165,9 +166,29 @@ function toClientMessage(coreEvent) {
         ...base,
         type: 'text_chunk',
         text: String(coreEvent.textDelta || ''),
-        chunk_id: createChunkId(coreEvent),
+        chunk_id: String(coreEvent.chunkId || createChunkId(coreEvent)),
         is_first: coreEvent.sequence === 1,
         is_filler: false,
+      };
+
+    case 'stream.audio':
+      return {
+        ...base,
+        type: 'audio_chunk',
+        chunk_id: String(coreEvent.chunkId || createChunkId(coreEvent)),
+        format: String(coreEvent.format || 'wav'),
+        content_type: String(coreEvent.contentType || 'audio/wav'),
+        audio: String(coreEvent.audio || ''),
+        audio_byte_length: Number.isFinite(Number(coreEvent.audioByteLength))
+          ? Number(coreEvent.audioByteLength)
+          : undefined,
+        part_index: Number.isInteger(coreEvent.partIndex)
+          ? coreEvent.partIndex
+          : 0,
+        part_count: Number.isInteger(coreEvent.partCount)
+          ? coreEvent.partCount
+          : 1,
+        is_last: coreEvent.isLast !== false,
       };
 
     case 'stream.completed':

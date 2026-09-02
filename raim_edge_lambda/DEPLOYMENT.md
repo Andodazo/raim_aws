@@ -130,6 +130,7 @@ Core Lambdaが送る想定イベント:
 ```text
 stream.start
 stream.delta
+stream.audio
 stream.completed
 stream.error
 ```
@@ -141,6 +142,7 @@ Edge LambdaはWebSocketへ送信する直前に、クライアント統合仕様
 |---|---|---|
 | `stream.start` | `metadata` | 応答開始と感情メタ情報 |
 | `stream.delta` | `text_chunk` | 逐次表示する本文断片 |
+| `stream.audio` | `audio_chunk` | 対応するWAV音声。分割時はpart情報を含む |
 | `stream.completed` | `chat_end` | 最終本文と最終感情 |
 | `stream.error` | `error` | エラー通知 |
 

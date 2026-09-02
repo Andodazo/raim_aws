@@ -199,6 +199,7 @@ Core Lambda内部のstreamイベントを、クライアントへ送りやすい
 
 - `stream.start`
 - `stream.delta`
+- `stream.audio`
 - `stream.completed`
 - `stream.error`
 
@@ -208,12 +209,12 @@ Core Lambda内部のstreamイベントを、クライアントへ送りやすい
 |---|---|---|
 | `stream.start` | `metadata` | 応答開始と感情メタ情報を伝える |
 | `stream.delta` | `text_chunk` | 画面へ追記する本文断片を伝える |
+| `stream.audio` | `audio_chunk` | 対応するWAV音声のBase64。分割時はpart情報を含む |
 | `stream.completed` | `chat_end` | 最終本文と最終感情を伝える |
 | `stream.error` | `error` | エラー内容と再試行可否を伝える |
 
-`audio_chunk` と `tool_call` はクライアント統合仕様上のイベントですが、
-現時点のEdge Lambdaではまだ生成しません。
-TTS Lambda / Tool Lambdaを拡張実装する段階で追加する想定です。
+`stream.audio`は`audio_chunk`へ変換されます。クライアントは`chunk_id`ごとに
+`part_index`順でBase64を連結してWAVを再構成してください。`tool_call`は未対応です。
 
 `RAiM-CoreResponse-dev.fifo` は、LambdaのSQSトリガーとしてEdge Lambdaへ紐づけます。
 Edge Lambdaの環境変数にResponse Queue URLを設定する必要はありません。

@@ -20,6 +20,11 @@
       "Type": "String",
       "Default": "RAiM-ApiLambdaRole"
     },
+    "TtsLambdaFunctionName": {
+      "Type": "String",
+      "Default": "RAiM-TTS-Lambda-dev",
+      "Description": "TTS Lambda function name invoked for each streamed text chunk."
+    },
     "UserSessionTableName": {
       "Type": "String",
       "Default": "RAiM-UserSession-dev"
@@ -339,6 +344,21 @@
                 }
               ]
             }
+          },
+          {
+            "PolicyName": "RaimCoreTtsInvoke",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": "lambda:InvokeFunction",
+                  "Resource": {
+                    "Fn::Sub": "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${TtsLambdaFunctionName}"
+                  }
+                }
+              ]
+            }
           }
         ]
       }
@@ -370,6 +390,10 @@
             "REQUEST_STATE_TABLE_NAME": { "Ref": "RequestStateTableName" },
             "REQUEST_QUEUE_URL": { "Ref": "RequestQueue" },
             "RESPONSE_QUEUE_URL": { "Ref": "ResponseQueue" },
+            "TTS_FUNCTION_NAME": { "Ref": "TtsLambdaFunctionName" },
+            "RAIM_VOICE_PROFILE": "tsumugi_parametric",
+            "STREAM_CHUNK_MAX_CHARACTERS": "30",
+            "TTS_AUDIO_FRAGMENT_BASE64_CHARACTERS": "24000",
             "REQUEST_LEASE_SECONDS": { "Ref": "RequestLeaseSeconds" },
             "REQUEST_STATE_TTL_SECONDS": { "Ref": "RequestStateTtlSeconds" },
             "STREAM_CHUNK_MIN_CHARACTERS": { "Ref": "StreamChunkMinimumCharacters" },

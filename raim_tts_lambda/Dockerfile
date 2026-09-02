@@ -42,9 +42,9 @@ RUN cargo test
 FROM public.ecr.aws/lambda/provided:al2023 AS runtime
 
 COPY --from=voicevox /opt/voicevox ${LAMBDA_TASK_ROOT}/voicevox
-COPY --from=builder /build/target/release/raim-tts-lambda ${LAMBDA_TASK_ROOT}/bootstrap
+COPY --from=builder /build/target/release/raim-tts-lambda /var/runtime/bootstrap
 
-RUN chmod 755 ${LAMBDA_TASK_ROOT}/bootstrap
+RUN chmod 755 /var/runtime/bootstrap
 
 ENV MAX_TEXT_CHARS=200 \
     MAX_WAV_BYTES=4194304 \
