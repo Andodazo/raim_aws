@@ -10,13 +10,13 @@
 // Core Lambda / Response Queue側の内部イベント:
 //   stream.start
 //   stream.delta
+//   stream.audio
 //   stream.bubble_break
 //   stream.tool
 //   stream.completed
 //   stream.error
 //
-// stream.audio はTTS連携時に追加される将来イベントとして、下記の変換処理だけ
-// 先に用意している。現在のCore Lambdaはstream.audioを送信しない。
+// stream.audio はTTS連携時にCore Lambdaから送信されるイベント。
 //
 // クライアントへ送る外部イベント:
 //   metadata   : ストリーミング表示の開始と感情メタ情報
@@ -197,7 +197,9 @@ function createNonRetriableError(message) {
 function createAudioChunkMessage(coreEvent, base) {
   const chunkId = String(coreEvent.chunkId || '').trim();
   const format = String(coreEvent.format || 'wav').trim();
+  const contentType = String(coreEvent.contentType || '').trim();
   const audio = String(coreEvent.audio || '');
+  const audioByteLength = Number(coreEvent.audioByteLength);
   const partIndex = Number(coreEvent.partIndex ?? 0);
   const partCount = Number(coreEvent.partCount ?? 1);
 
@@ -228,10 +230,12 @@ function createAudioChunkMessage(coreEvent, base) {
     type: 'audio_chunk',
     chunk_id: chunkId,
     format,
+    ...(contentType ? { content_type: contentType } : {}),
     part_index: partIndex,
     part_count: partCount,
     is_first: partIndex === 0,
     is_last: partIndex === partCount - 1,
+    ...(Number.isFinite(audioByteLength) ? { audio_byte_length: audioByteLength } : {}),
     audio,
   };
 }
@@ -291,15 +295,8 @@ function toClientMessage(coreEvent) {
     case 'stream.audio':
       return createAudioChunkMessage(coreEvent, base);
 
-    case 'stream.bubble_break':
-      return {
-        ...base,
-        type: 'bubble_break',
-      };
-
     case 'stream.tool':
       return createToolCallMessage(coreEvent, base);
-
     case 'stream.completed':
       return {
         ...base,

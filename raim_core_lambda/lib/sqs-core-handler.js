@@ -21,6 +21,8 @@ const {
 } = require('./request-state-store');
 const { createResponseQueuePublisher } = require('./response-queue-publisher');
 const { StreamingChatJsonExtractor } = require('./streaming-chat-json-extractor');
+const { createTtsClient } = require('./tts-client');
+const { getVoiceParamsFromEmotions } = require('./voice-mapper');
 
 function isSqsEvent(event) {
   return Array.isArray(event?.Records) &&
@@ -35,6 +37,8 @@ function createSqsCoreHandler(dependencyOverrides = {}) {
     markRequestCompleted,
     markRequestFailed,
     createResponseQueuePublisher,
+    createTtsClient,
+    getVoiceParamsFromEmotions,
     ...dependencyOverrides,
   };
 
@@ -68,12 +72,18 @@ function createSqsCoreHandler(dependencyOverrides = {}) {
     let terminalEventPublished = false;
 
     try {
+      let voiceParams = dependencies.getVoiceParamsFromEmotions(null, 0.5);
+      const ttsClient = dependencies.createTtsClient();
+
       publisher = dependencies.createResponseQueuePublisher({
         requestId: input.requestId,
         connectionId: input.connectionId,
         sub: input.sub,
         source: input.source,
         attempt,
+      }, {
+        ttsClient,
+        getVoiceParams: () => voiceParams,
       });
       const extractor = new StreamingChatJsonExtractor({
         onText: (text) => publisher.appendText(text),
@@ -90,6 +100,12 @@ function createSqsCoreHandler(dependencyOverrides = {}) {
         },
         fallbackRequestId: record.messageId,
         onMantleTextDelta: (delta) => extractor.push(delta),
+        onSceneSelected: async (scene) => {
+          voiceParams = dependencies.getVoiceParamsFromEmotions(
+            scene?.default_emotions,
+            1.0
+          );
+        },
       });
 
       if (result.ok) {

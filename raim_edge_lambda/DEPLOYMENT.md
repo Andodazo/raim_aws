@@ -131,14 +131,16 @@ Core Lambdaが送る想定イベント:
 ```text
 stream.start
 stream.delta
+stream.audio
 stream.bubble_break
 stream.tool
 stream.completed
 stream.error
 ```
 
-`stream.audio` はTTS連携時に追加される将来イベントです。現在のCore Lambdaは送信しませんが、
-Edge Lambdaは受信時の `audio_chunk` 変換に対応しています。
+`stream.audio` はTTS連携時にCore Lambdaが送信する音声イベントです。
+`stream.bubble_break` はツール前置きと本文を分ける吹き出し区切り、`stream.tool` は
+ツール実行中の表示通知です。
 
 Response Queue内のイベント名はCore Lambda内部仕様として `stream.*` のまま維持します。
 Edge LambdaはWebSocketへ送信する直前に、クライアント統合仕様のイベント名へ変換します。
@@ -147,6 +149,7 @@ Edge LambdaはWebSocketへ送信する直前に、クライアント統合仕様
 |---|---|---|
 | `stream.start` | `metadata` | 応答開始と感情メタ情報 |
 | `stream.delta` | `text_chunk` | 逐次表示する本文断片 |
+| `stream.audio` | `audio_chunk` | 対応するWAV音声。分割時はpart情報を含む |
 | `stream.bubble_break` | `bubble_break` | 表示上の吹き出し区切り |
 | `stream.tool` | `tool_call` | ツール実行中のローディング表示 |
 | `stream.completed` | `chat_end` | 最終本文と最終感情 |

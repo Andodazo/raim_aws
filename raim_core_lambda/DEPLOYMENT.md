@@ -12,7 +12,8 @@ Edge Lambda
   -> Edge Lambda
 ```
 
-TTS Lambda、Tool Lambda、Backup Lambdaはこの実装範囲に含みません。
+TTS Lambdaは、Mantleのテキストを文・チャンク単位で音声化するために本経路から
+Invokeします。Tool Lambda、Backup Lambdaはこの実装範囲に含みません。
 
 ## 目次
 
@@ -119,6 +120,7 @@ Core Lambdaは`requestId`をFIFO MessageGroupIdとして、次の順序で送り
 ```text
 stream.start
 stream.delta (0回以上)
+stream.audio (0回以上。各text chunkに対応)
 stream.completed または stream.error
 ```
 
@@ -133,9 +135,14 @@ stream.completed または stream.error
   "sub": "cognito-user-sub",
   "sequence": 1,
   "attempt": 1,
-  "textDelta": "こんにちは"
+  "textDelta": "こんにちは。",
+  "chunkId": "req-001_chunk_0"
 }
 ```
+
+`stream.delta`の送信後、Core Lambdaは同じ`chunkId`でTTS Lambdaを非同期Invokeします。
+音声合成は並列に進めますが、Response Queueへ送る`stream.audio`はチャンク順を維持します。
+Base64音声が大きい場合は`partIndex`、`partCount`、`isLast`を付けて分割します。
 
 Edge Lambdaは`requestId + attempt + sequence`で重複を除去し、より大きいattemptを
 受け取った場合は古いattemptの後続を破棄してから、API Gateway Management

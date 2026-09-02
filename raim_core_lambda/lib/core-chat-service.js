@@ -196,6 +196,7 @@ function createCoreChatService(dependencyOverrides = {}) {
     fallbackRequestId,
     onMantleStreamEvent,
     onMantleTextDelta,
+    onSceneSelected,
     // SQS経路ではsqs-core-handlerが渡す。
     // Lambdaコンソールからの直接実行では未指定となり、既定の何もしない実装が使われる。
     onToolCallStart,
@@ -255,7 +256,11 @@ function createCoreChatService(dependencyOverrides = {}) {
     // prompt-builderが必要とする description / default_emotions / few_shots は、
     // 選ばれたSceneだけに絞ってGetItemする。
     const selectedScene = await dependencies.getSceneById(sceneSelection.sceneId);
-
+    // ストリーミングTTSは最終的なemotionが確定する前に開始するため、
+    // raim_serversideと同じく選択Sceneのdefault_emotionsを呼び出し側へ渡す。
+    if (typeof onSceneSelected === 'function') {
+      await onSceneSelected(selectedScene);
+    }
     // ツールを使えるか先に判定する。
     // systemプロンプトにツールの説明を入れるかどうかがここで決まる。
     const toolsEnabled = await dependencies.isToolUseEnabled();

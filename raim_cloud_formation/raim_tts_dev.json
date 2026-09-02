@@ -1,0 +1,102 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "RAiM TTS Lambda dev configuration record for a manually pushed ECR container image. CloudFormation deployment is not used.",
+  "Parameters": {
+    "TtsFunctionName": {
+      "Type": "String",
+      "Default": "RAiM-TTS-Lambda-dev"
+    },
+    "TtsRoleName": {
+      "Type": "String",
+      "Default": "RAiM-TTS-Lambda-Role-dev"
+    },
+    "TtsImageUri": {
+      "Type": "String",
+      "Default": "123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/raim-tts-lambda:dev",
+      "Description": "ECR image URI including tag. The image is built and pushed manually; CloudFormation deployment is not used."
+    }
+  },
+  "Resources": {
+    "TtsLambdaRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "RoleName": {
+          "Ref": "TtsRoleName"
+        },
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "ManagedPolicyArns": [
+          "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+        ]
+      }
+    },
+    "TtsLambdaFunctionConfiguration": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "FunctionName": {
+          "Ref": "TtsFunctionName"
+        },
+        "Description": "RAiM TTS Lambda container image using VOICEVOX Core.",
+        "PackageType": "Image",
+        "Architectures": [
+          "arm64"
+        ],
+        "MemorySize": 10240,
+        "Timeout": 120,
+        "Role": {
+          "Fn::GetAtt": [
+            "TtsLambdaRole",
+            "Arn"
+          ]
+        },
+        "Code": {
+          "ImageUri": {
+            "Ref": "TtsImageUri"
+          }
+        },
+        "ImageConfig": {
+          "Command": [
+            "bootstrap"
+          ]
+        },
+        "Environment": {
+          "Variables": {
+            "MAX_TEXT_CHARS": "200",
+            "MAX_WAV_BYTES": "4194304",
+            "VOICEVOX_CPU_THREADS": "6",
+            "OPEN_JTALK_DICT_DIR": "/var/task/voicevox/open_jtalk_dic_utf_8-1.11",
+            "LD_LIBRARY_PATH": "/var/task/voicevox/voicevox_core"
+          }
+        }
+      },
+      "Metadata": {
+        "DeploymentNote": "This resource records the intended Lambda configuration. Actual deployment is performed by building an ARM64 image, pushing it to ECR, and updating the Lambda image URI manually. X-Ray tracing is not used."
+      }
+    }
+  },
+  "Outputs": {
+    "TtsFunctionName": {
+      "Value": {
+        "Ref": "TtsLambdaFunctionConfiguration"
+      }
+    },
+    "TtsFunctionArn": {
+      "Value": {
+        "Fn::GetAtt": [
+          "TtsLambdaFunctionConfiguration",
+          "Arn"
+        ]
+      }
+    }
+  }
+}

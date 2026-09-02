@@ -1,0 +1,10 @@
+.git
+.gitignore
+.dockerignore
+dist
+cache
+test-events
+*.md
+*.ps1
+*.zip
+*.wav

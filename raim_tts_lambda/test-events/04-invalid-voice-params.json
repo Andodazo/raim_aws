@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "type": "tts.synthesize",
+  "requestId": "local-004",
+  "chunkId": "local-004_chunk_0",
+  "text": "こんにちは。",
+  "voiceParams": {
+    "speaker_id": 8,
+    "speedScale": 2.1
+  }
+}

@@ -201,13 +201,14 @@ Core Lambda内部のstreamイベントを、クライアントへ送りやすい
 
 - `stream.start`
 - `stream.delta`
+- `stream.audio`
 - `stream.bubble_break`
 - `stream.tool`
 - `stream.completed`
 - `stream.error`
 
-`stream.audio` はTTS連携時に追加される将来イベントとして、Edge側の変換処理だけ
-先に用意しています。現在のCore LambdaのResponse Queue Publisherは送信しません。
+`stream.audio` はTTS連携時にCore Lambdaから送信される音声イベントです。
+Edge側では受信した音声パーツをクライアント向けの `audio_chunk` に変換します。
 
 変換後にWebSocketへ送るクライアント向けイベント:
 
@@ -215,12 +216,16 @@ Core Lambda内部のstreamイベントを、クライアントへ送りやすい
 |---|---|---|
 | `stream.start` | `metadata` | 応答開始と感情メタ情報を伝える |
 | `stream.delta` | `text_chunk` | 画面へ追記する本文断片を伝える |
+| `stream.audio` | `audio_chunk` | 対応するWAV音声のBase64。分割時はpart情報を含む |
 | `stream.bubble_break` | `bubble_break` | 表示上の吹き出し区切りを伝える |
 | `stream.tool` | `tool_call` | ツール実行中のローディング表示に使う情報を伝える |
 | `stream.completed` | `chat_end` | 最終本文と最終感情を伝える |
 | `stream.error` | `error` | エラー内容と再試行可否を伝える |
 
-`audio_chunk` は、将来Core/TTS側がResponse Queueへ送る `stream.audio` を変換して送ります。
+`stream.audio`は`audio_chunk`へ変換されます。クライアントは`chunk_id`ごとに
+`part_index`順でBase64を連結してWAVを再構成してください。
+
+`audio_chunk` はCore/TTS側がResponse Queueへ送る `stream.audio` を変換して送ります。
 Edge LambdaではBase64音声の分割・結合は行わず、届いたパーツをそのまま中継します。
 
 `tool_call` は、Core LambdaがResponse Queueへ送った `stream.tool` を変換して送ります。

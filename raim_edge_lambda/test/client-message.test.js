@@ -195,6 +195,35 @@ test('toClientMessage maps stream.tool to client tool_call', () => {
   });
 });
 
+test('toClientMessage maps stream.audio to client audio_chunk with fragments', () => {
+  assert.deepEqual(toClientMessage({
+    type: 'stream.audio',
+    requestId: 'req-001',
+    sequence: 4,
+    chunkId: 'req-001_chunk_0',
+    format: 'wav',
+    contentType: 'audio/wav',
+    audio: 'AAAA',
+    audioByteLength: 45100,
+    partIndex: 1,
+    partCount: 2,
+    isLast: true,
+  }), {
+    type: 'audio_chunk',
+    requestId: 'req-001',
+    sequence: 4,
+    chunk_id: 'req-001_chunk_0',
+    format: 'wav',
+    content_type: 'audio/wav',
+    audio: 'AAAA',
+    audio_byte_length: 45100,
+    part_index: 1,
+    part_count: 2,
+    is_first: false,
+    is_last: true,
+  });
+});
+
 test('toClientMessage maps stream.completed to client chat_end', () => {
   assert.deepEqual(toClientMessage({
     type: 'stream.completed',

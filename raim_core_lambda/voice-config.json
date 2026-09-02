@@ -1,0 +1,21 @@
+{
+  "_comment": "RAiMのTTS音声プロファイル。raim_serversideのvoice-config.jsonに準拠。",
+  "active_profile": "tsumugi_parametric",
+  "profiles": {
+    "tsumugi_parametric": {
+      "description": "春日部つむぎ + パラメータ調整",
+      "speaker_name": "春日部つむぎ",
+      "default_speaker_id": 8,
+      "emotion_map": {
+        "neutral": { "speaker_id": 8, "speedScale": 1.0, "pitchScale": 0.0, "intonationScale": 1.0, "volumeScale": 1.0 },
+        "happy": { "speaker_id": 8, "speedScale": 1.10, "pitchScale": 0.03, "intonationScale": 1.2, "volumeScale": 1.0 },
+        "sad": { "speaker_id": 8, "speedScale": 0.90, "pitchScale": -0.03, "intonationScale": 0.7, "volumeScale": 0.9 },
+        "caring": { "speaker_id": 8, "speedScale": 0.95, "pitchScale": 0.0, "intonationScale": 0.9, "volumeScale": 1.0 },
+        "angry": { "speaker_id": 8, "speedScale": 1.05, "pitchScale": -0.03, "intonationScale": 1.3, "volumeScale": 1.1 },
+        "surprised": { "speaker_id": 8, "speedScale": 1.15, "pitchScale": 0.05, "intonationScale": 1.3, "volumeScale": 1.0 },
+        "embarrassed": { "speaker_id": 8, "speedScale": 1.05, "pitchScale": 0.02, "intonationScale": 1.1, "volumeScale": 0.95 },
+        "excited": { "speaker_id": 8, "speedScale": 1.20, "pitchScale": 0.05, "intonationScale": 1.4, "volumeScale": 1.05 }
+      }
+    }
+  }
+}
