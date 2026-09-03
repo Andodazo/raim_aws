@@ -44,6 +44,17 @@ const { handleSqsBatch, isSqsEvent } = require('./lib/sqs-core-handler');
 const { ERROR_CODES } = require('./lib/types');
 
 /**
+ * MantleやS3のエラー文に含まれる署名付きURLを、ログ・開発用detailsから除去する。
+ * 署名付きURLは短時間で失効するが、認証情報として扱い外部へ返さない。
+ */
+function redactSensitiveText(value) {
+  return String(value || '').replace(
+    /https:\/\/[^\s"'`<>]+[?&]X-Amz-[^\s"'`<>]*/gi,
+    '[redacted-presigned-url]'
+  );
+}
+
+/**
  * 外部接続エラーをクライアントが扱えるRAiMのエラーコードへ分類する。
  *
  * Mantle/TitanのSDKエラーをそのまま返すと、AWS固有の例外名や内部情報が
@@ -93,7 +104,12 @@ exports.handler = async (event, context) => {
   } catch (error) {
     // CloudWatch Logsには原因調査用の例外を残す。
     // クライアントへは下で分類した安全な文言だけを返す。
-    console.error('Unhandled Core Lambda error:', error);
+    console.error('Unhandled Core Lambda error:', {
+      name: error?.name,
+      code: error?.code,
+      message: redactSensitiveText(error?.message),
+      stack: redactSensitiveText(error?.stack),
+    });
     const classified = classifyCoreError(error);
 
     return createCoreError({
@@ -102,10 +118,11 @@ exports.handler = async (event, context) => {
       message: classified.message,
       retriable: classified.retriable,
       details: {
-        errorMessage: error.message,
+        errorMessage: redactSensitiveText(error.message),
       },
     });
   }
 };
 
 module.exports.classifyCoreError = classifyCoreError;
+module.exports.redactSensitiveText = redactSensitiveText;

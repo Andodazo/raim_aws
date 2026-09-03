@@ -43,18 +43,11 @@ test('detectImageContentType recognizes the supported image signatures', () => {
   assert.equal(detectImageContentType(Buffer.from('RIFFxxxxWEBP')), 'image/webp');
 });
 
-test('resolveImages validates the S3 object and returns a signed GET URL', async () => {
+test('resolveImages validates the S3 object and returns a Mantle-compatible S3 URI', async () => {
   const fake = createFakeS3();
   const resolveImages = createS3ImageResolver({
     client: fake.client,
     env: ENV,
-    signer: async (client, command, options) => {
-      assert.ok(client);
-      assert.equal(command.input.Bucket, ENV.IMAGE_BUCKET_NAME);
-      assert.equal(command.input.Key, 'temporary/users/user-1/request-1/image.png');
-      assert.equal(options.expiresIn, 300);
-      return 'https://signed.example/image.png';
-    },
   });
 
   const result = await resolveImages({
@@ -71,7 +64,7 @@ test('resolveImages validates the S3 object and returns a signed GET URL', async
     key: 'temporary/users/user-1/request-1/image.png',
     contentType: 'image/png',
     sizeBytes: 8,
-    imageUrl: 'https://signed.example/image.png',
+    s3Uri: 's3://raim-images-dev-123456789012/temporary/users/user-1/request-1/image.png',
   }]);
   assert.equal(fake.commands.length, 2);
   assert.equal(fake.commands[1].input.Range, 'bytes=0-63');
@@ -118,7 +111,6 @@ test('resolveImages enforces the total size using S3 ContentLength', async () =>
   const resolveImages = createS3ImageResolver({
     client: fake.client,
     env: ENV,
-    signer: async () => 'https://signed.example/image.png',
   });
 
   await assert.rejects(

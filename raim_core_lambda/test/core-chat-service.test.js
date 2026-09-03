@@ -96,7 +96,7 @@ test('Core chat service resolves S3 images before the existing response flow', a
       key: images[0].key,
       contentType: images[0].contentType,
       sizeBytes: 8,
-      imageUrl: 'https://signed.example/image.png',
+      s3Uri: 's3://bucket/temporary/users/user-1/request-1/image.png',
     }];
   };
   dependencies.buildMantleInput = (input) => {
@@ -124,7 +124,8 @@ test('Core chat service resolves S3 images before the existing response flow', a
   assert.ok(s3Index < sessionIndex);
   assert.ok(s3Index < buildIndex);
   assert.ok(s3Index < modelIndex);
-  assert.equal(calls[buildIndex][1].images[0].imageUrl, 'https://signed.example/image.png');
+  assert.equal(calls[buildIndex][1].images[0].s3Uri,
+    's3://bucket/temporary/users/user-1/request-1/image.png');
 });
 
 test('Core chat service returns INVALID_INPUT without calling dependencies', async () => {

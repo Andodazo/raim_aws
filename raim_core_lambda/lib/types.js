@@ -498,7 +498,7 @@ function normalizeLLMOutput(rawLLMOutput) {
  *
  * 画像が含まれる場合、Core Lambdaでは画像Embeddingを行わない。
  * 画像はS3参照形式を検証した後、s3-image-service.jsで実体を再検証し、
- * 署名付きGET URLへ変換してprompt-builderへ渡す。
+ * Mantle用S3 URIへ変換してprompt-builderへ渡す。
  *
  * ただし、以下はNG:
  * - bodyがオブジェクトではない

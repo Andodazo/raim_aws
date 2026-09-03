@@ -1,7 +1,7 @@
 'use strict';
 
 // ============================================================================
-// S3 image validation and signed GET URL generation
+// S3 image validation and Mantle S3 URI generation
 // ============================================================================
 
 const {
@@ -9,14 +9,12 @@ const {
   HeadObjectCommand,
   S3Client,
 } = require('@aws-sdk/client-s3');
-const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const {
   ERROR_CODES,
   getImageConstraints,
 } = require('./types');
 
 const TEMPORARY_PREFIX = 'temporary/users/';
-const DEFAULT_SIGNED_URL_EXPIRES_SECONDS = 300;
 
 const EXTENSION_CONTENT_TYPES = Object.freeze({
   jpg: 'image/jpeg',
@@ -158,13 +156,6 @@ function getBucketName(env = process.env) {
   return bucket;
 }
 
-function getSignedUrlExpiresIn(env = process.env) {
-  const value = Number(env.IMAGE_SIGNED_URL_EXPIRES_SECONDS || DEFAULT_SIGNED_URL_EXPIRES_SECONDS);
-  return Number.isSafeInteger(value) && value >= 1 && value <= 3600
-    ? value
-    : DEFAULT_SIGNED_URL_EXPIRES_SECONDS;
-}
-
 function s3Failure(error) {
   const statusCode = Number(error?.$metadata?.httpStatusCode || error?.statusCode || 0);
   const notFound = statusCode === 404 || error?.name === 'NotFound' || error?.name === 'NoSuchKey';
@@ -179,7 +170,7 @@ function s3Failure(error) {
   );
 }
 
-function createS3ImageResolver({ client, signer = getSignedUrl, env = process.env } = {}) {
+function createS3ImageResolver({ client, env = process.env } = {}) {
   const s3 = createS3Client({ client, env });
 
   return async function resolveImages({ images = [], sub, requestId }) {
@@ -252,25 +243,13 @@ function createS3ImageResolver({ client, signer = getSignedUrl, env = process.en
         );
       }
 
-      let imageUrl;
-      try {
-        imageUrl = await signer(
-          s3,
-          new GetObjectCommand({ Bucket: bucket, Key: key }),
-          { expiresIn: getSignedUrlExpiresIn(env) }
-        );
-      } catch (error) {
-        throw new S3ImageError(
-          'Signed image URL could not be generated',
-          { code: ERROR_CODES.INTERNAL_ERROR, retriable: true, details: { name: error?.name } }
-        );
-      }
-
       resolved.push({
         key,
         contentType: detectedContentType,
         sizeBytes: actualSize,
-        imageUrl,
+        // Mantleの画像入力はdata:またはs3://を受け付けるため、
+        // CoreのIAM権限で検証した同一オブジェクトのS3 URIを渡す。
+        s3Uri: `s3://${bucket}/${key}`,
       });
     }
 
@@ -281,7 +260,6 @@ function createS3ImageResolver({ client, signer = getSignedUrl, env = process.en
 const resolveS3Images = createS3ImageResolver();
 
 module.exports = {
-  DEFAULT_SIGNED_URL_EXPIRES_SECONDS,
   EXTENSION_CONTENT_TYPES,
   S3ImageError,
   TEMPORARY_PREFIX,
