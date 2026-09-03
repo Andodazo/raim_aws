@@ -7,7 +7,25 @@ const {
   buildSceneContext,
   buildFewShotMessages,
   buildFollowupMantleInput,
+  buildUserContent,
 } = require('../lib/prompt-builder');
+
+test('buildUserContent passes the signed S3 URL without creating a data URL', () => {
+  const content = buildUserContent({
+    userText: 'この画像を見て',
+    images: [{
+      key: 'temporary/users/user-1/request-1/image.png',
+      contentType: 'image/png',
+      sizeBytes: 8,
+      imageUrl: 'https://signed.example/image.png',
+    }],
+  });
+
+  assert.deepEqual(content, [
+    { type: 'input_text', text: 'この画像を見て' },
+    { type: 'input_image', image_url: 'https://signed.example/image.png' },
+  ]);
+});
 
 test('buildSceneContext includes new FewShot scene metadata', () => {
   const context = buildSceneContext({

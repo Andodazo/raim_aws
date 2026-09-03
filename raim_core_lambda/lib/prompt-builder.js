@@ -131,23 +131,25 @@ function pickPrimaryIntensity(emotions, fallbackIntensity = 0.5) {
 }
 
 /**
- * 画像をMantleへ渡しやすい data URL 形式に変換する。
+ * Coreで検証済みの署名付きGET URLをMantleへ渡す。
  *
- * validateUpstream() 側で、各画像は以下の形で検証済みの想定。
+ * s3-image-service.jsで、各画像は以下の形へ解決済みの想定。
  *
  * {
- *   data: "Base64文字列",
- *   media_type: "image/png"
+ *   key: "temporary/users/sub/request/image.png",
+ *   contentType: "image/png",
+ *   sizeBytes: 1234,
+ *   imageUrl: "https://..."
  * }
  *
- * ここでは画像Embeddingは行わない。
- * 画像はMantleへそのまま渡すため、data URL に整形する。
- *
- * 例:
- * data:image/png;base64,iVBORw0KGgo...
+ * 署名付きURLはレスポンスやログへ返さない。
  */
-function toImageDataUrl(image) {
-  return `data:${image.media_type};base64,${image.data}`;
+function toImageUrl(image) {
+  if (!image || typeof image.imageUrl !== 'string' || image.imageUrl.length === 0) {
+    throw new Error('Resolved image URL is missing');
+  }
+
+  return image.imageUrl;
 }
 
 // ─────────────────────────────────────────────
@@ -327,7 +329,7 @@ function buildSessionSummaryContext(sessionSummary) {
  * 画像あり:
  *   content: [
  *     { type: "input_text", text: "この画像を見て" },
- *     { type: "input_image", image_url: "data:image/png;base64,..." }
+ *     { type: "input_image", image_url: "https://signed-get-url..." }
  *   ]
  *
  * 実際のMantle APIが要求する細部の形式は mantle-client.js 側で調整できるようにする。
@@ -358,7 +360,7 @@ function buildUserContent({ userText, images = [] }) {
   for (const image of imageList) {
     content.push({
       type: 'input_image',
-      image_url: toImageDataUrl(image),
+      image_url: toImageUrl(image),
     });
   }
 
@@ -601,7 +603,7 @@ function buildMantleInput({
 /**
  * prompt inputの概要をdebug用に整形する。
  *
- * messagesの全文や画像Base64をレスポンスへ返すと大きすぎるため、
+ * messagesの全文や署名付きURLをレスポンスへ返すと大きすぎるため、
  * 件数やモードだけを返す。
  */
 function summarizeMantleInput(input) {

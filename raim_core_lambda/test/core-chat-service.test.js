@@ -87,6 +87,46 @@ test('Core chat service runs the existing conversation flow and returns a Core r
   ]);
 });
 
+test('Core chat service resolves S3 images before the existing response flow', async () => {
+  const calls = [];
+  const dependencies = createDependencies(calls);
+  dependencies.resolveImages = async ({ images, sub, requestId }) => {
+    calls.push(['s3', sub, requestId, images]);
+    return [{
+      key: images[0].key,
+      contentType: images[0].contentType,
+      sizeBytes: 8,
+      imageUrl: 'https://signed.example/image.png',
+    }];
+  };
+  dependencies.buildMantleInput = (input) => {
+    calls.push(['build', input]);
+    return input;
+  };
+
+  await createCoreChatService(dependencies)({
+    sub: 'user-1',
+    requestId: 'request-1',
+    text: '画像を見て',
+    images: [{
+      key: 'temporary/users/user-1/request-1/image.png',
+      contentType: 'image/png',
+      sizeBytes: 8,
+    }],
+  });
+
+  const s3Index = calls.findIndex(([name]) => name === 's3');
+  const sessionIndex = calls.findIndex(([name]) => name === 'session');
+  const buildIndex = calls.findIndex(([name]) => name === 'build');
+  const modelIndex = calls.findIndex(([name]) => name === 'model');
+
+  assert.ok(s3Index >= 0);
+  assert.ok(s3Index < sessionIndex);
+  assert.ok(s3Index < buildIndex);
+  assert.ok(s3Index < modelIndex);
+  assert.equal(calls[buildIndex][1].images[0].imageUrl, 'https://signed.example/image.png');
+});
+
 test('Core chat service returns INVALID_INPUT without calling dependencies', async () => {
   const calls = [];
   const handleCoreChat = createCoreChatService(createDependencies(calls));

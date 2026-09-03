@@ -110,10 +110,15 @@ test('normalizeCoreEvent rejects unsupported request type', () => {
 test('normalizeCoreEvent permits an image-only message', () => {
   const result = normalizeCoreEvent({
     sub: 'user-1',
-    images: [{ media_type: 'image/png', data: 'AAAA' }],
+    requestId: 'request-1',
+    images: [{
+      key: 'temporary/users/user-1/request-1/image.png',
+      contentType: 'image/png',
+      sizeBytes: 4,
+    }],
   }, { fallbackRequestId: 'aws-request-1' });
 
-  assert.equal(result.requestId, 'aws-request-1');
+  assert.equal(result.requestId, 'request-1');
   assert.equal(result.text, '');
   assert.equal(result.images.length, 1);
 });
