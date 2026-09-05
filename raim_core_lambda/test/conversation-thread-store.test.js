@@ -162,7 +162,8 @@ test('appendTurn accumulates tokens and turn count atomically', async () => {
   );
 
   const input = client.calls[0];
-  assert.ok(input.UpdateExpression.includes('ADD cumulativeInputTokens :tokens'));
+  assert.ok(input.UpdateExpression.includes('sessionInputTokens = :tokens'));
+  assert.ok(input.UpdateExpression.includes('ADD turnCount :one'));
   assert.ok(input.UpdateExpression.includes('turnCount :one'));
   assert.equal(input.ExpressionAttributeValues[':tokens'], 1800);
   assert.equal(input.ExpressionAttributeValues[':one'], 1);
@@ -277,9 +278,11 @@ test('appendTurn tracks two separate token counters', async () => {
 
   const expr = client.calls[0].UpdateExpression;
 
-  // cumulativeInputTokens … 要約の間隔を測る（要約のたびに 0 へ戻る）
-  // sessionInputTokens    … Mantle 側の文脈量を測る（鎖を切るまで積み上がる）
-  assert.ok(expr.includes('ADD cumulativeInputTokens :tokens'));
-  assert.ok(expr.includes('sessionInputTokens :tokens'));
+  // sessionInputTokens は「今の文脈サイズ」。usage.input_tokens が
+  // 履歴込みの累計を返すため、加算ではなく代入する。
+  // 要約の間隔は summarizedAtInputTokens との差で測る。
+  assert.ok(expr.includes('sessionInputTokens = :tokens'));
+  assert.ok(!expr.includes('ADD cumulativeInputTokens'));
+  assert.ok(expr.includes('ADD turnCount :one'));
   assert.equal(client.calls[0].ExpressionAttributeValues[':tokens'], 1500);
 });

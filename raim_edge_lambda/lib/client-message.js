@@ -243,18 +243,15 @@ function createAudioChunkMessage(coreEvent, base) {
 function createToolCallMessage(coreEvent, base) {
   const tool = String(coreEvent.tool || '').trim();
   const description = String(coreEvent.description || '').trim();
-  const estimatedSeconds = toFiniteNumber(
-    coreEvent.estimatedSeconds ?? coreEvent.estimated_seconds
-  );
 
+  // estimated_seconds は送っていた側が実測値を入れておらず（常に 3）、
+  // 受け取る側も一度も参照していなかったため削除した。
+  // 所要時間を出す必要が生じたら、そのとき実測値と表示の両方を用意する。
   return {
     ...base,
     type: 'tool_call',
     tool,
     description,
-    estimated_seconds: estimatedSeconds === null
-      ? 3
-      : Math.max(0, estimatedSeconds),
   };
 }
 

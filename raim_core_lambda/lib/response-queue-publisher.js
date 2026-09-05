@@ -58,9 +58,15 @@ function createResponseQueuePublisher({
     minimumChunkCharacters,
     Number(env.STREAM_CHUNK_MAX_CHARACTERS || 30)
   );
+  // TTS の再試行回数。0 にすると再試行しない。
+  const audioRetryCount = Math.max(0, Number(env.TTS_RETRY_COUNT ?? 1));
+
+  // Base64 を文字数で切るため、4の倍数でないと各パートが単独でデコードできない。
+  // クライアントはパートごとに base64Decode するので、端数があると
+  // FormatException になり音声が無言で消える。ここで必ず丸める。
   const audioFragmentBase64Characters = Math.max(
     4,
-    Number(env.TTS_AUDIO_FRAGMENT_BASE64_CHARACTERS || 24000)
+    Math.floor(Number(env.TTS_AUDIO_FRAGMENT_BASE64_CHARACTERS || 24000) / 4) * 4
   );
   let sequence = 0;
   let textChunkIndex = 0;
@@ -145,12 +151,11 @@ function createResponseQueuePublisher({
     return null;
   }
 
-  function enqueueAudio({ chunkId, text }) {
-    if (!ttsClient || !text.trim()) {
-      return;
-    }
-
-    const ttsPromise = Promise.resolve()
+  /**
+   * TTS を1回呼ぶ。
+   */
+  function synthesizeOnce(chunkId, text) {
+    return Promise.resolve()
       .then(() => ttsClient.synthesize({
         requestId,
         chunkId,
@@ -158,18 +163,70 @@ function createResponseQueuePublisher({
         voiceParams: getVoiceParams() || undefined,
       }))
       .catch((error) => ({ error }));
+  }
+
+  /**
+   * 失敗が再試行可能なら、もう1度だけ合成し直す。
+   *
+   * TTS Lambda は is_retriable() で AUDIO_QUERY_FAILED / SYNTHESIS_FAILED /
+   * MODEL_LOAD_FAILED を retriable として返し、tts-client も
+   * error.retriable に載せて渡している。にもかかわらず呼び出し側が
+   * 見ずに捨てていたため、1文まるごと無音になることがあった。
+   */
+  async function synthesizeWithRetry(chunkId, text) {
+    const first = await synthesizeOnce(chunkId, text);
+
+    if (!isTtsFailure(first)) {
+      return first;
+    }
+
+    const error = first.error || {};
+
+    if (!error.retriable || audioRetryCount <= 0) {
+      return first;
+    }
+
+    console.warn('TTS failed; retrying once:', {
+      requestId,
+      chunkId,
+      code: error.code,
+    });
+
+    const second = await synthesizeOnce(chunkId, text);
+
+    if (!isTtsFailure(second)) {
+      console.log(`[TTS] retry succeeded: chunkId=${chunkId}`);
+    }
+
+    return second;
+  }
+
+  function isTtsFailure(result) {
+    return Boolean(result?.error) || result?.ok === false;
+  }
+
+  function enqueueAudio({ chunkId, text }) {
+    if (!ttsClient || !text.trim()) {
+      return;
+    }
+
+    const ttsPromise = synthesizeWithRetry(chunkId, text);
 
     // 合成はenqueue時点で並列開始し、送信だけをenqueue順に直列化する。
     audioDeliveryChain = audioDeliveryChain.then(async () => {
       const result = await ttsPromise;
 
-      if (result?.error || result?.ok === false) {
+      if (isTtsFailure(result)) {
         const error = result.error || new Error(result.message || 'TTS failed');
         console.warn('TTS failed; continuing text stream:', {
           requestId,
           chunkId,
           code: error.code,
           message: error.message,
+          // 何を喋らせようとして失敗したかを追えるようにする。
+          // 本文そのものは残さず、長さと先頭1文字だけにする。
+          textLength: text.length,
+          textHead: text.slice(0, 1),
         });
         return;
       }
@@ -289,14 +346,24 @@ function createResponseQueuePublisher({
     //
     // 前置きセリフを通常のtextとして流すことで、
     // クライアントは特別な処理をしなくても発話として表示できる。
-    async toolCall({ toolName, description, introText, estimatedSeconds = 3 }) {
+    async toolCall({ toolName, description, introText }) {
       if (introText) {
         // バッファを経由せず即時に送る。ツール実行の待ち時間より先に届かせたい。
         await flushText();
+
+        // 前置きも本文と同じように chunkId を採番して TTS に回す。
+        // 以前は send するだけで enqueueAudio を呼んでおらず、
+        // 「調べるね」に相当するセリフだけ音声が鳴らなかった。
+        // 待ち時間を埋めるための発話なので、ここが無音だと役割を果たさない。
+        const chunkId = nextChunkId();
+
         await send('stream.delta', {
           textDelta: introText,
+          chunkId,
           isFiller: true,
         });
+        enqueueAudio({ chunkId, text: introText });
+
         // v14: introを送ったので、本文開始時にbubble_breakを挟む。
         bubbleBreakPending = true;
       }
@@ -304,7 +371,6 @@ function createResponseQueuePublisher({
       return send('stream.tool', {
         tool: toolName,
         description,
-        estimatedSeconds,
       });
     },
 

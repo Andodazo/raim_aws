@@ -250,8 +250,11 @@ function createWebSocketHandler({
         }),
         // ユーザー単位で順序を保つ
         MessageGroupId: sub,
-        // 短時間に複数削除しても再生成は1回で足りる（5分の重複排除）
-        MessageDeduplicationId: `memory-refresh:${sub}`,
+        // 削除ごとに一意にする。
+        // 以前は `memory-refresh:${sub}` 固定だったため、5分以内に
+        // 2つ目のスレッドを削除すると2回目の依頼が重複排除で捨てられ、
+        // 消したはずの内容が userMemory に残っていた。
+        MessageDeduplicationId: `memory-refresh:${sub}:${Date.now()}`,
       })
     );
 

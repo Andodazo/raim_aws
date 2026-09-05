@@ -351,18 +351,12 @@ function createFiller({ text, emotion = EMOTIONS.NEUTRAL, intensity = 0.5 }) {
   };
 }
 
-function createToolCall({ tool, description, estimatedSeconds }) {
-  const msg = {
+function createToolCall({ tool, description }) {
+  return {
     type: MESSAGE_TYPES.TOOL_CALL,
     tool: String(tool),
     description: String(description),
   };
-
-  if (typeof estimatedSeconds === 'number') {
-    msg.estimated_seconds = estimatedSeconds;
-  }
-
-  return msg;
 }
 
 function createProactive({ text, emotion = EMOTIONS.NEUTRAL, intensity = 0.5, trigger }) {
