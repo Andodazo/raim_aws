@@ -104,3 +104,21 @@ test('generateSummary returns empty for empty history', async () => {
   const result = await generateSummary({ history: [] }, { env: { MANTLE_MODEL: 'm' } });
   assert.equal(result.summary, '');
 });
+
+// 要約は system メッセージとして毎ターン注入され、セッションもまたぐ。
+// ユーザーの一言が「ライムはこうすべき」として永続化すると、
+// 人格プロンプトを上書きする経路になる。
+test('summary instruction forbids recording directives as facts', () => {
+  const messages = buildSummaryInput([], '', 'full');
+  const instruction = messages[0].content;
+
+  assert.match(instruction, /ライムへの指示や依頼/);
+  assert.match(instruction, /「ライムはこうすべき」という形では書かない/);
+});
+
+test('facts mode has the same guard', () => {
+  const messages = buildSummaryInput([], '', 'facts');
+  const instruction = messages[0].content;
+
+  assert.match(instruction, /「ライムはこうすべき」という形では書かない/);
+});

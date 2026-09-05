@@ -38,6 +38,10 @@ const {
   RAIM_SYSTEM_PROMPT_VERSION,
   RAIM_SYSTEM_PROMPT,
   PERSONA_DIGEST,
+  TOOLS_DIGEST,
+  SAFETY_RULE,
+  MULTIMODAL_APPENDIX,
+  getTimeContext,
   buildSystemPrompt,
 } = require('./prompts/raim-system-prompt');
 
@@ -476,6 +480,8 @@ function buildFollowupMantleInput({
   includeSceneHint = true,
   personaMode = FOLLOWUP_PERSONA_MODE,
   fewShotCount = FOLLOWUP_FEW_SHOT_COUNT,
+  withTools = false,
+  now = new Date(),
 }) {
   const messages = [];
 
@@ -502,6 +508,35 @@ function buildFollowupMantleInput({
     messages.push({
       role: 'system',
       content: PERSONA_DIGEST,
+    });
+  }
+
+  // personaMode が 'full' のときは buildSystemPrompt() が
+  // 以下をすべて含むので、二重に送らない。
+  if (personaMode !== 'full') {
+    // 継続会話では初回の system プロンプトが届かないため、
+    // 状況に依存するルールをここで補う。
+    //
+    // 以前はこれらが2ターン目以降に一切届いておらず、
+    //   - 今日が何月何日か分からないまま日付の話をする
+    //   - ツールのルールを知らないままツールを呼べる
+    //   - 画像が複数あっても image_description の書き方を知らない
+    // という状態だった。継続モードが実際に動き出すまで表面化しなかった。
+    const situational = [`【現在の状況】\n${getTimeContext(now)}`];
+
+    if (withTools) {
+      situational.push(TOOLS_DIGEST);
+    }
+
+    if (hasImages(images)) {
+      situational.push(MULTIMODAL_APPENDIX.trim());
+    }
+
+    situational.push(SAFETY_RULE.trim());
+
+    messages.push({
+      role: 'system',
+      content: situational.join('\n\n'),
     });
   }
 
@@ -581,6 +616,7 @@ function buildMantleInput({
       userText,
       images,
       scene,
+      withTools,
     });
   }
 
