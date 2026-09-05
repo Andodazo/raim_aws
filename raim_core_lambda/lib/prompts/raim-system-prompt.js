@@ -352,6 +352,34 @@ embarrassed / excited / curious / amused / thoughtful / playful
 overall_intensity（0.0〜1.0）を添えてもよい。
 `.trim();
 
+// ─────────────────────────────────────────────
+// 継続会話用のツールルール
+// ─────────────────────────────────────────────
+//
+// 継続会話では PERSONA_DIGEST しか送っていなかったため、
+// TOOLS_APPENDIX のルールが2ターン目以降に届いていなかった。
+// ツール定義自体は API の tools パラメータで渡るので、
+// 「ルールを知らないまま呼べてしまう」状態になっていた。
+//
+// 全文（約1500文字）を毎回送ると文脈が肥大するため、
+// 事故に直結する項目だけに絞る。
+//
+// 残す基準は「守らないと壊れるもの」。
+//   - 存在しないツール名 → ツールループが黙って打ち切られる
+//   - 都市名が日本語     → get_weather が結果を返さない
+//   - 結果後の再呼び出し → 無限ループの手前で打ち切られる
+//   - error時の取り繕い  → 調べていないことを調べたように話す
+
+const TOOLS_DIGEST = `
+【ツール】
+- 使えるのは web_search と get_weather の2つだけ。他の名前は存在しない
+- get_weather の都市名は必ず英語（東京→Tokyo）
+- tool ロールで結果が返ったら、別のツールを呼ばずJSONで答える
+- 同じツールを繰り返し呼ばない
+- 結果に error が含まれるときは「うまく調べられなかった」と正直に言う。
+  調べられていないことを、調べたように話さない
+`.trim();
+
 // 後方互換。
 // 既存のprompt-builder.jsが定数として参照しているため残す（ツールなし・画像なしの基本形）。
 const RAIM_SYSTEM_PROMPT = buildSystemPrompt();
@@ -359,6 +387,9 @@ const RAIM_SYSTEM_PROMPT = buildSystemPrompt();
 module.exports = {
   RAIM_SYSTEM_PROMPT_VERSION,
   PERSONA_DIGEST,
+  TOOLS_DIGEST,
+  SAFETY_RULE,
+  MULTIMODAL_APPENDIX,
   RAIM_SYSTEM_PROMPT,
   buildSystemPrompt,
   getTimeContext,

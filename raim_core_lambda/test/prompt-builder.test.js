@@ -184,3 +184,48 @@ test('followup few-shot can be disabled', () => {
 
   assert.equal(input.messages.filter((m) => m.role === 'assistant').length, 0);
 });
+
+// 継続会話では初回の system プロンプトが届かない。
+// 時刻・ツールルール・安全方針が2ターン目以降に欠落していたため、
+// ここで補っていることを固定する。
+test('followup includes the time context', () => {
+  const systemText = followupSystemText(buildFollowupMantleInput({
+    userText: 'おはよう',
+    now: new Date('2026-09-06T01:00:00Z'),
+  }));
+
+  assert.ok(systemText.includes('現在の状況'));
+  assert.ok(systemText.includes('2026年9月6日'));
+});
+
+test('followup includes tool rules only when tools are enabled', () => {
+  const withTools = followupSystemText(
+    buildFollowupMantleInput({ userText: '天気は？', withTools: true })
+  );
+  const withoutTools = followupSystemText(
+    buildFollowupMantleInput({ userText: 'おはよう', withTools: false })
+  );
+
+  assert.ok(withTools.includes('get_weather の都市名は必ず英語'));
+  assert.ok(withTools.includes('正直に言う'));
+  assert.ok(!withoutTools.includes('get_weather'));
+});
+
+test('followup includes the safety rule', () => {
+  const systemText = followupSystemText(
+    buildFollowupMantleInput({ userText: 'おはよう' })
+  );
+
+  assert.ok(systemText.includes('安全方針'));
+});
+
+// personaMode='full' は buildSystemPrompt() が全部含むので、二重に送らない
+test('followup persona mode "full" does not duplicate the situational rules', () => {
+  const systemText = followupSystemText(buildFollowupMantleInput({
+    userText: 'おはよう',
+    personaMode: 'full',
+    withTools: true,
+  }));
+
+  assert.equal(systemText.split('【安全方針】').length - 1, 1);
+});
