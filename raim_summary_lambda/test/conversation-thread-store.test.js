@@ -97,14 +97,14 @@ test('saveThreadSummary stores summary and resets counters', async () => {
 
   const input = client.calls[0];
   assert.ok(input.UpdateExpression.includes('sessionSummary = :summary'));
-  assert.ok(input.UpdateExpression.includes('cumulativeInputTokens = :zero'));
+  assert.ok(input.UpdateExpression.includes('summarizedAtInputTokens = if_not_exists(sessionInputTokens, :zero)'));
   assert.equal(input.ExpressionAttributeValues[':zero'], 0);
 });
 
 test('saveThreadSummary can keep counters', async () => {
   const client = fakeClient(() => ({ Attributes: {} }));
   await saveThreadSummary('u', 't', 'x', { resetCounters: false }, { docClient: client });
-  assert.ok(!client.calls[0].UpdateExpression.includes('cumulativeInputTokens'));
+  assert.ok(!client.calls[0].UpdateExpression.includes('summarizedAtInputTokens'));
 });
 
 test('saveThreadSummary refuses to overwrite with an empty summary', async () => {

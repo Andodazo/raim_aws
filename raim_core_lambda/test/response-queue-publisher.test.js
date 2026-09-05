@@ -202,3 +202,53 @@ test('v14: bubble_break は1ターンにつき1回だけ', async () => {
   const count = types().filter((t) => t === 'stream.bubble_break').length;
   assert.equal(count, 1);
 });
+
+// ツールの前置きセリフは「待ち時間を埋める発話」なので、
+// ここが無音だと役割を果たさない。本文と同じく TTS に回す。
+test('tool intro is synthesized like normal text', async () => {
+  const commands = [];
+  const ttsCalls = [];
+
+  const publisher = createResponseQueuePublisher({
+    requestId: 'req-intro',
+    connectionId: 'connection-1',
+    sub: 'user-1',
+    source: 'websocket',
+  }, {
+    client: { send: async (command) => commands.push(command.input) },
+    env: {
+      RESPONSE_QUEUE_URL: 'https://sqs.example/response.fifo',
+      TTS_AUDIO_FRAGMENT_BASE64_CHARACTERS: '8',
+    },
+    ttsClient: {
+      synthesize: async (request) => {
+        ttsCalls.push(request);
+        return {
+          ok: true,
+          format: 'wav',
+          contentType: 'audio/wav',
+          audio: 'AAAA',
+          audioByteLength: 3,
+        };
+      },
+    },
+  });
+
+  await publisher.start();
+  await publisher.toolCall({
+    toolName: 'web_search',
+    description: '検索中',
+    introText: 'えっと、それ気になる。少し待って？',
+  });
+  await publisher.completed({ text: '調べたよ' });
+
+  const messages = commands.map((command) => JSON.parse(command.MessageBody));
+  const intro = messages.find((message) => message.isFiller);
+
+  assert.ok(intro, 'filler の stream.delta が送られること');
+  assert.equal(intro.chunkId, 'req-intro_chunk_0', 'filler にも chunkId が振られること');
+
+  const introTts = ttsCalls.find((call) => call.chunkId === 'req-intro_chunk_0');
+  assert.ok(introTts, '前置きも TTS に回ること');
+  assert.equal(introTts.text, 'えっと、それ気になる。少し待って？');
+});

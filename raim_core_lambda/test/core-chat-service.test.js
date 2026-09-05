@@ -302,9 +302,9 @@ test('Core chat service dispatches a summary request when the thread grows', asy
     resolveThread: async () => ({ threadId: 'thread-x', thread: null, isNew: false }),
     ensureThreadTitle: async () => {},
     // 更新後のスレッドが閾値を超えている状態を返す
-    appendTurn: async () => ({ cumulativeInputTokens: 9000, turnCount: 5 }),
+    appendTurn: async () => ({ sessionInputTokens: 9000, summarizedAtInputTokens: 0, turnCount: 5 }),
     shouldSummarize: (thread) => ({
-      shouldSummarize: thread.cumulativeInputTokens >= 8000,
+      shouldSummarize: thread.sessionInputTokens >= 8000,
       reason: 'token_threshold',
     }),
     dispatchSummarization: async (params) => { dispatched.push(params); return true; },
@@ -349,7 +349,7 @@ test('Core chat service does not dispatch below the threshold', async () => {
     updateMantleResponseState: async () => {},
     resolveThread: async () => ({ threadId: 't', thread: null, isNew: false }),
     ensureThreadTitle: async () => {},
-    appendTurn: async () => ({ cumulativeInputTokens: 500, turnCount: 1 }),
+    appendTurn: async () => ({ sessionInputTokens: 500, summarizedAtInputTokens: 0, turnCount: 1 }),
     shouldSummarize: () => ({ shouldSummarize: false, reason: null }),
     dispatchSummarization: async (params) => { dispatched.push(params); return true; },
   });

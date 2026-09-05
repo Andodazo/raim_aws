@@ -16,6 +16,9 @@
 
 const OWM_API_URL = 'https://api.openweathermap.org/data/2.5/weather';
 
+// 外部 API の応答を待つ上限
+const TOOL_TIMEOUT_MS = Number(process.env.TOOL_TIMEOUT_MS || 8000);
+
 // ─────────────────────────────────────────────
 // 日本語 → 英語都市名マッピング
 // ─────────────────────────────────────────────
@@ -126,7 +129,11 @@ async function getWeather(city, countryCode = null, injectedApiKey = null) {
   url.searchParams.set('units', 'metric');
   url.searchParams.set('lang', 'ja');
 
-  const res = await fetch(url.toString());
+  // Node の fetch は既定でタイムアウトしない。
+  // 相手が応答しないと Lambda 自身のタイムアウトまで待つことになる。
+  const res = await fetch(url.toString(), {
+    signal: AbortSignal.timeout(TOOL_TIMEOUT_MS),
+  });
 
   if (!res.ok) {
     if (res.status === 404) {

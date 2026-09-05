@@ -184,6 +184,7 @@ test('toClientMessage maps stream.tool to client tool_call', () => {
     sequence: 6,
     tool: 'get_weather',
     description: '東京の天気を調べています',
+    // 送られてきても捨てる（クライアントは参照していない）
     estimatedSeconds: 3,
   }), {
     type: 'tool_call',
@@ -191,7 +192,6 @@ test('toClientMessage maps stream.tool to client tool_call', () => {
     sequence: 6,
     tool: 'get_weather',
     description: '東京の天気を調べています',
-    estimated_seconds: 3,
   });
 });
 

@@ -9,7 +9,7 @@
 //
 // 【判定方針】トークン数を主軸、往復数を安全弁（キャップ）として併用する。
 //
-//   - 累積入力トークンが閾値を超えたら要約
+//   - 前回要約したときから文脈が閾値ぶん伸びたら要約
 //     履歴の肥大を直接測る指標。目的（肥大の抑制）に直結する
 //   - または往復数が上限を超えたら要約
 //     短い発話ばかりでトークンが伸びない場合の保険。青天井を防ぐ
@@ -19,13 +19,19 @@
 //
 // 【単位はスレッド】
 //
-// 累積値は ConversationThread の cumulativeInputTokens / turnCount を見る。
+// 値は ConversationThread の sessionInputTokens（今の文脈サイズ）と
+// summarizedAtInputTokens（前回要約時の文脈サイズ）、turnCount を見る。
 // ユーザー単位ではなくスレッド単位なのは、スレッドごとに履歴が独立しており、
 // 圧縮も再開もスレッド単位で完結するため。
 
-// 累積入力トークンがこの値を超えたら要約する。
-// 初回プロンプト（人格全文 + few-shot）が約2Kトークンのため、
-// その3〜5倍が積み上がったあたりを目安に既定 8000。
+// 前回の要約時点から文脈がこの量だけ伸びたら要約する。
+//
+// usage.input_tokens は履歴込みの値（= 今の文脈サイズ）なので、
+// 「絶対値が閾値を超えたか」で判定すると、一度超えた後は
+// 毎ターン発火し続けてしまう。前回要約時点との差で測る。
+//
+// 継続モードの1往復あたりの伸びが 450〜1500 程度のため、
+// 既定 8000 でおよそ 5〜15 往復に1回。
 function tokenThreshold(env) {
   return Math.max(0, Number(env.SUMMARIZE_TOKEN_THRESHOLD || 8000));
 }
@@ -57,17 +63,19 @@ function shouldSummarize(thread, env = process.env) {
     return { shouldSummarize: false, reason: null };
   }
 
-  const tokens = Number(thread.cumulativeInputTokens) || 0;
+  const contextTokens = Number(thread.sessionInputTokens) || 0;
+  const baseline = Number(thread.summarizedAtInputTokens) || 0;
+  const growth = Math.max(0, contextTokens - baseline);
   const turns = Number(thread.turnCount) || 0;
 
   const threshold = tokenThreshold(env);
   const cap = maxTurns(env);
 
-  // 主軸: トークン数
-  if (threshold > 0 && tokens >= threshold) {
+  // 主軸: 前回要約時からの伸び
+  if (threshold > 0 && growth >= threshold) {
     return {
       shouldSummarize: true,
-      reason: `token_threshold (${tokens} >= ${threshold})`,
+      reason: `token_growth (${growth} >= ${threshold})`,
     };
   }
 

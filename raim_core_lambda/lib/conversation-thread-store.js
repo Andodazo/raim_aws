@@ -32,6 +32,7 @@ const {
 } = require('@aws-sdk/lib-dynamodb');
 
 const { randomUUID } = require('node:crypto');
+const { calculateResponseExpiresAt } = require('./mantle-session-policy');
 
 const TABLE_NAME =
   process.env.CONVERSATION_THREAD_TABLE_NAME || 'RAiM-ConversationThread-dev';
@@ -286,17 +287,42 @@ async function appendTurn(
   };
 
   if (responseId) {
-    setParts.push('lastResponseId = :responseId', 'lastResponseCreatedAt = :responseCreatedAt');
+    // 期限も一緒に保存する。
+    // 以前は id と createdAt しか書いておらず、継続判定
+    // （canUsePreviousResponseId）が要求する lastResponseExpiresAt が
+    // スレッド項目に存在しなかったため、判定が常に false になっていた。
+    // 判定側でも createdAt から導出するようにしたが、
+    // 保存側にも持たせて意図を明示する。
+    setParts.push(
+      'lastResponseId = :responseId',
+      'lastResponseCreatedAt = :responseCreatedAt',
+      'lastResponseExpiresAt = :responseExpiresAt'
+    );
     values[':responseId'] = responseId;
     values[':responseCreatedAt'] = responseCreatedAt || now;
+    values[':responseExpiresAt'] = calculateResponseExpiresAt(
+      responseCreatedAt || now
+    );
   }
 
-  // ADD はアトミックな加算。読み取り不要で並行更新にも強い。
+  // sessionInputTokens は「今の文脈サイズ」。加算ではなく代入する。
+  //
+  // previous_response_id を使うと Mantle 側がサーバーに履歴を持ち、
+  // usage.input_tokens は「こちらが送った量」ではなく
+  // 「モデルが読んだ量（履歴込み）」を返す。つまり既に累計なので、
+  // 足すと二重に数えることになる。
+  //
+  // 実測（2026-09-05）: 継続モードの1往復で 4233 → 4693 → 5119 と
+  // 毎回 450 前後ずつ増えた。これは履歴が積まれている値そのもの。
+  // 以前 1513 固定に見えたのは、継続モードが一度も動いていなかったため。
+  //
+  // 要約の間隔は summarizedAtInputTokens（前回要約時の文脈サイズ）との
+  // 差で測る。summary-trigger.js を参照。
+  setParts.push('sessionInputTokens = :tokens');
+
   const updateExpression =
     `SET ${setParts.join(', ')} ` +
-    // cumulativeInputTokens は要約のたびに 0 へ戻る（要約の間隔を測る）。
-    // sessionInputTokens は鎖を切るまで積み上がる（Mantle 側の文脈量を測る）。
-    'ADD cumulativeInputTokens :tokens, sessionInputTokens :tokens, turnCount :one';
+    'ADD turnCount :one';
 
   values[':tokens'] = Number(inputTokens) || 0;
   values[':one'] = 1;

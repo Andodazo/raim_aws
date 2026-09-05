@@ -42,10 +42,23 @@ function extractSub(event) {
   ).trim();
 }
 
+// requestId は SQS の MessageGroupId、chunk_id の接頭辞、
+// 応答の相関キーに使われる。クライアントの言い値をそのまま通さない。
+const REQUEST_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+
+// 1回の送信で受け付ける本文の長さ。
+// 上限が無いと API Gateway の 128KB いっぱいまで Mantle へ流れる。
+const MAX_TEXT_LENGTH = Number(process.env.MAX_TEXT_LENGTH || 4000);
+
+// 1回の送信で受け付ける画像の枚数。
+const MAX_IMAGE_COUNT = Number(process.env.MAX_IMAGE_COUNT || 4);
+
 function createRequestId(context, payload) {
   const provided = String(payload.requestId || '').trim();
 
-  if (provided) {
+  // 形式が合わないものは無かったことにして、こちらで採番する。
+  // 弾いてエラーにするより、送信を通したほうが体験がよい。
+  if (provided && REQUEST_ID_PATTERN.test(provided)) {
     return provided;
   }
 
@@ -60,6 +73,20 @@ function normalizeImages(images) {
 
   if (!Array.isArray(images)) {
     throw new WebSocketEventError('images must be an array');
+  }
+
+  if (images.length > MAX_IMAGE_COUNT) {
+    throw new WebSocketEventError(`images must be ${MAX_IMAGE_COUNT} or fewer`, {
+      count: images.length,
+      max: MAX_IMAGE_COUNT,
+    });
+  }
+
+  // 文字列（Base64 か URL）以外は Core へ渡さない
+  for (const image of images) {
+    if (typeof image !== 'string' && !(image && typeof image === 'object')) {
+      throw new WebSocketEventError('images must contain strings or objects');
+    }
   }
 
   return images;
@@ -140,6 +167,14 @@ function normalizeWebSocketEvent(event, lambdaContext = {}) {
   // thread.list のような読み取り要求は本文を持たない。
   if (routeKey === '$default' && action === 'chat' && !text && images.length === 0) {
     throw new WebSocketEventError('text or images is required');
+  }
+
+  // クライアント側にも上限を入れているが、サーバーが自分で守る。
+  if (text.length > MAX_TEXT_LENGTH) {
+    throw new WebSocketEventError(`text must be ${MAX_TEXT_LENGTH} characters or fewer`, {
+      length: text.length,
+      max: MAX_TEXT_LENGTH,
+    });
   }
 
   return {

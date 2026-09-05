@@ -22,6 +22,9 @@
 
 const TAVILY_API_URL = 'https://api.tavily.com/search';
 
+// 外部 API の応答を待つ上限
+const TOOL_TIMEOUT_MS = Number(process.env.TOOL_TIMEOUT_MS || 8000);
+
 const MAX_RESULT_CONTENT_LENGTH = 200;  // 各結果の content の最大文字数
 const MAX_RESULTS_RETURNED = 3;          // LLM に渡す結果の最大件数
 
@@ -56,10 +59,13 @@ async function searchWeb(query, maxResults = 3, injectedApiKey = null) {
     include_answer: true,    // 必須：Tavily 要約取得
   };
 
+  // Node の fetch は既定でタイムアウトしない。
+  // 相手が応答しないと Lambda 自身のタイムアウトまで待つことになる。
   const res = await fetch(TAVILY_API_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(requestBody),
+    signal: AbortSignal.timeout(TOOL_TIMEOUT_MS),
   });
 
   if (!res.ok) {

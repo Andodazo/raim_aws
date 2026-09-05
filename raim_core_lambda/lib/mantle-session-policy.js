@@ -48,15 +48,44 @@ function calculateResponseExpiresAt(createdAt, validDays = RESPONSE_ID_VALID_DAY
 }
 
 /**
+ * 期限日時を求める。
+ *
+ * lastResponseExpiresAt があればそれを使い、無ければ
+ * lastResponseCreatedAt から計算する。
+ *
+ * ConversationThread は lastResponseId と lastResponseCreatedAt しか
+ * 保存しておらず lastResponseExpiresAt を持たない。expiresAt だけを見て
+ * いたため、スレッド単位の継続判定が常に false になり、
+ * previous_response_id が一度も使われていなかった。
+ * 既存の項目を書き換えずに直せるよう、ここで導出する。
+ *
+ * @param {Object} session UserSession または ConversationThread の Item
+ * @returns {number|null} エポックミリ秒
+ */
+function resolveResponseExpiresAtMs(session) {
+  const stored = toTimeMs(session.lastResponseExpiresAt);
+
+  if (stored) {
+    return stored;
+  }
+
+  if (!session.lastResponseCreatedAt) {
+    return null;
+  }
+
+  return toTimeMs(calculateResponseExpiresAt(session.lastResponseCreatedAt));
+}
+
+/**
  * 保存済みの lastResponseId を previous_response_id として使えるか判定する。
  *
  * 条件:
  * - session が存在する
  * - lastResponseId が空ではない
- * - lastResponseExpiresAt が正しい日時
- * - lastResponseExpiresAt が現在時刻より未来
+ * - 期限日時が求められる（lastResponseExpiresAt、無ければ createdAt から導出）
+ * - 期限が現在時刻より未来
  *
- * @param {Object} session DynamoDBのUserSession Item
+ * @param {Object} session UserSession または ConversationThread の Item
  * @param {Date} now 現在時刻。テスト用に差し替え可能
  * @returns {boolean}
  */
@@ -69,7 +98,7 @@ function canUsePreviousResponseId(session, now = new Date()) {
     return false;
   }
 
-  const expiresAtMs = toTimeMs(session.lastResponseExpiresAt);
+  const expiresAtMs = resolveResponseExpiresAtMs(session);
 
   if (!expiresAtMs) {
     return false;

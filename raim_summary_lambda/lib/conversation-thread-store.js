@@ -104,7 +104,8 @@ async function listThreads(sub, options = {}, deps = {}) {
   if (!options.includeMessages) {
     params.ProjectionExpression =
       '#sub, threadId, title, sessionSummary, lastResponseId, ' +
-      'lastResponseCreatedAt, cumulativeInputTokens, sessionInputTokens, turnCount, createdAt, updatedAt';
+      'lastResponseCreatedAt, sessionInputTokens, summarizedAtInputTokens, ' +
+      'turnCount, createdAt, updatedAt';
   }
 
   const items = [];
@@ -206,7 +207,13 @@ async function saveThreadSummary(sub, threadId, summary, options = {}, deps = {}
   const values = { ':summary': String(summary).trim(), ':now': now };
 
   if (resetCounters) {
-    setParts.push('cumulativeInputTokens = :zero', 'turnCount = :zero');
+    // 次の要約は「ここからどれだけ伸びたか」で判断する。
+    // usage.input_tokens は履歴込みの累計なので、
+    // カウンタを 0 に戻すのではなく、今の文脈サイズを基準点として残す。
+    setParts.push(
+      'summarizedAtInputTokens = if_not_exists(sessionInputTokens, :zero)',
+      'turnCount = :zero'
+    );
     values[':zero'] = 0;
   }
 
@@ -247,6 +254,7 @@ async function resetThreadSession(sub, threadId, deps = {}) {
         'lastResponseCreatedAt = :empty',
         // 鎖を切ったので Mantle 側の文脈もゼロから積み直しになる
         'sessionInputTokens = :zero',
+        'summarizedAtInputTokens = :zero',
         'updatedAt = :now',
       ].join(', '),
       ExpressionAttributeValues: { ':empty': '', ':zero': 0, ':now': now },
@@ -388,7 +396,11 @@ async function updateTitleFromSummary(sub, threadId, summary, deps = {}) {
       })
     );
 
-    console.log(`[Thread] title updated from summary: sub=${sub} threadId=${threadId} title=${title}`);
+    // タイトルは要約の【事実】から作られる。会話由来の文字列なのでログには残さない。
+    console.log(
+      `[Thread] title updated from summary: sub=${sub} threadId=${threadId} ` +
+      `titleLength=${String(title).length}`
+    );
     return result.Attributes;
   } catch (error) {
     // 条件不一致（ユーザー命名済み）は正常系。それ以外もタイトルなので致命的ではない。

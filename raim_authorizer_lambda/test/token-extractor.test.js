@@ -33,14 +33,36 @@ test('extractToken reads Authorization header', () => {
   assert.equal(token, 'header-token');
 });
 
-test('extractToken reads access_token query parameter for wscat', () => {
+// クエリ文字列は API Gateway のアクセスログや経路上のプロキシに残るため、
+// 既定では受け付けない。wscat での検証時だけ環境変数で開ける。
+test('extractToken ignores access_token query parameter by default', () => {
+  assert.throws(
+    () => extractToken({
+      queryStringParameters: {
+        access_token: 'query-token',
+      },
+    }, { env: {} }),
+    TokenExtractorError
+  );
+});
+
+test('extractToken reads access_token query parameter when explicitly allowed', () => {
   const token = extractToken({
     queryStringParameters: {
       access_token: 'query-token',
     },
-  });
+  }, { env: { ALLOW_QUERY_TOKEN: 'true' } });
 
   assert.equal(token, 'query-token');
+});
+
+test('extractToken prefers the Authorization header even when query is allowed', () => {
+  const token = extractToken({
+    headers: { Authorization: 'Bearer header-token' },
+    queryStringParameters: { access_token: 'query-token' },
+  }, { env: { ALLOW_QUERY_TOKEN: 'true' } });
+
+  assert.equal(token, 'header-token');
 });
 
 test('extractToken rejects missing token', () => {

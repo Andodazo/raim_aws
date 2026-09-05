@@ -44,7 +44,18 @@ function stripBearer(value) {
   return match ? match[1].trim() : text;
 }
 
-function extractToken(event) {
+/**
+ * クエリ文字列からのトークン受け取りを許すか。
+ *
+ * 既定は無効。URL は API Gateway のアクセスログ、CloudWatch、
+ * 経路上のプロキシに残るため、資格情報を載せる場所として適さない。
+ * wscat での検証時だけ ALLOW_QUERY_TOKEN=true を立てる。
+ */
+function isQueryTokenAllowed(env) {
+  return String(env.ALLOW_QUERY_TOKEN || '').toLowerCase() === 'true';
+}
+
+function extractToken(event, { env = process.env } = {}) {
   const headers = normalizeHeaders(event?.headers);
   const fromHeader = stripBearer(headers.authorization || headers.Authorization);
 
@@ -52,16 +63,18 @@ function extractToken(event) {
     return fromHeader;
   }
 
-  const query = event?.queryStringParameters || {};
-  const fromQuery = stripBearer(
-    query.access_token ||
-    query.token ||
-    query.Authorization ||
-    query.authorization
-  );
+  if (isQueryTokenAllowed(env)) {
+    const query = event?.queryStringParameters || {};
+    const fromQuery = stripBearer(
+      query.access_token ||
+      query.token ||
+      query.Authorization ||
+      query.authorization
+    );
 
-  if (fromQuery) {
-    return fromQuery;
+    if (fromQuery) {
+      return fromQuery;
+    }
   }
 
   // 一部のAPI Gateway Authorizer設定では identitySource 由来の値が
@@ -82,6 +95,7 @@ function extractToken(event) {
 module.exports = {
   TokenExtractorError,
   extractToken,
+  isQueryTokenAllowed,
   normalizeHeaders,
   stripBearer,
 };
