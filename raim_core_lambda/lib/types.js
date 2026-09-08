@@ -119,15 +119,14 @@ const ERROR_CODES = Object.freeze({
 // マルチモーダル制約値
 // ─────────────────────────────────────────────
 //
-// images は、ユーザーが送信した画像をBedrock Runtimeへ渡すためのフィールド。
-// 画像Embeddingや画像Scene選択には使用しない。
-// Scene選択は text のEmbeddingのみで行う。
+// images は、ユーザーがS3へアップロードした画像をMantleへ渡すための参照。
+// 画像Embeddingや画像Scene選択には使用しない。Scene選択は text のEmbeddingのみで行う。
 //
-// Core Lambdaでは、Bedrock Runtimeへ渡す前に以下を検証する。
-// - Base64文字列か
-// - media_type が対応形式か
+// Core Lambdaでは、Mantleへ渡す前に以下を検証する。
+// - S3 key / contentType / sizeBytes が存在するか
 // - 画像枚数が上限以内か
-// - 画像合計サイズが上限以内か
+//
+// 実サイズ・実形式・S3のContent-Typeは、s3-image-service.jsがS3実体を再検証する。
 //
 // textのみでも動作し、images は省略または空配列でもよい。
 
@@ -138,11 +137,34 @@ const SUPPORTED_IMAGE_TYPES = Object.freeze([
   'image/gif',
 ]);
 
-// 全画像合計の上限（Base64化前のバイト数換算）
+// 既定値。実行時は環境変数 IMAGE_MAX_TOTAL_BYTES を優先する。
 const MAX_TOTAL_IMAGE_SIZE = 10 * 1024 * 1024; // 10MB
 
-// 1リクエストあたりの最大画像数
+// 既定値。実行時は環境変数 IMAGE_MAX_COUNT を優先する。
 const MAX_IMAGES_PER_MESSAGE = 10;
+
+function parsePositiveInteger(value, fallback) {
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+function getImageConstraints(env = process.env) {
+  const configuredTypes = String(
+    env.IMAGE_ALLOWED_CONTENT_TYPES || SUPPORTED_IMAGE_TYPES.join(',')
+  )
+    .split(',')
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
+
+  return {
+    maxCount: parsePositiveInteger(env.IMAGE_MAX_COUNT, MAX_IMAGES_PER_MESSAGE),
+    maxTotalBytes: parsePositiveInteger(
+      env.IMAGE_MAX_TOTAL_BYTES,
+      MAX_TOTAL_IMAGE_SIZE
+    ),
+    allowedContentTypes: Object.freeze([...new Set(configuredTypes)]),
+  };
+}
 
 // ─────────────────────────────────────────────
 // ファクトリ関数
@@ -469,8 +491,8 @@ function normalizeLLMOutput(rawLLMOutput) {
  * 画像のみのリクエストも許容する。
  *
  * 画像が含まれる場合、Core Lambdaでは画像Embeddingを行わない。
- * 画像は validateUpstream() で形式・サイズを検証した後、
- * prompt-builder / Bedrock Runtime client 側でモデルへ渡す。
+ * 画像はS3参照形式を検証した後、s3-image-service.jsで実体を再検証し、
+ * Mantle用S3 URIへ変換してprompt-builderへ渡す。
  *
  * ただし、以下はNG:
  * - bodyがオブジェクトではない
@@ -478,10 +500,9 @@ function normalizeLLMOutput(rawLLMOutput) {
  * - textが空、かつ images もない/空
  * - imagesが配列ではない
  * - 画像数が上限を超える
- * - 画像形式が未対応
- * - 画像合計サイズが上限を超える
+ * - S3参照形式ではない
  */
-function validateUpstream(data) {
+function validateUpstream(data, { env = process.env } = {}) {
   if (!data || typeof data !== 'object') {
     return { valid: false, error: 'Message is not an object' };
   }
@@ -512,14 +533,14 @@ function validateUpstream(data) {
     return { valid: true, message: data };
   }
 
-  if (data.images.length > MAX_IMAGES_PER_MESSAGE) {
+  const constraints = getImageConstraints(env);
+
+  if (data.images.length > constraints.maxCount) {
     return {
       valid: false,
-      error: `Too many images (max ${MAX_IMAGES_PER_MESSAGE})`,
+      error: `Too many images (max ${constraints.maxCount})`,
     };
   }
-
-  let totalSize = 0;
 
   for (let i = 0; i < data.images.length; i++) {
     const img = data.images[i];
@@ -528,30 +549,43 @@ function validateUpstream(data) {
       return { valid: false, error: `images[${i}] must be an object` };
     }
 
-    if (typeof img.data !== 'string' || img.data.length === 0) {
+    if (typeof img.key !== 'string' || img.key.trim().length === 0) {
       return {
         valid: false,
-        error: `images[${i}].data must be a non-empty Base64 string`,
+        error: `images[${i}].key must be a non-empty S3 object key`,
       };
     }
 
-    if (!SUPPORTED_IMAGE_TYPES.includes(img.media_type)) {
+    if (typeof img.contentType !== 'string' || img.contentType.trim().length === 0) {
       return {
         valid: false,
-        error: `Unsupported media_type: ${img.media_type}. Supported: ${SUPPORTED_IMAGE_TYPES.join(', ')}`,
+        error: `images[${i}].contentType must be a non-empty MIME type`,
       };
     }
 
-    // Base64文字列のおおよそのバイト数。
-    // Base64は元データの約4/3になるため、0.75倍で概算する。
-    totalSize += Math.floor(img.data.length * 0.75);
-  }
+    const contentType = img.contentType.trim().toLowerCase();
+    if (!constraints.allowedContentTypes.includes(contentType)) {
+      return {
+        valid: false,
+        error: `Unsupported contentType: ${contentType}. Supported: ${constraints.allowedContentTypes.join(', ')}`,
+      };
+    }
 
-  if (totalSize > MAX_TOTAL_IMAGE_SIZE) {
-    return {
-      valid: false,
-      error: `Total image size exceeds limit (${Math.floor(totalSize / 1024)}KB > ${MAX_TOTAL_IMAGE_SIZE / 1024 / 1024}MB)`,
-    };
+    if (!Number.isSafeInteger(img.sizeBytes) || img.sizeBytes < 0) {
+      return {
+        valid: false,
+        error: `images[${i}].sizeBytes must be a non-negative integer`,
+      };
+    }
+
+    // 画像本体やBase64がpayloadに残っていないことを早期に検知する。
+    if (Object.prototype.hasOwnProperty.call(img, 'data') ||
+        Object.prototype.hasOwnProperty.call(img, 'media_type')) {
+      return {
+        valid: false,
+        error: `images[${i}] must use S3 reference fields only`,
+      };
+    }
   }
 
   return { valid: true, message: data };
@@ -571,6 +605,7 @@ module.exports = {
   SUPPORTED_IMAGE_TYPES,
   MAX_TOTAL_IMAGE_SIZE,
   MAX_IMAGES_PER_MESSAGE,
+  getImageConstraints,
 
   // ファクトリ関数
   createChat,

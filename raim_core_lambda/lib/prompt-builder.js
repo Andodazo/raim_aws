@@ -24,7 +24,7 @@
 // - 会話継続は Mantle の previous_response_id を使う
 // - previous_response_id が使えない場合は sessionSummary を渡して復旧する
 // - Few-shot はDynamoDBのScene定義から取得したものを渡す
-// - 画像Embeddingは行わず、画像はMantleへそのまま渡す
+// - 画像Embeddingは行わず、CoreがS3から取得したdata URLをMantleへ渡す
 //
 // 【重要】
 // このファイルではMantle APIを直接呼ばない。
@@ -135,23 +135,25 @@ function pickPrimaryIntensity(emotions, fallbackIntensity = 0.5) {
 }
 
 /**
- * 画像をMantleへ渡しやすい data URL 形式に変換する。
+ * Coreで検証済みのS3 URIをMantleへ渡す。
  *
- * validateUpstream() 側で、各画像は以下の形で検証済みの想定。
+ * s3-image-service.jsで、各画像は以下の形へ解決済みの想定。
  *
  * {
- *   data: "Base64文字列",
- *   media_type: "image/png"
+ *   key: "temporary/users/sub/request/image.png",
+ *   contentType: "image/png",
+ *   sizeBytes: 1234,
+ *   s3Uri: "s3://bucket/temporary/users/sub/request/image.png",
+ *   dataUrl: "data:image/png;base64,..."
  * }
  *
- * ここでは画像Embeddingは行わない。
- * 画像はMantleへそのまま渡すため、data URL に整形する。
- *
- * 例:
- * data:image/png;base64,iVBORw0KGgo...
  */
 function toImageDataUrl(image) {
-  return `data:${image.media_type};base64,${image.data}`;
+  if (!image || typeof image.dataUrl !== 'string' || image.dataUrl.length === 0) {
+    throw new Error('Resolved image data URL is missing');
+  }
+
+  return image.dataUrl;
 }
 
 // ─────────────────────────────────────────────
@@ -637,7 +639,7 @@ function buildMantleInput({
 /**
  * prompt inputの概要をdebug用に整形する。
  *
- * messagesの全文や画像Base64をレスポンスへ返すと大きすぎるため、
+ * messagesの全文や画像参照情報をレスポンスへ返すと大きすぎるため、
  * 件数やモードだけを返す。
  */
 function summarizeMantleInput(input) {

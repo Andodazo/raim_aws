@@ -66,6 +66,11 @@ Lambdaへ直接アップロードする場合は、Lambdaコンソールの
 | `BEDROCK_REGION` | `ap-northeast-1` | Titanを呼び出すAWSリージョン |
 | `TITAN_EMBEDDING_MODEL_ID` | `amazon.titan-embed-text-v2:0` | 利用するTitan embedding model ID |
 | `TITAN_EMBEDDING_DIMENSIONS` | `1024` | Scene centroidと一致させるベクトル次元 |
+| `IMAGE_BUCKET_NAME` | `raim-images-dev-123456789012` | S3画像バケット名 |
+| `IMAGE_BUCKET_REGION` | `us-east-1` | S3画像バケットのリージョン。Lambda実行リージョンと異なる場合も明示する |
+| `IMAGE_MAX_COUNT` | `10` | 1リクエストあたりの最大画像枚数 |
+| `IMAGE_MAX_TOTAL_BYTES` | `10485760` | 画像合計の最大実バイト数（10 MiB） |
+| `IMAGE_ALLOWED_CONTENT_TYPES` | `image/jpeg,image/png,image/webp,image/gif` | 許可する画像MIMEタイプ |
 
 `OPENAI_API_KEY`と`TITAN_ENDPOINT_URL`は設定しない。
 API key本体はSecrets Managerだけに保存し、Titanの接続先はAWS SDKが

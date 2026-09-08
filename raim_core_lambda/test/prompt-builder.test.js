@@ -7,8 +7,27 @@ const {
   buildSceneContext,
   buildFewShotMessages,
   buildFollowupMantleInput,
+  buildUserContent,
 } = require('../lib/prompt-builder');
 const { buildSystemPrompt } = require('../lib/prompts/raim-system-prompt');
+
+test('buildUserContent passes the resolved image data URL to Mantle', () => {
+  const content = buildUserContent({
+    userText: 'この画像を見て',
+    images: [{
+      key: 'temporary/users/user-1/request-1/image.png',
+      contentType: 'image/png',
+      sizeBytes: 8,
+      s3Uri: 's3://bucket/temporary/users/user-1/request-1/image.png',
+      dataUrl: 'data:image/png;base64,AAAA',
+    }],
+  });
+
+  assert.deepEqual(content, [
+    { type: 'input_text', text: 'この画像を見て' },
+    { type: 'input_image', image_url: 'data:image/png;base64,AAAA' },
+  ]);
+});
 
 test('buildSceneContext includes new FewShot scene metadata', () => {
   const context = buildSceneContext({

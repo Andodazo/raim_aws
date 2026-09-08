@@ -63,6 +63,10 @@ const {
   getCoreRequestId,
   normalizeCoreEvent,
 } = require('./core-event');
+const {
+  S3ImageError,
+  resolveS3Images,
+} = require('./s3-image-service');
 const { createCoreChat, createCoreError } = require('./core-response');
 const { resolveThread, ensureThreadTitle } = require('./thread-resolver');
 const { appendTurn } = require('./conversation-thread-store');
@@ -161,6 +165,7 @@ const defaultDependencies = Object.freeze({
   buildMantleInput,
   createMantleResponse,
   normalizeMantleOutput,
+  resolveImages: resolveS3Images,
 
   // ツールループ
   maxToolTurns: MAX_TOOL_TURNS,
@@ -223,6 +228,29 @@ function createCoreChatService(dependencyOverrides = {}) {
       });
     }
 
+    // 0. S3参照を検証し、S3実体のサイズ・形式・Content-Typeを確認する。
+    // Mantle呼び出し、ストリーミング、TTS、Tool処理より前に完了させる。
+    let resolvedImages;
+    try {
+      resolvedImages = await dependencies.resolveImages({
+        images: input.images,
+        sub: input.sub,
+        requestId: input.requestId,
+      });
+    } catch (error) {
+      if (!(error instanceof S3ImageError)) {
+        throw error;
+      }
+
+      return createCoreError({
+        requestId: input.requestId,
+        code: error.code,
+        message: error.message,
+        retriable: error.retriable,
+        details: error.details,
+      });
+    }
+
     // 1. ユーザー単位の会話状態をDynamoDBから取得する。
     // lastResponseIdが有効ならMantle側の会話コンテキストを継続できる。
     const session = await dependencies.getOrCreateUserSession(input.sub);
@@ -269,7 +297,7 @@ function createCoreChatService(dependencyOverrides = {}) {
     // 継続時はprevious_response_idを使うため、今回の発話を中心に組み立てる。
     let mantleInput = dependencies.buildMantleInput({
       userText: input.text,
-      images: input.images,
+      images: resolvedImages,
       // 要約はスレッド単位（ConversationThread.sessionSummary）に保存される。
       // UserSession 側の sessionSummary は使われないため、ここで参照すると
       // 常に空になり、圧縮でセッションをリセットした直後に文脈が失われる。
@@ -339,7 +367,7 @@ function createCoreChatService(dependencyOverrides = {}) {
 
         const rebuiltInput = dependencies.buildMantleInput({
           userText: input.text,
-          images: input.images,
+          images: resolvedImages,
           // 要約はスレッド単位に保存される（§ 上のコメント参照）
           sessionSummary: threadContext.thread?.sessionSummary || '',
           userMemory: session.userMemory || '',
