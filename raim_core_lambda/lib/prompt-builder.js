@@ -24,7 +24,7 @@
 // - 会話継続は Mantle の previous_response_id を使う
 // - previous_response_id が使えない場合は sessionSummary を渡して復旧する
 // - Few-shot はDynamoDBのScene定義から取得したものを渡す
-// - 画像Embeddingは行わず、画像はMantleへそのまま渡す
+// - 画像Embeddingは行わず、CoreがS3から取得したdata URLをMantleへ渡す
 //
 // 【重要】
 // このファイルではMantle APIを直接呼ばない。
@@ -139,16 +139,17 @@ function pickPrimaryIntensity(emotions, fallbackIntensity = 0.5) {
  *   key: "temporary/users/sub/request/image.png",
  *   contentType: "image/png",
  *   sizeBytes: 1234,
- *   s3Uri: "s3://bucket/temporary/users/sub/request/image.png"
+ *   s3Uri: "s3://bucket/temporary/users/sub/request/image.png",
+ *   dataUrl: "data:image/png;base64,..."
  * }
  *
  */
-function toImageS3Uri(image) {
-  if (!image || typeof image.s3Uri !== 'string' || image.s3Uri.length === 0) {
-    throw new Error('Resolved image S3 URI is missing');
+function toImageDataUrl(image) {
+  if (!image || typeof image.dataUrl !== 'string' || image.dataUrl.length === 0) {
+    throw new Error('Resolved image data URL is missing');
   }
 
-  return image.s3Uri;
+  return image.dataUrl;
 }
 
 // ─────────────────────────────────────────────
@@ -328,7 +329,7 @@ function buildSessionSummaryContext(sessionSummary) {
  * 画像あり:
  *   content: [
  *     { type: "input_text", text: "この画像を見て" },
- *     { type: "input_image", image_url: "s3://bucket/key..." }
+ *     { type: "input_image", image_url: "data:image/png;base64,..." }
  *   ]
  *
  * 実際のMantle APIが要求する細部の形式は mantle-client.js 側で調整できるようにする。
@@ -359,7 +360,7 @@ function buildUserContent({ userText, images = [] }) {
   for (const image of imageList) {
     content.push({
       type: 'input_image',
-      image_url: toImageS3Uri(image),
+      image_url: toImageDataUrl(image),
     });
   }
 

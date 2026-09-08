@@ -5,16 +5,29 @@ const assert = require('node:assert/strict');
 const { GetObjectCommand, HeadObjectCommand } = require('@aws-sdk/client-s3');
 const {
   S3ImageError,
+  createS3Client,
   createS3ImageResolver,
   detectImageContentType,
 } = require('../lib/s3-image-service');
 
 const ENV = {
   IMAGE_BUCKET_NAME: 'raim-images-dev-123456789012',
+  IMAGE_BUCKET_REGION: 'us-east-1',
   IMAGE_MAX_COUNT: '10',
   IMAGE_MAX_TOTAL_BYTES: '10485760',
   IMAGE_ALLOWED_CONTENT_TYPES: 'image/jpeg,image/png,image/webp,image/gif',
 };
+
+test('S3 client uses the image bucket region instead of Lambda region', async () => {
+  const client = createS3Client({
+    env: {
+      IMAGE_BUCKET_REGION: 'us-east-1',
+      AWS_REGION: 'ap-northeast-1',
+    },
+  });
+
+  assert.equal(await client.config.region(), 'us-east-1');
+});
 
 function createFakeS3({ contentType = 'image/png', contentLength = 8, header } = {}) {
   const commands = [];
@@ -43,7 +56,7 @@ test('detectImageContentType recognizes the supported image signatures', () => {
   assert.equal(detectImageContentType(Buffer.from('RIFFxxxxWEBP')), 'image/webp');
 });
 
-test('resolveImages validates the S3 object and returns a Mantle-compatible S3 URI', async () => {
+test('resolveImages validates the S3 object and returns a Mantle-compatible data URL', async () => {
   const fake = createFakeS3();
   const resolveImages = createS3ImageResolver({
     client: fake.client,
@@ -65,9 +78,10 @@ test('resolveImages validates the S3 object and returns a Mantle-compatible S3 U
     contentType: 'image/png',
     sizeBytes: 8,
     s3Uri: 's3://raim-images-dev-123456789012/temporary/users/user-1/request-1/image.png',
+    dataUrl: 'data:image/png;base64,iVBORw0KGgo=',
   }]);
   assert.equal(fake.commands.length, 2);
-  assert.equal(fake.commands[1].input.Range, 'bytes=0-63');
+  assert.equal(fake.commands[1].input.Range, undefined);
 });
 
 test('resolveImages rejects a key outside the authenticated user request prefix', async () => {

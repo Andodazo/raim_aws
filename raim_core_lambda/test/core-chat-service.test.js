@@ -97,6 +97,7 @@ test('Core chat service resolves S3 images before the existing response flow', a
       contentType: images[0].contentType,
       sizeBytes: 8,
       s3Uri: 's3://bucket/temporary/users/user-1/request-1/image.png',
+      dataUrl: 'data:image/png;base64,AAAA',
     }];
   };
   dependencies.buildMantleInput = (input) => {

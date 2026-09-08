@@ -1,7 +1,7 @@
 'use strict';
 
 // ============================================================================
-// S3 image validation and Mantle S3 URI generation
+// S3 image validation and Mantle image input generation
 // ============================================================================
 
 const {
@@ -141,7 +141,9 @@ function validateKeyShape(key, { sub, requestId }) {
 
 function createS3Client({ client, env = process.env } = {}) {
   return client || new S3Client({
-    region: env.AWS_REGION || 'ap-northeast-1',
+    // Lambdaの実行リージョンと画像バケットのリージョンは異なる場合がある。
+    // 画像バケットをus-east-1へ配置する場合は、IMAGE_BUCKET_REGIONを優先する。
+    region: env.IMAGE_BUCKET_REGION || env.AWS_REGION || 'ap-northeast-1',
   });
 }
 
@@ -209,7 +211,6 @@ function createS3ImageResolver({ client, env = process.env } = {}) {
         const response = await s3.send(new GetObjectCommand({
           Bucket: bucket,
           Key: key,
-          Range: 'bytes=0-63',
         }));
         header = await readBodyToBuffer(response.Body);
       } catch (error) {
@@ -247,9 +248,11 @@ function createS3ImageResolver({ client, env = process.env } = {}) {
         key,
         contentType: detectedContentType,
         sizeBytes: actualSize,
-        // Mantleの画像入力はdata:またはs3://を受け付けるため、
-        // CoreのIAM権限で検証した同一オブジェクトのS3 URIを渡す。
+        // 非公開S3オブジェクトをMantle側から直接取得させず、
+        // CoreのIAM権限で取得した内容をdata URLとして渡す。
+        // s3Uriは監査・デバッグ用に保持する。
         s3Uri: `s3://${bucket}/${key}`,
+        dataUrl: `data:${detectedContentType};base64,${header.toString('base64')}`,
       });
     }
 
@@ -264,6 +267,7 @@ module.exports = {
   S3ImageError,
   TEMPORARY_PREFIX,
   createS3ImageResolver,
+  createS3Client,
   detectImageContentType,
   resolveS3Images,
 };

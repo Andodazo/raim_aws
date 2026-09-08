@@ -10,7 +10,7 @@ const {
   buildUserContent,
 } = require('../lib/prompt-builder');
 
-test('buildUserContent passes the S3 URI without creating a data URL', () => {
+test('buildUserContent passes the resolved image data URL to Mantle', () => {
   const content = buildUserContent({
     userText: 'この画像を見て',
     images: [{
@@ -18,12 +18,13 @@ test('buildUserContent passes the S3 URI without creating a data URL', () => {
       contentType: 'image/png',
       sizeBytes: 8,
       s3Uri: 's3://bucket/temporary/users/user-1/request-1/image.png',
+      dataUrl: 'data:image/png;base64,AAAA',
     }],
   });
 
   assert.deepEqual(content, [
     { type: 'input_text', text: 'この画像を見て' },
-    { type: 'input_image', image_url: 's3://bucket/temporary/users/user-1/request-1/image.png' },
+    { type: 'input_image', image_url: 'data:image/png;base64,AAAA' },
   ]);
 });
 
