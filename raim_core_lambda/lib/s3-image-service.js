@@ -161,15 +161,19 @@ function getBucketName(env = process.env) {
 function s3Failure(error) {
   const statusCode = Number(error?.$metadata?.httpStatusCode || error?.statusCode || 0);
   const notFound = statusCode === 404 || error?.name === 'NotFound' || error?.name === 'NoSuchKey';
+  // HeadObject のあとで同じキーに別の画像が上書きされた（IfMatch 不一致）。
+  // 検証したものと違う中身を読むことになるので、再試行せず入力エラーにする。
+  const changed = statusCode === 412 || error?.name === 'PreconditionFailed';
 
-  return new S3ImageError(
-    notFound ? 'S3 image object was not found' : 'S3 image object could not be inspected',
-    {
-      code: notFound ? ERROR_CODES.INVALID_INPUT : ERROR_CODES.INTERNAL_ERROR,
-      retriable: !notFound,
-      details: { statusCode, name: error?.name },
-    }
-  );
+  let message = 'S3 image object could not be inspected';
+  if (notFound) message = 'S3 image object was not found';
+  if (changed) message = 'S3 image object changed while reading';
+
+  return new S3ImageError(message, {
+    code: notFound || changed ? ERROR_CODES.INVALID_INPUT : ERROR_CODES.INTERNAL_ERROR,
+    retriable: !notFound && !changed,
+    details: { statusCode, name: error?.name },
+  });
 }
 
 function createS3ImageResolver({ client, env = process.env } = {}) {
@@ -204,26 +208,62 @@ function createS3ImageResolver({ client, env = process.env } = {}) {
       }
       seenKeys.add(key);
 
+      // 1. まずメタデータだけ取る。
+      // サイズと Content-Type はここで分かるので、上限を超えるものや
+      // 形式が合わないものは本体をダウンロードする前に弾く。
+      // 以前は全体をダウンロードしてから合計サイズを見ていたため、
+      // 大きな画像を置かれると Lambda のメモリと時間をそのぶん使っていた。
       let head;
-      let header;
       try {
         head = await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
-        const response = await s3.send(new GetObjectCommand({
-          Bucket: bucket,
-          Key: key,
-        }));
-        header = await readBodyToBuffer(response.Body);
       } catch (error) {
         throw s3Failure(error);
       }
 
       const actualSize = Number(head.ContentLength);
       const s3ContentType = normalizeContentType(head.ContentType);
-      const detectedContentType = detectImageContentType(header);
 
       if (!Number.isSafeInteger(actualSize) || actualSize <= 0) {
         throw new S3ImageError('S3 image object has an invalid size');
       }
+
+      if (actualSize > constraints.maxImageBytes) {
+        throw new S3ImageError(
+          `Image size exceeds limit (${constraints.maxImageBytes} bytes)`
+        );
+      }
+
+      if (totalBytes + actualSize > constraints.maxTotalBytes) {
+        throw new S3ImageError(
+          `Total image size exceeds limit (${constraints.maxTotalBytes} bytes)`
+        );
+      }
+
+      if (s3ContentType !== extensionType) {
+        throw new S3ImageError('S3 image content type does not match its data');
+      }
+
+      // 2. 本体を読む。
+      // IfMatch で HeadObject と同じ版だけを読む。間に上書きされると
+      // 検証したサイズと違うものを読むことになるため。
+      let body;
+      try {
+        const response = await s3.send(new GetObjectCommand({
+          Bucket: bucket,
+          Key: key,
+          ...(head.ETag ? { IfMatch: head.ETag } : {}),
+        }));
+        body = await readBodyToBuffer(response.Body);
+      } catch (error) {
+        throw s3Failure(error);
+      }
+
+      // ETag が無い場合や、S3 互換の実装で IfMatch が効かない場合の保険
+      if (body.length !== actualSize) {
+        throw new S3ImageError('S3 image object changed while reading');
+      }
+
+      const detectedContentType = detectImageContentType(body);
 
       if (!detectedContentType || !constraints.allowedContentTypes.includes(detectedContentType)) {
         throw new S3ImageError('S3 image format is not supported');
@@ -238,11 +278,6 @@ function createS3ImageResolver({ client, env = process.env } = {}) {
       }
 
       totalBytes += actualSize;
-      if (totalBytes > constraints.maxTotalBytes) {
-        throw new S3ImageError(
-          `Total image size exceeds limit (${constraints.maxTotalBytes} bytes)`
-        );
-      }
 
       resolved.push({
         key,
@@ -252,7 +287,7 @@ function createS3ImageResolver({ client, env = process.env } = {}) {
         // CoreのIAM権限で取得した内容をdata URLとして渡す。
         // s3Uriは監査・デバッグ用に保持する。
         s3Uri: `s3://${bucket}/${key}`,
-        dataUrl: `data:${detectedContentType};base64,${header.toString('base64')}`,
+        dataUrl: `data:${detectedContentType};base64,${body.toString('base64')}`,
       });
     }
 

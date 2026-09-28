@@ -15,6 +15,7 @@ const ENV = {
   IMAGE_BUCKET_REGION: 'us-east-1',
   IMAGE_MAX_COUNT: '10',
   IMAGE_MAX_TOTAL_BYTES: '10485760',
+  IMAGE_MAX_BYTES: '5242880',
   IMAGE_ALLOWED_CONTENT_TYPES: 'image/jpeg,image/png,image/webp,image/gif',
 };
 
@@ -29,7 +30,22 @@ test('S3 client uses the image bucket region instead of Lambda region', async ()
   assert.equal(await client.config.region(), 'us-east-1');
 });
 
-function createFakeS3({ contentType = 'image/png', contentLength = 8, header } = {}) {
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+/** 先頭が PNG の署名で、長さが [size] の本体を作る。 */
+function pngBody(size) {
+  const body = Buffer.alloc(size);
+  PNG_SIGNATURE.copy(body, 0, 0, Math.min(size, PNG_SIGNATURE.length));
+  return body;
+}
+
+function createFakeS3({
+  contentType = 'image/png',
+  contentLength = 8,
+  header,
+  etag = '"etag-1"',
+  getError,
+} = {}) {
   const commands = [];
   return {
     commands,
@@ -37,10 +53,11 @@ function createFakeS3({ contentType = 'image/png', contentLength = 8, header } =
       async send(command) {
         commands.push(command);
         if (command instanceof HeadObjectCommand) {
-          return { ContentType: contentType, ContentLength: contentLength };
+          return { ContentType: contentType, ContentLength: contentLength, ETag: etag };
         }
         assert.ok(command instanceof GetObjectCommand);
-        return { Body: header || Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]) };
+        if (getError) throw getError;
+        return { Body: header || pngBody(contentLength) };
       },
     },
   };
@@ -82,6 +99,8 @@ test('resolveImages validates the S3 object and returns a Mantle-compatible data
   }]);
   assert.equal(fake.commands.length, 2);
   assert.equal(fake.commands[1].input.Range, undefined);
+  // HeadObject で見た版だけを読む
+  assert.equal(fake.commands[1].input.IfMatch, '"etag-1"');
 });
 
 test('resolveImages rejects a key outside the authenticated user request prefix', async () => {
@@ -120,11 +139,32 @@ test('resolveImages rejects mismatched client, S3, and detected content types', 
   );
 });
 
-test('resolveImages enforces the total size using S3 ContentLength', async () => {
-  const fake = createFakeS3({ contentLength: 7 * 1024 * 1024 });
+test('resolveImages rejects an oversized image before downloading it', async () => {
+  const fake = createFakeS3({ contentLength: 5 * 1024 * 1024 + 1 });
+  const resolveImages = createS3ImageResolver({ client: fake.client, env: ENV });
+
+  await assert.rejects(
+    () => resolveImages({
+      sub: 'user-1',
+      requestId: 'request-1',
+      images: [{
+        key: 'temporary/users/user-1/request-1/big.png',
+        contentType: 'image/png',
+        sizeBytes: 1,
+      }],
+    }),
+    (error) => error instanceof S3ImageError && /Image size exceeds limit/.test(error.message)
+  );
+  // HeadObject だけで止まり、GetObject は呼ばれない
+  assert.equal(fake.commands.length, 1);
+  assert.ok(fake.commands[0] instanceof HeadObjectCommand);
+});
+
+test('resolveImages stops before downloading the image that exceeds the total', async () => {
+  const fake = createFakeS3({ contentLength: 4 * 1024 * 1024 });
   const resolveImages = createS3ImageResolver({
     client: fake.client,
-    env: ENV,
+    env: { ...ENV, IMAGE_MAX_TOTAL_BYTES: String(6 * 1024 * 1024) },
   });
 
   await assert.rejects(
@@ -132,18 +172,75 @@ test('resolveImages enforces the total size using S3 ContentLength', async () =>
       sub: 'user-1',
       requestId: 'request-1',
       images: [
-        {
-          key: 'temporary/users/user-1/request-1/one.png',
-          contentType: 'image/png',
-          sizeBytes: 1,
-        },
-        {
-          key: 'temporary/users/user-1/request-1/two.png',
-          contentType: 'image/png',
-          sizeBytes: 1,
-        },
+        { key: 'temporary/users/user-1/request-1/one.png', contentType: 'image/png', sizeBytes: 1 },
+        { key: 'temporary/users/user-1/request-1/two.png', contentType: 'image/png', sizeBytes: 1 },
       ],
     }),
     (error) => error instanceof S3ImageError && /Total image size exceeds limit/.test(error.message)
+  );
+  // 1枚目: Head + Get、2枚目: Head のみ
+  assert.equal(fake.commands.length, 3);
+  assert.ok(fake.commands[2] instanceof HeadObjectCommand);
+});
+
+test('resolveImages rejects an S3 Content-Type mismatch before downloading', async () => {
+  const fake = createFakeS3({ contentType: 'image/jpeg' });
+  const resolveImages = createS3ImageResolver({ client: fake.client, env: ENV });
+
+  await assert.rejects(
+    () => resolveImages({
+      sub: 'user-1',
+      requestId: 'request-1',
+      images: [{
+        key: 'temporary/users/user-1/request-1/image.png',
+        contentType: 'image/png',
+        sizeBytes: 8,
+      }],
+    }),
+    (error) => error instanceof S3ImageError && /content type does not match/.test(error.message)
+  );
+  assert.equal(fake.commands.length, 1);
+});
+
+test('resolveImages rejects an object that was replaced between Head and Get', async () => {
+  const replaced = Object.assign(new Error('precondition'), {
+    name: 'PreconditionFailed',
+    $metadata: { httpStatusCode: 412 },
+  });
+  const fake = createFakeS3({ getError: replaced });
+  const resolveImages = createS3ImageResolver({ client: fake.client, env: ENV });
+
+  await assert.rejects(
+    () => resolveImages({
+      sub: 'user-1',
+      requestId: 'request-1',
+      images: [{
+        key: 'temporary/users/user-1/request-1/image.png',
+        contentType: 'image/png',
+        sizeBytes: 8,
+      }],
+    }),
+    (error) =>
+      error instanceof S3ImageError &&
+      /changed while reading/.test(error.message) &&
+      error.retriable === false
+  );
+});
+
+test('resolveImages rejects a body whose length differs from HeadObject', async () => {
+  const fake = createFakeS3({ contentLength: 16, header: pngBody(8) });
+  const resolveImages = createS3ImageResolver({ client: fake.client, env: ENV });
+
+  await assert.rejects(
+    () => resolveImages({
+      sub: 'user-1',
+      requestId: 'request-1',
+      images: [{
+        key: 'temporary/users/user-1/request-1/image.png',
+        contentType: 'image/png',
+        sizeBytes: 16,
+      }],
+    }),
+    (error) => error instanceof S3ImageError && /changed while reading/.test(error.message)
   );
 });

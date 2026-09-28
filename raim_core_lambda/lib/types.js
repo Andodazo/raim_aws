@@ -140,6 +140,12 @@ const SUPPORTED_IMAGE_TYPES = Object.freeze([
 // 既定値。実行時は環境変数 IMAGE_MAX_TOTAL_BYTES を優先する。
 const MAX_TOTAL_IMAGE_SIZE = 10 * 1024 * 1024; // 10MB
 
+// 1枚あたりの上限。既定値。実行時は環境変数 IMAGE_MAX_BYTES を優先する。
+// クライアントは長辺1024pxに縮小して送るので、JPEGなら数百KB、
+// PNGでも2MB前後に収まる。GIF/WebPは縮小せず素通しなので、
+// 巨大なアニメーションGIFを1枚で合計上限まで使い切らないよう別に持つ。
+const MAX_IMAGE_SIZE = 5 * 1024 * 1024; // 5MB
+
 // 既定値。実行時は環境変数 IMAGE_MAX_COUNT を優先する。
 const MAX_IMAGES_PER_MESSAGE = 10;
 
@@ -162,6 +168,7 @@ function getImageConstraints(env = process.env) {
       env.IMAGE_MAX_TOTAL_BYTES,
       MAX_TOTAL_IMAGE_SIZE
     ),
+    maxImageBytes: parsePositiveInteger(env.IMAGE_MAX_BYTES, MAX_IMAGE_SIZE),
     allowedContentTypes: Object.freeze([...new Set(configuredTypes)]),
   };
 }
@@ -604,6 +611,7 @@ module.exports = {
   // TOOLS,
   SUPPORTED_IMAGE_TYPES,
   MAX_TOTAL_IMAGE_SIZE,
+  MAX_IMAGE_SIZE,
   MAX_IMAGES_PER_MESSAGE,
   getImageConstraints,
 
