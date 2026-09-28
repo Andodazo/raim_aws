@@ -70,6 +70,7 @@ Lambdaへ直接アップロードする場合は、Lambdaコンソールの
 | `IMAGE_BUCKET_REGION` | `us-east-1` | S3画像バケットのリージョン。Lambda実行リージョンと異なる場合も明示する |
 | `IMAGE_MAX_COUNT` | `10` | 1リクエストあたりの最大画像枚数 |
 | `IMAGE_MAX_TOTAL_BYTES` | `10485760` | 画像合計の最大実バイト数（10 MiB） |
+| `IMAGE_MAX_BYTES` | `5242880` | 画像1枚の最大実バイト数（5 MiB）。未設定なら5 MiB |
 | `IMAGE_ALLOWED_CONTENT_TYPES` | `image/jpeg,image/png,image/webp,image/gif` | 許可する画像MIMEタイプ |
 
 `OPENAI_API_KEY`と`TITAN_ENDPOINT_URL`は設定しない。
