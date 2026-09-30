@@ -39,6 +39,8 @@ const {
   RAIM_SYSTEM_PROMPT,
   PERSONA_DIGEST,
   TOOLS_DIGEST,
+  STATION_ALARM_DIGEST,
+  hasStationAlarm,
   SAFETY_RULE,
   MULTIMODAL_APPENDIX,
   getTimeContext,
@@ -409,6 +411,7 @@ function buildInitialMantleInput({
   userMemory = '',
   scene = null,
   withTools = false,
+  features = [],
 }) {
   const messages = [];
 
@@ -418,6 +421,8 @@ function buildInitialMantleInput({
   const systemPrompt = buildSystemPrompt({
     withTools,
     hasImages: hasImages(images),
+    // 駅アラームに対応したアプリなら、そのツールの説明も入れる
+    features,
   });
 
   messages.push({
@@ -483,6 +488,7 @@ function buildFollowupMantleInput({
   personaMode = FOLLOWUP_PERSONA_MODE,
   fewShotCount = FOLLOWUP_FEW_SHOT_COUNT,
   withTools = false,
+  features = [],
   now = new Date(),
 }) {
   const messages = [];
@@ -528,6 +534,9 @@ function buildFollowupMantleInput({
 
     if (withTools) {
       situational.push(TOOLS_DIGEST);
+      if (hasStationAlarm(features)) {
+        situational.push(STATION_ALARM_DIGEST);
+      }
     }
 
     if (hasImages(images)) {
@@ -610,6 +619,7 @@ function buildMantleInput({
   scene = null,
   usePreviousResponseId = false,
   withTools = false,
+  features = [],
 }) {
   if (usePreviousResponseId) {
     // 継続モードでは Mantle 側が文脈を保持しているため、
@@ -619,6 +629,7 @@ function buildMantleInput({
       images,
       scene,
       withTools,
+      features,
     });
   }
 
@@ -629,6 +640,7 @@ function buildMantleInput({
     userMemory,
     scene,
     withTools,
+    features,
   });
 }
 

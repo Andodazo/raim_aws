@@ -13,6 +13,7 @@
 //   stream.audio
 //   stream.bubble_break
 //   stream.tool
+//   stream.action
 //   stream.completed
 //   stream.error
 //
@@ -24,6 +25,7 @@
 //   audio_chunk: TTS音声Base64の分割パーツ
 //   bubble_break: 表示上の吹き出し区切り
 //   tool_call  : ツール実行中であることを示すローディング用イベント
+//   client_action: アプリに頼む操作（駅アラームを始める など）
 //   chat_end   : 最終本文と最終感情
 //   error      : エラー通知
 //
@@ -294,6 +296,19 @@ function toClientMessage(coreEvent) {
 
     case 'stream.tool':
       return createToolCallMessage(coreEvent, base);
+
+    // ライムがツールでアプリに頼んだ操作（駅アラームを始める など）。
+    // 実際に行うのはアプリ側。本文（「新宿で起こすね」）は別に text_chunk で届く。
+    case 'stream.action':
+      return {
+        ...base,
+        type: 'client_action',
+        action: String(coreEvent.action || ''),
+        params: (coreEvent.params && typeof coreEvent.params === 'object')
+          ? coreEvent.params
+          : {},
+      };
+
     case 'stream.completed':
       return {
         ...base,

@@ -13,6 +13,7 @@
 //
 // 送信イベント:
 // - stream.start     : Mantle処理開始
+// - stream.action    : アプリに頼む操作（駅アラームを始める など）
 // - stream.delta     : ユーザーに表示する回答本文の文・チャンク
 // - stream.audio     : 文・チャンクに対応するBase64 WAV音声
 // - stream.completed : 最終text/emotion/intensity
@@ -371,6 +372,21 @@ function createResponseQueuePublisher({
       return send('stream.tool', {
         tool: toolName,
         description,
+      });
+    },
+
+    // ─────────────────────────────────────────────
+    // アプリに頼む操作
+    // ─────────────────────────────────────────────
+    //
+    // 駅アラームのように、実際の動作をアプリが行うツールで使う。
+    // Edge で client_action に変換されてアプリへ届く。
+    async clientAction({ action, params = {} }) {
+      // 前置きなどの本文が残っていれば先に出し切り、順番を保つ
+      await flushText();
+      return send('stream.action', {
+        action,
+        params,
       });
     },
 

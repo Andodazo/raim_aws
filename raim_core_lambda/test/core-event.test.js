@@ -26,6 +26,7 @@ test('normalizeCoreEvent normalizes a direct Core Lambda event', () => {
     text: 'こんにちは',
     images: [],
     threadId: '',
+    features: [],
   });
 });
 
@@ -80,6 +81,7 @@ test('normalizeCoreEvent accepts the Edge Lambda Request Queue message shape', (
     text: 'つまんないダジャレ言うぞ',
     images: [],
     threadId: '',
+    features: [],
   });
 });
 
@@ -135,4 +137,15 @@ test('normalizeCoreEvent rejects an SQS batch instead of silently dropping recor
     () => normalizeCoreEvent({ Records: [{ body: '{}' }, { body: '{}' }] }),
     /exactly one SQS record/
   );
+});
+
+test('normalizeCoreEvent keeps only known features', () => {
+  const result = normalizeCoreEvent({
+    sub: 'user-1',
+    requestId: 'req-1',
+    text: '新宿で起こして',
+    features: ['station_alarm', 'unknown', 'station_alarm'],
+  });
+
+  assert.deepEqual(result.features, ['station_alarm']);
 });

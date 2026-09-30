@@ -195,6 +195,34 @@ test('toClientMessage maps stream.tool to client tool_call', () => {
   });
 });
 
+test('toClientMessage maps stream.action to client client_action', () => {
+  assert.deepEqual(toClientMessage({
+    type: 'stream.action',
+    requestId: 'req-001',
+    sequence: 7,
+    action: 'station_alarm.start',
+    params: { station: '新宿', line: '中央線' },
+  }), {
+    type: 'client_action',
+    requestId: 'req-001',
+    sequence: 7,
+    action: 'station_alarm.start',
+    params: { station: '新宿', line: '中央線' },
+  });
+});
+
+test('toClientMessage gives client_action empty params when missing', () => {
+  const message = toClientMessage({
+    type: 'stream.action',
+    requestId: 'req-001',
+    sequence: 8,
+    action: 'station_alarm.stop',
+  });
+
+  assert.equal(message.type, 'client_action');
+  assert.deepEqual(message.params, {});
+});
+
 test('toClientMessage maps stream.audio to client audio_chunk with fragments', () => {
   assert.deepEqual(toClientMessage({
     type: 'stream.audio',

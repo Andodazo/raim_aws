@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 
 const {
   WebSocketEventError,
+  normalizeFeatures,
   normalizeWebSocketEvent,
 } = require('../lib/websocket-event');
 
@@ -79,4 +80,31 @@ test('normalizeWebSocketEvent requires sub on connect', () => {
     }),
     /Cognito sub is required/
   );
+});
+
+test('normalizeFeatures keeps only known feature names', () => {
+  assert.deepEqual(normalizeFeatures(['station_alarm']), ['station_alarm']);
+  assert.deepEqual(
+    normalizeFeatures(['station_alarm', 'unknown', 'station_alarm', 3]),
+    ['station_alarm']
+  );
+  assert.deepEqual(normalizeFeatures('station_alarm'), []);
+  assert.deepEqual(normalizeFeatures(undefined), []);
+});
+
+test('normalizeWebSocketEvent reads features from the chat body', () => {
+  const normalized = normalizeWebSocketEvent({
+    requestContext: {
+      routeKey: '$default',
+      connectionId: 'conn-001',
+      authorizer: { claims: { sub: 'user-001' } },
+    },
+    body: JSON.stringify({
+      requestId: 'req-001',
+      text: '新宿で起こして',
+      features: ['station_alarm'],
+    }),
+  });
+
+  assert.deepEqual(normalized.features, ['station_alarm']);
 });

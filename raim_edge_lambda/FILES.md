@@ -219,6 +219,7 @@ Edge側では受信した音声パーツをクライアント向けの `audio_ch
 | `stream.audio` | `audio_chunk` | 対応するWAV音声のBase64。分割時はpart情報を含む |
 | `stream.bubble_break` | `bubble_break` | 表示上の吹き出し区切りを伝える |
 | `stream.tool` | `tool_call` | ツール実行中のローディング表示に使う情報を伝える |
+| `stream.action` | `client_action` | アプリに頼む操作（`action` と `params`）を伝える |
 | `stream.completed` | `chat_end` | 最終本文と最終感情を伝える |
 | `stream.error` | `error` | エラー内容と再試行可否を伝える |
 
@@ -227,6 +228,15 @@ Edge側では受信した音声パーツをクライアント向けの `audio_ch
 
 `audio_chunk` はCore/TTS側がResponse Queueへ送る `stream.audio` を変換して送ります。
 Edge LambdaではBase64音声の分割・結合は行わず、届いたパーツをそのまま中継します。
+
+`client_action` は、ライムがアプリに頼む操作です。今は駅アラームだけで、
+`station_alarm.start`（`params.station` は駅名、`params.line` は路線名で任意）と
+`station_alarm.stop` があります。実際の動作はアプリが行い、ライムの返事は
+別に `text_chunk` で届きます。
+
+クライアントは送信時に `features: ["station_alarm"]` を付けると、使える機能として
+Coreへ伝わります（知らない名前は捨てます）。付けたときだけライムに駅アラームの
+ツールが見えるので、駅アラームの無いクライアント（Windows 版など）は付けません。
 
 `tool_call` は、Core LambdaがResponse Queueへ送った `stream.tool` を変換して送ります。
 実際のTool Lambda呼び出し自体はCore Lambda側の責務で、Edge Lambdaは表示用イベントを中継するだけです。

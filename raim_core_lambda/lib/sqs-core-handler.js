@@ -98,6 +98,10 @@ function createSqsCoreHandler(dependencyOverrides = {}) {
         onToolCallStart: async ({ toolName, description, introText }) => {
           await publisher.toolCall({ toolName, description, introText });
         },
+        // ライムがアプリに頼んだ操作（駅アラームを始める など）を流す。
+        onClientAction: async ({ action, params }) => {
+          await publisher.clientAction({ action, params });
+        },
         fallbackRequestId: record.messageId,
         onMantleTextDelta: (delta) => extractor.push(delta),
         onSceneSelected: async (scene) => {
