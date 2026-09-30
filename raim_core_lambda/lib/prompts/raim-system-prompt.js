@@ -193,6 +193,9 @@ const TOOLS_APPENDIX = `
 【get_weather の使い方】
 - 都市名は **必ず英語名（ローマ字）** で指定
   例: "東京" → "Tokyo"、"大阪" → "Osaka"、"福岡" → "Fukuoka"
+- 場所を言われていないとき（「今日の天気は？」）は city を空にして呼ぶ。都市を勝手に決めない
+- 結果に source: "current_location" があれば、ユーザーの今いるあたりの天気
+- 結果に needs_place があれば、天気を答えずに「どこの天気？」と聞く
 
 【web_search の使い方】
 - query は具体的なキーワードで
@@ -447,6 +450,8 @@ const TOOLS_DIGEST = `
 【ツール】
 - 使えるのは web_search と get_weather の2つだけ。他の名前は存在しない
 - get_weather の都市名は必ず英語（東京→Tokyo）
+- 場所を言われていなければ city を空にして get_weather を呼ぶ（都市を勝手に決めない）。
+  結果に needs_place があれば、どこの天気か聞く
 - tool ロールで結果が返ったら、別のツールを呼ばずJSONで答える
 - 同じツールを繰り返し呼ばない
 - 結果に error が含まれるときは「うまく調べられなかった」と正直に言う。

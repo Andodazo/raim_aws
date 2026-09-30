@@ -106,25 +106,50 @@ function normalizeCityName(city) {
 }
 
 /**
- * OpenWeatherMap で都市の現在天気を取得
+ * OpenWeatherMap で現在の天気を取得する。
+ *
+ * city があればその都市。無ければ options.location（アプリの現在地、
+ * 約10kmに丸めたもの）の天気。どちらも無ければ、ライムに場所を聞くよう返す。
+ *
+ * 以前は city が必須で、場所を言わずに「今日の天気は？」と聞くと、
+ * ライムがどこかの都市を勝手に選んで答えていた。
  */
-async function getWeather(city, countryCode = null, injectedApiKey = null) {
+async function getWeather(city, countryCode = null, injectedApiKey = null, options = {}) {
   // Lambdaでは環境変数へ平文保存せず、Secrets Managerから取得したキーを注入する。
   // ローカル検証用に環境変数フォールバックも残す。
   const apiKey = injectedApiKey || process.env.OPENWEATHERMAP_API_KEY;
   if (!apiKey) {
     throw new Error('OPENWEATHERMAP_API_KEY is not configured');
   }
-  if (!city || typeof city !== 'string') {
-    throw new Error('city is required and must be a string');
+  const hasCity = typeof city === 'string' && city.trim() !== '';
+  const location = options.location;
+  const hasLocation = Boolean(
+    location && Number.isFinite(location.lat) && Number.isFinite(location.lon)
+  );
+
+  if (!hasCity && !hasLocation) {
+    // エラーにはしない。エラーだと「うまく調べられなかった」と言ってしまうが、
+    // ここでしてほしいのは場所を聞き返すこと
+    return {
+      needs_place: true,
+      message: 'どこの天気か分かりません（アプリから現在地が届いていません）。都市を決めつけず、どこの天気が知りたいかユーザーに聞いてください。',
+    };
   }
 
-  // 都市名を正規化（日本語→英語）
-  const normalizedCity = normalizeCityName(city);
-  const queryParam = countryCode ? `${normalizedCity},${countryCode}` : normalizedCity;
-
   const url = new URL(OWM_API_URL);
-  url.searchParams.set('q', queryParam);
+  let normalizedCity = '';
+
+  if (hasCity) {
+    // 都市名を正規化（日本語→英語）
+    normalizedCity = normalizeCityName(city);
+    const queryParam = countryCode ? `${normalizedCity},${countryCode}` : normalizedCity;
+    url.searchParams.set('q', queryParam);
+  } else {
+    // 現在地の天気。位置はログに出さない
+    url.searchParams.set('lat', String(location.lat));
+    url.searchParams.set('lon', String(location.lon));
+  }
+
   url.searchParams.set('appid', apiKey);
   url.searchParams.set('units', 'metric');
   url.searchParams.set('lang', 'ja');
@@ -137,7 +162,9 @@ async function getWeather(city, countryCode = null, injectedApiKey = null) {
 
   if (!res.ok) {
     if (res.status === 404) {
-      throw new Error(`都市が見つかりません: ${city} (正規化後: ${normalizedCity})`);
+      throw new Error(hasCity
+        ? `都市が見つかりません: ${city} (正規化後: ${normalizedCity})`
+        : '現在地の天気が見つかりません');
     }
     if (res.status === 401) {
       throw new Error('OPENWEATHERMAP_API_KEY が無効、または有効化前です（登録後数時間〜半日かかる場合あり）');
@@ -150,6 +177,8 @@ async function getWeather(city, countryCode = null, injectedApiKey = null) {
 
   return {
     city: data.name,
+    // 現在地で調べたか（ライムが「今いるあたり」と言えるように）
+    ...(hasCity ? {} : { source: 'current_location' }),
     country: data.sys?.country || 'unknown',
     weather: data.weather?.[0]?.main || 'unknown',
     description: data.weather?.[0]?.description || '',

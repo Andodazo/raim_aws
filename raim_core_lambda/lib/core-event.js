@@ -243,6 +243,38 @@ function normalizeCoreEvent(event, { fallbackRequestId } = {}) {
     // 任意。アプリが使える機能（例: station_alarm）。
     // ライムに見せるツールの出し分けに使う。
     features: normalizeFeatures(payload.features),
+    // 任意。アプリの現在地（約10kmに丸めたもの）。
+    // 天気を聞かれて場所が指定されていないときだけ使う。
+    location: normalizeLocation(payload.location),
+  };
+}
+
+/**
+ * アプリが送った現在地（天気の「今いるところ」に使う）。
+ *
+ * 0.1度（約10km）に丸める。天気には十分で、住所までは分からない細かさ。
+ * アプリも丸めて送るが、サーバーでも丸めておく。
+ * 形が不正なら null（位置が無いものとして扱う）。
+ */
+function normalizeLocation(value) {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  const lat = Number(value.lat);
+  const lon = Number(value.lon);
+
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+    return null;
+  }
+
+  if (lat < -90 || lat > 90 || lon < -180 || lon > 180) {
+    return null;
+  }
+
+  return {
+    lat: Math.round(lat * 10) / 10,
+    lon: Math.round(lon * 10) / 10,
   };
 }
 
@@ -300,6 +332,7 @@ module.exports = {
   normalizeCoreEvent,
   normalizeThreadId,
   normalizeFeatures,
+  normalizeLocation,
   validateCoreRequestEnvelope,
   unwrapCorePayload,
 };
