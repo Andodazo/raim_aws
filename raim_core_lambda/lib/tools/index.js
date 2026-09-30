@@ -28,10 +28,22 @@
 // 1. lib/tools/<tool-name>.js を作成
 // 2. TOOL_DEFINITIONS / TOOL_FUNCTIONS / TOOL_INTROS / TOOL_DESCRIPTIONS に登録
 //
+// 【アプリに頼むツール】
+// 駅アラームのように、実際の動作をアプリが行うツールもある（station-alarm.js）。
+// アプリが features で申告したときだけ getToolDefinitions() が含める。
+// 呼ばれたら getClientAction() がアプリへ送る操作を返す。
+//
 // ==============================================================================
 
 const { searchWeb } = require('./web-search');
 const { getWeather } = require('./get-weather');
+const {
+  STATION_ALARM_FEATURE,
+  STATION_ALARM_TOOL_DEFINITIONS,
+  STATION_ALARM_TOOL_NAMES,
+  toStationAlarmAction,
+  runStationAlarmTool,
+} = require('./station-alarm');
 
 // ─────────────────────────────────────────────
 // ツール定義（Responses API 形式）
@@ -79,6 +91,24 @@ const TOOL_DEFINITIONS = [
 ];
 
 /**
+ * 今回の会話でライムに見せるツール定義。
+ *
+ * features はアプリが使える機能（例: ['station_alarm']）。
+ * 機能を持つアプリにだけ、その機能を使うツールを見せる。
+ *
+ * @param {{ features?: string[] }} options
+ */
+function getToolDefinitions({ features = [] } = {}) {
+  const list = [...TOOL_DEFINITIONS];
+
+  if (Array.isArray(features) && features.includes(STATION_ALARM_FEATURE)) {
+    list.push(...STATION_ALARM_TOOL_DEFINITIONS);
+  }
+
+  return list;
+}
+
+/**
  * Chat Completions形式（functionをネストする形）へ変換する。
  *
  * Mantleが将来Chat Completions経由のツール呼出しか受け付けなくなった場合や、
@@ -111,7 +141,25 @@ const TOOL_FUNCTIONS = {
   get_weather: async (args, secrets = {}) => {
     return getWeather(args.city, args.country_code, secrets.openWeatherMapApiKey);
   },
+
+  // アプリに頼むツール。外部APIは呼ばない
+  start_station_alarm: async (args) => runStationAlarmTool('start_station_alarm', args),
+  stop_station_alarm: async (args) => runStationAlarmTool('stop_station_alarm', args),
 };
+
+/**
+ * アプリに頼むツールなら、アプリへ送る操作を返す。
+ * 普通のツール、または引数が足りず送れないときは null。
+ *
+ * @returns {{ action: string, params: object } | null}
+ */
+function getClientAction(toolName, args = {}) {
+  if (STATION_ALARM_TOOL_NAMES.includes(toolName)) {
+    return toStationAlarmAction(toolName, args);
+  }
+
+  return null;
+}
 
 // ─────────────────────────────────────────────
 // ツール呼出時の前置きセリフ
@@ -165,6 +213,12 @@ const TOOL_INTROS = {
  * @param {Function} random テスト時に固定できるよう注入可能
  */
 function pickToolIntro(toolName, turn, random = Math.random) {
+  // アプリに頼むツールは待ち時間が無いので、前置きは言わない。
+  // 「ちょっと待って」の直後に「新宿で起こすね」が来ると不自然なため。
+  if (STATION_ALARM_TOOL_NAMES.includes(toolName)) {
+    return '';
+  }
+
   const intros = TOOL_INTROS[toolName];
 
   if (!intros) {
@@ -184,6 +238,8 @@ function pickToolIntro(toolName, turn, random = Math.random) {
 const TOOL_DESCRIPTIONS = {
   web_search: (args) => `「${args.query}」を検索しています`,
   get_weather: (args) => `${args.city}の天気を調べています`,
+  start_station_alarm: () => '駅アラームを準備しています',
+  stop_station_alarm: () => '駅アラームを止めています',
 };
 
 function getToolDescription(toolName, args = {}) {
@@ -286,6 +342,8 @@ async function executeTool(toolName, args, secrets = {}) {
 
 module.exports = {
   TOOL_DEFINITIONS,
+  getToolDefinitions,
+  getClientAction,
   toChatCompletionsFormat,
   executeTool,
   pickToolIntro,

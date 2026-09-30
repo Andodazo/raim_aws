@@ -31,6 +31,7 @@ function createRequestQueuePublisher({ client, env = process.env } = {}) {
     text,
     images = [],
     threadId = '',
+    features = [],
   }) {
     const message = {
       schemaVersion: REQUEST_SCHEMA_VERSION,
@@ -43,6 +44,8 @@ function createRequestQueuePublisher({ client, env = process.env } = {}) {
       images,
       // 会話スレッドの指定。空ならCore側がactiveThreadIdを使うか新規作成する。
       threadId,
+      // クライアントが使える機能。Core がライムに見せるツールを決める
+      features: Array.isArray(features) ? features : [],
       createdAt: new Date().toISOString(),
     };
 

@@ -85,7 +85,40 @@ test('$default publishes a chat request to Core request queue', async () => {
     text: 'つまんないダジャレ言うぞ',
     images: [],
     threadId: '',
+    features: [],
   });
+});
+
+test('$default forwards features the client supports', async () => {
+  const published = [];
+  const handler = createWebSocketHandler({
+    connectionStore: {
+      putConnection: async () => {},
+      getConnection: async () => null,
+      deleteConnection: async () => {},
+    },
+    requestPublisher: {
+      publishChatRequest: async (message) => {
+        published.push(message);
+        return message;
+      },
+    },
+  });
+
+  await handler({
+    requestContext: {
+      routeKey: '$default',
+      connectionId: 'conn-001',
+      authorizer: { claims: { sub: 'user-001' } },
+    },
+    body: JSON.stringify({
+      requestId: 'req-002',
+      text: '新宿で起こして',
+      features: ['station_alarm'],
+    }),
+  });
+
+  assert.deepEqual(published[0].features, ['station_alarm']);
 });
 
 test('$disconnect deletes the WebSocket connection', async () => {

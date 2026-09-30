@@ -113,6 +113,34 @@ function normalizeThreadId(value) {
 }
 
 /**
+ * クライアントが使える機能として申告した名前。
+ *
+ * 知っている名前だけを通す。Core はこれを見て、ライムに見せるツールを増やす
+ * （例: station_alarm があれば「駅アラームを始める」ツールを出す）。
+ * 機能を持たないクライアント（Windows 版など）にツールを見せると、
+ * ライムが「起こすね」と言ったのに何も起きない状態になるため。
+ */
+const KNOWN_FEATURES = Object.freeze(['station_alarm']);
+
+function normalizeFeatures(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const out = [];
+
+  for (const item of value) {
+    const name = String(item || '').trim();
+
+    if (KNOWN_FEATURES.includes(name) && !out.includes(name)) {
+      out.push(name);
+    }
+  }
+
+  return out;
+}
+
+/**
  * クライアント要求の種別を取り出す。
  *
  * 従来のチャット送信は type を持たないため、未指定は 'chat' 扱いにする。
@@ -162,6 +190,7 @@ function normalizeWebSocketEvent(event, lambdaContext = {}) {
   const action = normalizeAction(payload.type);
   const threadId = normalizeThreadId(payload.threadId);
   const beforeIndex = normalizeBeforeIndex(payload.beforeIndex);
+  const features = normalizeFeatures(payload.features);
 
   // text/images が要るのはチャット送信のときだけ。
   // thread.list のような読み取り要求は本文を持たない。
@@ -188,6 +217,7 @@ function normalizeWebSocketEvent(event, lambdaContext = {}) {
     text,
     images,
     threadId,
+    features,
     // 履歴を遡る位置。null なら最新側から返す
     beforeIndex,
     rawPayload: payload,
@@ -199,6 +229,8 @@ module.exports = {
   normalizeThreadId,
   normalizeAction,
   normalizeBeforeIndex,
+  normalizeFeatures,
+  KNOWN_FEATURES,
   normalizeWebSocketEvent,
   parseJsonBody,
   extractSub,

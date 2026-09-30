@@ -107,3 +107,47 @@ test('does not retry non-retriable invalid request messages', async () => {
     console.error = originalConsoleError;
   }
 });
+
+test('passes client actions from the tool loop to the publisher', async () => {
+  const events = [];
+  const publisher = {
+    start: async () => events.push(['start']),
+    appendText: async () => {},
+    toolCall: async ({ toolName }) => events.push(['tool', toolName]),
+    clientAction: async ({ action, params }) => events.push(['action', action, params]),
+    completed: async () => events.push(['completed']),
+    error: async () => events.push(['error']),
+  };
+  const handler = createSqsCoreHandler({
+    normalizeCoreEvent: () => ({
+      sub: 'user-1',
+      requestId: 'req-1',
+      connectionId: 'connection-1',
+      source: 'websocket',
+      text: '新宿で起こして',
+      images: [],
+      features: ['station_alarm'],
+    }),
+    claimRequest: async () => ({ claimed: true, requestKey: 'user-1#req-1' }),
+    createResponseQueuePublisher: () => publisher,
+    handleCoreChat: async (input, options) => {
+      await options.onToolCallStart({ toolName: 'start_station_alarm', introText: '' });
+      await options.onClientAction({
+        action: 'station_alarm.start',
+        params: { station: '新宿' },
+      });
+      return { ok: true, type: 'chat', requestId: input.requestId, text: '新宿ね' };
+    },
+    markRequestCompleted: async () => {},
+    markRequestFailed: async () => {},
+  });
+
+  await handler({ Records: [createRecord()] }, { awsRequestId: 'invocation-1' });
+
+  assert.deepEqual(events, [
+    ['start'],
+    ['tool', 'start_station_alarm'],
+    ['action', 'station_alarm.start', { station: '新宿' }],
+    ['completed'],
+  ]);
+});

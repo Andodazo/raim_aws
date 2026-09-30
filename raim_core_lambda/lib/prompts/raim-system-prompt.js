@@ -227,6 +227,49 @@ tool結果: {"answer":"OpenAI が新モデル GPT-X を発表"}
 `;
 
 // ─────────────────────────────────────────────
+// 駅アラーム（アプリが対応しているときだけ）
+// ─────────────────────────────────────────────
+//
+// アプリが features に station_alarm を入れて送ってきたときだけ足す。
+// 上の「この2つだけ」と食い違うので、追加であることをはっきり書く。
+//
+// 実際に駅を見張るのはアプリ。ライムが自分で電車の位置を知っているように
+// 話すと嘘になるので、「アプリで起こす」立場の返事にさせる。
+
+const STATION_ALARM_APPENDIX = `
+
+【このアプリで追加で使えるツール（駅アラーム）】
+上の2つに加えて、このアプリでは次の2つも使える。
+3. **start_station_alarm**: 降りる駅が近づいたら知らせる「駅アラーム」を始める
+4. **stop_station_alarm**: 駅アラームを止める
+
+【駅アラームの使い方】
+- 「◯◯で起こして」「◯◯に着いたら教えて」「◯◯で降りる、寝過ごしそう」と頼まれたら start_station_alarm を呼ぶ
+- station には駅名だけを入れる（「駅」は付けない）。kana には駅名のよみがな（ひらがな）を入れる
+- 路線を言われたときだけ line を入れる
+- 降りる駅が分からないときはツールを呼ばず、どの駅か聞く
+- 「もう降りた」「アラーム止めて」と言われたら stop_station_alarm を呼ぶ
+- 結果が返ったら、短く返事する（例: 「新宿ね。近づいたら起こすから、安心して寝てていいよ」）
+- 駅を見張るのはアプリ。電車の今の位置や到着時刻を知っているように話さない
+
+▼ start_station_alarm の結果を使った応答例:
+tool結果: {"ok":true,"station":"新宿"}
+→ {"text":"新宿ね、了解。近づいたら起こすから、ゆっくりしてて","emotions":{"caring":0.6,"neutral":0.4}}
+`;
+
+const STATION_ALARM_DIGEST = `
+【駅アラーム】
+- このアプリでは start_station_alarm / stop_station_alarm も使える（上の2つに追加）
+- 「◯◯で起こして」と頼まれたら start_station_alarm（station は駅名だけ、kana によみがな）
+- 降りる駅が分からなければ呼ばずに聞く。「止めて」「もう降りた」は stop_station_alarm
+- 駅を見張るのはアプリ。電車の位置や到着時刻を知っているように話さない
+`.trim();
+
+function hasStationAlarm(features) {
+  return Array.isArray(features) && features.includes('station_alarm');
+}
+
+// ─────────────────────────────────────────────
 // 出力ルール
 // ─────────────────────────────────────────────
 //
@@ -301,12 +344,21 @@ const SAFETY_RULE = `
  * @param {boolean} options.withTools ツールを有効にするか
  * @param {boolean} options.hasImages 画像が添付されているか
  * @param {Date}    options.now       時刻（テスト注入用）
+ * @param {string[]} options.features アプリが使える機能（駅アラームなど）
  */
-function buildSystemPrompt({ withTools = false, hasImages = false, now = new Date() } = {}) {
+function buildSystemPrompt({
+  withTools = false,
+  hasImages = false,
+  now = new Date(),
+  features = [],
+} = {}) {
   let content = SYSTEM_BASE + EMOTIONS_RULE;
 
   if (withTools) {
     content += TOOLS_APPENDIX;
+    if (hasStationAlarm(features)) {
+      content += STATION_ALARM_APPENDIX;
+    }
     content += OUTPUT_RULE_WITH_TOOLS;
   } else {
     content += OUTPUT_RULE_NORMAL;
@@ -409,6 +461,8 @@ module.exports = {
   RAIM_SYSTEM_PROMPT_VERSION,
   PERSONA_DIGEST,
   TOOLS_DIGEST,
+  STATION_ALARM_DIGEST,
+  hasStationAlarm,
   SAFETY_RULE,
   MULTIMODAL_APPENDIX,
   RAIM_SYSTEM_PROMPT,

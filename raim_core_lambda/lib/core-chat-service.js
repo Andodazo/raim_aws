@@ -49,7 +49,8 @@ const { createMantleResponse } = require('./mantle-client');
 const { normalizeMantleOutput } = require('./response-validator');
 const { MESSAGE_TYPES } = require('./types');
 const {
-  TOOL_DEFINITIONS,
+  getToolDefinitions,
+  getClientAction,
   executeTool,
   pickToolIntro,
   getToolDescription,
@@ -146,6 +147,16 @@ async function onToolCallStart() {
   // 既定では何もしない
 }
 
+/**
+ * アプリに頼む操作（駅アラームを始める など）を送る既定実装。
+ *
+ * SQS経路ではsqs-core-handlerが上書きし、Response Queueへ
+ * stream.action を流す。直接実行では何もしない。
+ */
+async function onClientAction() {
+  // 既定では何もしない
+}
+
 const defaultDependencies = Object.freeze({
   clearMantleResponseState,
   getOrCreateUserSession,
@@ -171,7 +182,8 @@ const defaultDependencies = Object.freeze({
   maxToolTurns: MAX_TOOL_TURNS,
   multiTurnTools: MULTI_TURN_TOOLS,
   isToolUseEnabled,
-  getToolDefinitions: () => TOOL_DEFINITIONS,
+  getToolDefinitions,
+  getClientAction,
   executeTool: executeToolWithSecrets,
   pickToolIntro,
   getToolDescription,
@@ -180,6 +192,7 @@ const defaultDependencies = Object.freeze({
   isKnownTool,
   buildForcedFinalPrompt,
   onToolCallStart,
+  onClientAction,
 });
 
 /**
@@ -205,10 +218,15 @@ function createCoreChatService(dependencyOverrides = {}) {
     // SQS経路ではsqs-core-handlerが渡す。
     // Lambdaコンソールからの直接実行では未指定となり、既定の何もしない実装が使われる。
     onToolCallStart,
+    // SQS経路ではsqs-core-handlerが渡す。アプリへ操作を頼むときに呼ぶ。
+    onClientAction,
   } = {}) {
     const notifyToolCall = typeof onToolCallStart === 'function'
       ? onToolCallStart
       : dependencies.onToolCallStart;
+    const notifyClientAction = typeof onClientAction === 'function'
+      ? onClientAction
+      : dependencies.onClientAction;
     let input;
 
     // 入力不正は外部サービスを呼ぶ前に確定させ、再試行不要のerrorとして返す。
@@ -307,6 +325,8 @@ function createCoreChatService(dependencyOverrides = {}) {
       scene: selectedScene,
       usePreviousResponseId: sessionState.usePreviousResponseId,
       withTools: toolsEnabled,
+      // アプリが使える機能。駅アラームのツールの説明を入れるかが決まる
+      features: input.features,
     });
     // policyが期限・存在状態を確認済みの時だけprevious_response_idを送る。
     let previousResponseId = sessionState.usePreviousResponseId
@@ -374,6 +394,7 @@ function createCoreChatService(dependencyOverrides = {}) {
           scene: selectedScene,
           usePreviousResponseId: false,
           withTools: toolsEnabled,
+          features: input.features,
         });
 
         mantleInput = rebuiltInput;
@@ -382,7 +403,14 @@ function createCoreChatService(dependencyOverrides = {}) {
       }
     };
 
-    const toolDefinitions = toolsEnabled ? dependencies.getToolDefinitions() : null;
+    const toolDefinitions = toolsEnabled
+      ? dependencies.getToolDefinitions({ features: input.features })
+      : null;
+    // 今回ライムに見せたツール名。見せていないツール（アプリが対応していない
+    // 駅アラームなど）を名前だけで呼ばれても実行しない。
+    const offeredToolNames = new Set(
+      (toolDefinitions || []).map((tool) => tool.name)
+    );
     const seenToolCalls = new Set();
 
     let toolTurn = 0;
@@ -430,7 +458,7 @@ function createCoreChatService(dependencyOverrides = {}) {
       //
       // そのため、intro を送る前に実在するツールかを判定し、
       // 捏造ツールなら発話せずにループを抜けて最終応答を生成させる。
-      if (!dependencies.isKnownTool(toolName)) {
+      if (!dependencies.isKnownTool(toolName) || !offeredToolNames.has(toolName)) {
         console.warn(`[Tool] 未知のツール名を無視しました: ${toolName}`);
         exitedDueToUnknownTool = true;
         break;
@@ -445,6 +473,14 @@ function createCoreChatService(dependencyOverrides = {}) {
         introText: dependencies.pickToolIntro(toolName, toolTurn),
         description: dependencies.getToolDescription(toolName, toolArgs),
       });
+
+      // アプリに頼むツール（駅アラームなど）は、ライムの返事より先に
+      // アプリへ操作を送る。返事の生成を待たずに乗車モードを始められる。
+      const clientAction = dependencies.getClientAction(toolName, toolArgs);
+
+      if (clientAction) {
+        await notifyClientAction(clientAction);
+      }
 
       const toolResult = await dependencies.executeTool(toolName, toolArgs);
 

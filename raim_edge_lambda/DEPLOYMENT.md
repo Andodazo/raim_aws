@@ -152,6 +152,7 @@ Edge LambdaはWebSocketへ送信する直前に、クライアント統合仕様
 | `stream.audio` | `audio_chunk` | 対応するWAV音声。分割時はpart情報を含む |
 | `stream.bubble_break` | `bubble_break` | 表示上の吹き出し区切り |
 | `stream.tool` | `tool_call` | ツール実行中のローディング表示 |
+| `stream.action` | `client_action` | アプリに頼む操作（駅アラームを始める／止める） |
 | `stream.completed` | `chat_end` | 最終本文と最終感情 |
 | `stream.error` | `error` | エラー通知 |
 

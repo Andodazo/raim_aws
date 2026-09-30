@@ -252,3 +252,41 @@ test('tool intro is synthesized like normal text', async () => {
   assert.ok(introTts, '前置きも TTS に回ること');
   assert.equal(introTts.text, 'えっと、それ気になる。少し待って？');
 });
+
+test('clientAction sends stream.action without an intro or bubble_break', async () => {
+  const { publisher, types, bodies } = makeCapturingPublisher();
+
+  await publisher.start();
+  // 駅アラームは前置きセリフ無し（introText が空）
+  await publisher.toolCall({
+    toolName: 'start_station_alarm',
+    description: '駅アラームを準備しています',
+    introText: '',
+  });
+  await publisher.clientAction({
+    action: 'station_alarm.start',
+    params: { station: '新宿' },
+  });
+  await publisher.appendText('新宿ね、了解');
+  await publisher.completed({
+    text: '新宿ね、了解',
+    emotions: { caring: 1 },
+    overall_intensity: 0.5,
+    emotion: 'caring',
+    intensity: 0.5,
+  });
+
+  // 本文の delta は文の区切りで複数に分かれることがあるので、まとめて見る
+  const collapsed = types().filter((type, i, all) => type !== all[i - 1]);
+  assert.deepEqual(collapsed, [
+    'stream.start',
+    'stream.tool',
+    'stream.action',
+    'stream.delta',
+    'stream.completed',
+  ]);
+
+  const action = bodies()[2];
+  assert.equal(action.action, 'station_alarm.start');
+  assert.deepEqual(action.params, { station: '新宿' });
+});

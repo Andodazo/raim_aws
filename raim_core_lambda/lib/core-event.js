@@ -26,7 +26,8 @@
 //   source: "websocket",
 //   text: "こんにちは",
 //   images: [],
-//   threadId: "thread-xxxx" // 任意
+//   threadId: "thread-xxxx", // 任意
+//   features: ["station_alarm"] // 任意。アプリが使える機能
 // }
 //
 // JSON解釈や入力検証に失敗した場合はCoreEventErrorを投げる。
@@ -239,7 +240,36 @@ function normalizeCoreEvent(event, { fallbackRequestId } = {}) {
     // 任意。クライアントが会話スレッドを指定した場合のみ入る。
     // 未指定なら Core が UserSession の activeThreadId を使うか、新規作成する。
     threadId: normalizeThreadId(payload.threadId),
+    // 任意。アプリが使える機能（例: station_alarm）。
+    // ライムに見せるツールの出し分けに使う。
+    features: normalizeFeatures(payload.features),
   };
+}
+
+/**
+ * アプリが申告した機能の名前を検証する。
+ *
+ * 知っている名前だけを通す。Edge でも同じ絞り込みをしているが、
+ * Lambda コンソールからの直接実行でも同じ結果になるよう Core でも行う。
+ */
+const KNOWN_FEATURES = Object.freeze(['station_alarm']);
+
+function normalizeFeatures(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const out = [];
+
+  for (const item of value) {
+    const name = String(item || '').trim();
+
+    if (KNOWN_FEATURES.includes(name) && !out.includes(name)) {
+      out.push(name);
+    }
+  }
+
+  return out;
 }
 
 /**
@@ -269,6 +299,7 @@ module.exports = {
   getCoreRequestId,
   normalizeCoreEvent,
   normalizeThreadId,
+  normalizeFeatures,
   validateCoreRequestEnvelope,
   unwrapCorePayload,
 };
