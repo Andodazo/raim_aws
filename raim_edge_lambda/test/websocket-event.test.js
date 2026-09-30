@@ -108,3 +108,13 @@ test('normalizeWebSocketEvent reads features from the chat body', () => {
 
   assert.deepEqual(normalized.features, ['station_alarm']);
 });
+
+test('normalizeLocation rounds to about 10km and rejects bad values', () => {
+  const { normalizeLocation } = require('../lib/websocket-event');
+
+  assert.deepEqual(normalizeLocation({ lat: 35.65584, lon: 139.33891 }), { lat: 35.7, lon: 139.3 });
+  assert.equal(normalizeLocation(null), null);
+  assert.equal(normalizeLocation({ lat: 'x', lon: 139 }), null);
+  assert.equal(normalizeLocation({ lat: 91, lon: 139 }), null);
+  assert.equal(normalizeLocation({ lat: 35, lon: 181 }), null);
+});

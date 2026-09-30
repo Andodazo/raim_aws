@@ -86,6 +86,7 @@ test('$default publishes a chat request to Core request queue', async () => {
     images: [],
     threadId: '',
     features: [],
+    location: null,
   });
 });
 
@@ -176,4 +177,36 @@ test('$default fills sub from the stored connection when authorizer context is a
 
   assert.equal(response.statusCode, 202);
   assert.equal(published[0].sub, 'user-from-store');
+});
+
+test('$default forwards a rounded location', async () => {
+  const published = [];
+  const handler = createWebSocketHandler({
+    connectionStore: {
+      putConnection: async () => {},
+      getConnection: async () => null,
+      deleteConnection: async () => {},
+    },
+    requestPublisher: {
+      publishChatRequest: async (message) => {
+        published.push(message);
+        return message;
+      },
+    },
+  });
+
+  await handler({
+    requestContext: {
+      routeKey: '$default',
+      connectionId: 'conn-001',
+      authorizer: { claims: { sub: 'user-001' } },
+    },
+    body: JSON.stringify({
+      requestId: 'req-003',
+      text: '今日の天気は？',
+      location: { lat: 35.65584, lon: 139.33891 },
+    }),
+  });
+
+  assert.deepEqual(published[0].location, { lat: 35.7, lon: 139.3 });
 });

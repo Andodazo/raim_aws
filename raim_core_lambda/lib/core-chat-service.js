@@ -116,9 +116,9 @@ async function isToolUseEnabled() {
 /**
  * Secrets Managerのキーを渡してツールを実行する。
  */
-async function executeToolWithSecrets(toolName, toolArgs) {
+async function executeToolWithSecrets(toolName, toolArgs, context = {}) {
   const secrets = await getToolSecrets();
-  return executeTool(toolName, toolArgs, secrets || {});
+  return executeTool(toolName, toolArgs, secrets || {}, context);
 }
 
 /**
@@ -482,7 +482,10 @@ function createCoreChatService(dependencyOverrides = {}) {
         await notifyClientAction(clientAction);
       }
 
-      const toolResult = await dependencies.executeTool(toolName, toolArgs);
+      // 天気の場所が指定されないときのために、アプリの現在地（約10kmに丸めたもの）も渡す
+      const toolResult = await dependencies.executeTool(toolName, toolArgs, {
+        location: input.location,
+      });
 
       toolExecuted = true;
 

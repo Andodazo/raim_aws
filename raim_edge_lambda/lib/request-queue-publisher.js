@@ -32,6 +32,7 @@ function createRequestQueuePublisher({ client, env = process.env } = {}) {
     images = [],
     threadId = '',
     features = [],
+    location = null,
   }) {
     const message = {
       schemaVersion: REQUEST_SCHEMA_VERSION,
@@ -46,6 +47,8 @@ function createRequestQueuePublisher({ client, env = process.env } = {}) {
       threadId,
       // クライアントが使える機能。Core がライムに見せるツールを決める
       features: Array.isArray(features) ? features : [],
+      // 現在地（約10kmに丸めたもの）。送られてこなければ入れない
+      ...(location ? { location } : {}),
       createdAt: new Date().toISOString(),
     };
 

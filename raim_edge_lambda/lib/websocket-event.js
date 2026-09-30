@@ -141,6 +141,35 @@ function normalizeFeatures(value) {
 }
 
 /**
+ * アプリが送った現在地（天気の「今いるところ」に使う）。
+ *
+ * 0.1度（約10km）に丸める。天気には十分で、住所までは分からない細かさ。
+ * アプリも丸めて送るが、サーバーでも丸めておく。
+ * 形が不正なら null（位置が無いものとして扱う）。
+ */
+function normalizeLocation(value) {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  const lat = Number(value.lat);
+  const lon = Number(value.lon);
+
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+    return null;
+  }
+
+  if (lat < -90 || lat > 90 || lon < -180 || lon > 180) {
+    return null;
+  }
+
+  return {
+    lat: Math.round(lat * 10) / 10,
+    lon: Math.round(lon * 10) / 10,
+  };
+}
+
+/**
  * クライアント要求の種別を取り出す。
  *
  * 従来のチャット送信は type を持たないため、未指定は 'chat' 扱いにする。
@@ -191,6 +220,7 @@ function normalizeWebSocketEvent(event, lambdaContext = {}) {
   const threadId = normalizeThreadId(payload.threadId);
   const beforeIndex = normalizeBeforeIndex(payload.beforeIndex);
   const features = normalizeFeatures(payload.features);
+  const location = normalizeLocation(payload.location);
 
   // text/images が要るのはチャット送信のときだけ。
   // thread.list のような読み取り要求は本文を持たない。
@@ -218,6 +248,8 @@ function normalizeWebSocketEvent(event, lambdaContext = {}) {
     images,
     threadId,
     features,
+    // 現在地（約10kmに丸めたもの）。天気の場所が指定されないときに使う
+    location,
     // 履歴を遡る位置。null なら最新側から返す
     beforeIndex,
     rawPayload: payload,
@@ -230,6 +262,7 @@ module.exports = {
   normalizeAction,
   normalizeBeforeIndex,
   normalizeFeatures,
+  normalizeLocation,
   KNOWN_FEATURES,
   normalizeWebSocketEvent,
   parseJsonBody,

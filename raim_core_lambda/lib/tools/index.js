@@ -72,20 +72,20 @@ const TOOL_DEFINITIONS = [
   {
     type: 'function',
     name: 'get_weather',
-    description: '指定された都市の現在の天気情報を取得します。Web検索より構造化された天気データを返します。',
+    description: '都市の現在の天気情報を取得します。Web検索より構造化された天気データを返します。ユーザーが場所を言っていないとき（「今日の天気は？」など）は city を空にして呼んでください。アプリが分かる範囲で現在地の天気を返します。',
     parameters: {
       type: 'object',
       properties: {
         city: {
           type: 'string',
-          description: '都市名（例：東京、Tokyo、Osaka）。日本語/英語どちらでも可',
+          description: '都市名（例：東京、Tokyo、Osaka）。日本語/英語どちらでも可。ユーザーが場所を言っていなければ空にする（勝手に決めない）',
         },
         country_code: {
           type: 'string',
           description: 'ISO 3166 国コード（例：JP）。省略可、日本の都市は不要',
         },
       },
-      required: ['city'],
+      required: [],
     },
   },
 ];
@@ -138,8 +138,10 @@ const TOOL_FUNCTIONS = {
     return searchWeb(args.query, args.max_results, secrets.tavilyApiKey);
   },
 
-  get_weather: async (args, secrets = {}) => {
-    return getWeather(args.city, args.country_code, secrets.openWeatherMapApiKey);
+  get_weather: async (args, secrets = {}, context = {}) => {
+    return getWeather(args.city, args.country_code, secrets.openWeatherMapApiKey, {
+      location: context.location,
+    });
   },
 
   // アプリに頼むツール。外部APIは呼ばない
@@ -237,7 +239,9 @@ function pickToolIntro(toolName, turn, random = Math.random) {
 
 const TOOL_DESCRIPTIONS = {
   web_search: (args) => `「${args.query}」を検索しています`,
-  get_weather: (args) => `${args.city}の天気を調べています`,
+  get_weather: (args) => (args.city
+    ? `${args.city}の天気を調べています`
+    : '今いるあたりの天気を調べています'),
   start_station_alarm: () => '駅アラームを準備しています',
   stop_station_alarm: () => '駅アラームを止めています',
 };
@@ -312,7 +316,7 @@ function isKnownTool(toolName) {
   return Object.prototype.hasOwnProperty.call(TOOL_FUNCTIONS, toolName);
 }
 
-async function executeTool(toolName, args, secrets = {}) {
+async function executeTool(toolName, args, secrets = {}, context = {}) {
   const fn = TOOL_FUNCTIONS[toolName];
 
   if (!fn) {
@@ -326,7 +330,7 @@ async function executeTool(toolName, args, secrets = {}) {
   const startedAt = Date.now();
 
   try {
-    const result = await fn(args, secrets);
+    const result = await fn(args, secrets, context);
     console.log(`[Tool] ${toolName} completed in ${Date.now() - startedAt}ms`);
     return result;
   } catch (error) {

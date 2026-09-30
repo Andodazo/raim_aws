@@ -313,6 +313,8 @@ function createWebSocketHandler({
       threadId: normalized.threadId,
       // クライアントが使える機能（駅アラームなど）。Core がツールの出し分けに使う
       features: normalized.features,
+      // 現在地（約10kmに丸めたもの）。天気の場所が指定されないときだけ使う
+      location: normalized.location,
     });
 
     // WebSocketの入口では「受付完了」だけを返す。
