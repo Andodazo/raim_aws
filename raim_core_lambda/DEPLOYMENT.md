@@ -67,7 +67,7 @@ Lambdaへ直接アップロードする場合は、Lambdaコンソールの
 | `TITAN_EMBEDDING_MODEL_ID` | `amazon.titan-embed-text-v2:0` | 利用するTitan embedding model ID |
 | `TITAN_EMBEDDING_DIMENSIONS` | `1024` | Scene centroidと一致させるベクトル次元 |
 | `IMAGE_BUCKET_NAME` | `raim-images-dev-123456789012` | S3画像バケット名 |
-| `IMAGE_BUCKET_REGION` | `us-east-1` | S3画像バケットのリージョン。Lambda実行リージョンと異なる場合も明示する |
+| `IMAGE_BUCKET_REGION` | `ap-northeast-1` | S3画像バケットのリージョン（実物は東京）。違う値を入れると画像を読めない。未設定なら Lambda の実行リージョン |
 | `IMAGE_MAX_COUNT` | `10` | 1リクエストあたりの最大画像枚数 |
 | `IMAGE_MAX_TOTAL_BYTES` | `10485760` | 画像合計の最大実バイト数（10 MiB） |
 | `IMAGE_MAX_BYTES` | `5242880` | 画像1枚の最大実バイト数（5 MiB）。未設定なら5 MiB |
