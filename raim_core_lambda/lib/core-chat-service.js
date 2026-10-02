@@ -576,6 +576,14 @@ function createCoreChatService(dependencyOverrides = {}) {
     // JSONの崩れ等をresponse-validatorがerrorにした場合、response_idは保存しない。
     // 不正な応答を次回会話の起点にしないため。
     if (output.type === MESSAGE_TYPES.ERROR) {
+      // 以前はログに何も残らず、原因を追えなかった。
+      // 応答の中身は会話なので出さず、読めなかった理由と長さだけ残す。
+      console.warn(
+        `[Mantle] 応答を読めませんでした: ${output.message} ` +
+        `(${output.details?.parseError || '-'} / ` +
+        `length=${String(mantleResponse.rawText || '').length} / ` +
+        `toolExecuted=${toolExecuted})`
+      );
       return createCoreError({
         requestId: input.requestId,
         code: output.code,

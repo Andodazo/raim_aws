@@ -36,7 +36,7 @@
 // ==============================================================================
 
 const { searchWeb } = require('./web-search');
-const { getWeather } = require('./get-weather');
+const { getWeather, isCurrentLocation } = require('./get-weather');
 const {
   STATION_ALARM_FEATURE,
   STATION_ALARM_TOOL_DEFINITIONS,
@@ -72,20 +72,21 @@ const TOOL_DEFINITIONS = [
   {
     type: 'function',
     name: 'get_weather',
-    description: '都市の現在の天気情報を取得します。Web検索より構造化された天気データを返します。ユーザーが場所を言っていないとき（「今日の天気は？」など）は city を空にして呼んでください。アプリが分かる範囲で現在地の天気を返します。',
+    description: '都市の現在の天気情報を取得します。Web検索より構造化された天気データを返します。ユーザーが地名を言ったら、必ずその地名を英語（ローマ字）で city に入れてください（例: 八王子→Hachioji、東京→Tokyo）。地名を言っていないときだけ、city に "現在地" と入れてください。アプリが分かれば今いるあたりの天気を返します。都市を勝手に決めないでください。',
     parameters: {
       type: 'object',
       properties: {
         city: {
           type: 'string',
-          description: '都市名（例：東京、Tokyo、Osaka）。日本語/英語どちらでも可。ユーザーが場所を言っていなければ空にする（勝手に決めない）',
+          description: '都市名（英語・ローマ字。例: Tokyo、Hachioji、Osaka）。ユーザーが地名を言っていないときだけ "現在地"',
         },
         country_code: {
           type: 'string',
           description: 'ISO 3166 国コード（例：JP）。省略可、日本の都市は不要',
         },
       },
-      required: [],
+      // 必須にしておく。任意にしたら、地名を言われていても省略されることがあった
+      required: ['city'],
     },
   },
 ];
@@ -239,9 +240,9 @@ function pickToolIntro(toolName, turn, random = Math.random) {
 
 const TOOL_DESCRIPTIONS = {
   web_search: (args) => `「${args.query}」を検索しています`,
-  get_weather: (args) => (args.city
-    ? `${args.city}の天気を調べています`
-    : '今いるあたりの天気を調べています'),
+  get_weather: (args) => (isCurrentLocation(args.city)
+    ? '今いるあたりの天気を調べています'
+    : `${args.city}の天気を調べています`),
   start_station_alarm: () => '駅アラームを準備しています',
   stop_station_alarm: () => '駅アラームを止めています',
 };

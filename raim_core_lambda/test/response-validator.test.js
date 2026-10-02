@@ -110,3 +110,31 @@ test('rounding keeps the ratio sum close enough to 1.0', () => {
   // 3等分は 0.333 × 3 = 0.999 になる。表情表現には影響しない範囲。
   assert.ok(Math.abs(sum - 1.0) <= 0.002, `合計が離れすぎ: ${sum}`);
 });
+
+test('JSON が2つ続いたときは、最初の1つを使う', () => {
+  const { normalizeMantleOutput } = require('../lib/response-validator');
+  const raw = '{"text":"晴れだって","emotions":{"happy":1}}{"text":"もう一回","emotions":{"neutral":1}}';
+
+  const output = normalizeMantleOutput(raw);
+
+  assert.equal(output.type, 'chat');
+  assert.equal(output.text, '晴れだって');
+});
+
+test('JSON の後ろに余計な文と括弧があっても、最初の JSON を使う', () => {
+  const { normalizeMantleOutput } = require('../lib/response-validator');
+  const raw = '{"text":"「}」も文字のうち","emotions":{"happy":1}}\n補足 {壊れた}';
+
+  const output = normalizeMantleOutput(raw);
+
+  assert.equal(output.type, 'chat');
+  assert.equal(output.text, '「}」も文字のうち');
+});
+
+test('最初の JSON も壊れていれば従来どおりエラーにする', () => {
+  const { normalizeMantleOutput } = require('../lib/response-validator');
+
+  const output = normalizeMantleOutput('{"text":"途中で');
+
+  assert.equal(output.type, 'error');
+});

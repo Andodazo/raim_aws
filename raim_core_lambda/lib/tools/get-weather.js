@@ -81,6 +81,13 @@ const JP_TO_EN_CITY = {
   '池袋': 'Ikebukuro',
   '秋葉原': 'Akihabara',
   '梅田': 'Umeda',
+  // 東京の多摩地域（学校の周り）
+  '八王子': 'Hachioji',
+  '立川': 'Tachikawa',
+  '町田': 'Machida',
+  '府中': 'Fuchu',
+  '調布': 'Chofu',
+  '吉祥寺': 'Kichijoji',
 };
 
 /**
@@ -106,6 +113,28 @@ function normalizeCityName(city) {
 }
 
 /**
+ * city が「現在地」を表すか（空も含む）。
+ *
+ * ライムには、地名を言われていないときは city に "現在地" と入れるよう
+ * 伝えている。空にさせる作りにしたら、地名を言われていても空で呼ぶことが
+ * あったため（「今日の八王子の天気は」で八王子が抜けた）。
+ */
+const CURRENT_LOCATION_WORDS = Object.freeze([
+  '現在地',
+  '今いるところ',
+  'ここ',
+  'current',
+  'current location',
+  'here',
+]);
+
+function isCurrentLocation(city) {
+  if (typeof city !== 'string') return true;
+  const text = city.trim().toLowerCase();
+  return text === '' || CURRENT_LOCATION_WORDS.includes(text);
+}
+
+/**
  * OpenWeatherMap で現在の天気を取得する。
  *
  * city があればその都市。無ければ options.location（アプリの現在地、
@@ -121,7 +150,7 @@ async function getWeather(city, countryCode = null, injectedApiKey = null, optio
   if (!apiKey) {
     throw new Error('OPENWEATHERMAP_API_KEY is not configured');
   }
-  const hasCity = typeof city === 'string' && city.trim() !== '';
+  const hasCity = !isCurrentLocation(city);
   const location = options.location;
   const hasLocation = Boolean(
     location && Number.isFinite(location.lat) && Number.isFinite(location.lon)
@@ -190,4 +219,4 @@ async function getWeather(city, countryCode = null, injectedApiKey = null, optio
   };
 }
 
-module.exports = { getWeather };
+module.exports = { getWeather, isCurrentLocation };
