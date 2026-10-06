@@ -14,6 +14,7 @@
 //   stream.bubble_break
 //   stream.tool
 //   stream.action
+//   stream.emotion
 //   stream.completed
 //   stream.error
 //
@@ -266,6 +267,15 @@ function toClientMessage(coreEvent) {
 
   switch (coreEvent.type) {
     case 'stream.start':
+      return {
+        ...base,
+        type: 'metadata',
+        ...createEmotionPayload(coreEvent),
+      };
+
+    // 本文より先に分かった感情。クライアントは metadata を受け取ると表情を反映するので、
+    // 同じ metadata 形式で送る（クライアント側の変更は不要）。
+    case 'stream.emotion':
       return {
         ...base,
         type: 'metadata',

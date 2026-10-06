@@ -82,6 +82,9 @@ function createResponseQueuePublisher({
   /**
    * 共通envelopeを作り、FIFO Response Queueへ1イベント送信する。
    */
+  // stream.emotion は1ターンに1回だけ送る
+  let emotionSent = false;
+
   async function send(type, payload = {}) {
     const currentSequence = sequence;
     sequence += 1;
@@ -313,6 +316,24 @@ function createResponseQueuePublisher({
 
     async drainAudio() {
       await audioDeliveryChain;
+    },
+
+    /**
+     * 本文より先に分かった感情を送る。立ち絵の表情を早く変えるため。
+     * Edge が metadata（クライアントが表情を反映するメッセージ）に変換する。
+     * 最終的な感情は従来どおり stream.completed でも送る。
+     */
+    async emotion(result) {
+      if (emotionSent) {
+        return null;
+      }
+      emotionSent = true;
+      return send('stream.emotion', {
+        emotions: result.emotions,
+        overall_intensity: result.overall_intensity,
+        emotion: result.emotion,
+        intensity: result.intensity,
+      });
     },
 
     async completed(result) {

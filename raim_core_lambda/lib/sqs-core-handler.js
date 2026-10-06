@@ -23,6 +23,7 @@ const { createResponseQueuePublisher } = require('./response-queue-publisher');
 const { StreamingChatJsonExtractor } = require('./streaming-chat-json-extractor');
 const { createTtsClient } = require('./tts-client');
 const { getVoiceParamsFromEmotions } = require('./voice-mapper');
+const { createChat } = require('./types');
 
 function isSqsEvent(event) {
   return Array.isArray(event?.Records) &&
@@ -87,6 +88,16 @@ function createSqsCoreHandler(dependencyOverrides = {}) {
       });
       const extractor = new StreamingChatJsonExtractor({
         onText: (text) => publisher.appendText(text),
+        // 本文より先に emotions が分かったら、すぐ表情へ反映する（stream.emotion）。
+        // 声のパラメータも Scene の既定値から実際の感情へ切り替える。
+        onEmotions: async ({ emotions, overall_intensity: overall }) => {
+          const normalized = createChat({ text: '', emotions, overallIntensity: overall });
+          voiceParams = dependencies.getVoiceParamsFromEmotions(
+            normalized.emotions,
+            normalized.overall_intensity
+          );
+          await publisher.emotion(normalized);
+        },
       });
 
       await publisher.start();

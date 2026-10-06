@@ -320,3 +320,21 @@ test('toClientMessage maps stream.error to client error', () => {
     retriable: true,
   });
 });
+
+test('toClientMessage maps stream.emotion to client metadata with emotions', () => {
+  const message = toClientMessage({
+    type: 'stream.emotion',
+    requestId: 'req-1',
+    sequence: 1,
+    emotions: { happy: 0.667, caring: 0.333 },
+    overall_intensity: 0.8,
+    emotion: 'happy',
+    intensity: 0.534,
+  });
+
+  assert.equal(message.type, 'metadata');
+  assert.equal(message.requestId, 'req-1');
+  assert.equal(message.emotion, 'happy');
+  assert.equal(message.overall_intensity, 0.8);
+  assert.equal(message.emotions.happy, 0.667);
+});

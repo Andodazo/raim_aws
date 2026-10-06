@@ -340,7 +340,7 @@ const TOOLS_APPENDIX = `
 1. tool ロールの content を必ず読む
 2. その内容を踏まえて、ユーザーへの応答テキストを作る
 3. **絶対に別のツールを呼ばない**（結果を得たら答えるだけ）
-4. 応答は JSON 形式で返す: {"text":"...","emotions":{...}}
+4. 応答は JSON 形式で返す: {"emotions":{...},"text":"..."}
 
 ▼ 正しい流れ（例: 天気質問）
 - Turn 1: get_weather を呼ぶ tool_call を返す
@@ -353,11 +353,11 @@ const TOOLS_APPENDIX = `
 
 ▼ get_weather の結果を使った応答例:
 tool結果: {"city":"Tokyo","weather":"Clear","description":"快晴","temp":24}
-→ {"text":"東京は晴れで24度だって。気持ちいい天気だね","emotions":{"happy":0.5,"caring":0.3}}
+→ {"emotions":{"happy":0.5,"caring":0.3},"text":"東京は晴れで24度だって。気持ちいい天気だね"}
 
 ▼ web_search の結果を使った応答例:
 tool結果: {"answer":"OpenAI が新モデル GPT-X を発表"}
-→ {"text":"OpenAI が新しい GPT-X 発表したんだって。気になるね","emotions":{"curious":0.6,"surprised":0.3}}
+→ {"emotions":{"curious":0.6,"surprised":0.3},"text":"OpenAI が新しい GPT-X 発表したんだって。気になるね"}
 
 ▼ ツール結果に error: true が含まれる場合:
 「うまく調べられなかった」と正直に認めて、他の情報や知識で答える。
@@ -397,7 +397,7 @@ const STATION_ALARM_APPENDIX = `
 
 ▼ start_station_alarm の結果を使った応答例:
 tool結果: {"ok":true,"station":"新宿"}
-→ {"text":"新宿ね、了解。近づいたら起こすから、ゆっくりしてて","emotions":{"caring":0.6,"neutral":0.4}}
+→ {"emotions":{"caring":0.6,"neutral":0.4},"text":"新宿ね、了解。近づいたら起こすから、ゆっくりしてて"}
 `;
 
 const STATION_ALARM_DIGEST = `
@@ -422,27 +422,28 @@ function hasStationAlarm(features) {
 const OUTPUT_RULE_NORMAL = `
 
 【出力ルール】
-返答は必ず以下のJSON形式のみ。前置きや説明文は不要:
-{"text": "応答内容", "emotions": {"感情名": 強さ, ...}}
+返答は必ず以下のJSON形式のみ。前置きや説明文は不要。
+emotions を必ず text より先に書く（表情を先に変えるため）:
+{"emotions": {"感情名": 強さ, ...}, "text": "応答内容"}
 
 - JSON以外の文章を出力してはいけません。
 - Markdownコードブロックで囲ってはいけません。
 
 例:
-{"text":"こんにちは！今日はどうしたの？","emotions":{"happy":0.5,"curious":0.3}}
+{"emotions":{"happy":0.5,"curious":0.3},"text":"こんにちは！今日はどうしたの？"}
 `;
 
 const OUTPUT_RULE_WITH_TOOLS = `
 
 【出力ルール】
 - ツールを使う場合は tool call を返す
-- ツール不要、またはツール結果を踏まえた応答時は、以下のJSON形式:
-  {"text": "応答内容", "emotions": {"感情名": 強さ, ...}}
+- ツール不要、またはツール結果を踏まえた応答時は、以下のJSON形式（emotions を text より先に書く）:
+  {"emotions": {"感情名": 強さ, ...}, "text": "応答内容"}
 - 同じツールを再度呼ばないこと
 - JSON以外の文章、Markdownコードブロックは禁止
 
 例:
-{"text":"東京は晴れで24度だって","emotions":{"happy":0.5,"caring":0.3}}
+{"emotions":{"happy":0.5,"caring":0.3},"text":"東京は晴れで24度だって"}
 `;
 
 // ─────────────────────────────────────────────
@@ -575,8 +576,8 @@ const DIGEST_COMMON = `
 - 知らない人・作品・ニュースを知ったかぶりすること。知らなければ聞くか調べる
 
 【出力形式】
-JSONのみ。説明文やコードブロックは不要。
-{"text":"返答","emotions":{"感情名":強さ}}
+JSONのみ。説明文やコードブロックは不要。emotions を text より先に書く。
+{"emotions":{"感情名":強さ},"text":"返答"}
 
 使える感情は12種:
 neutral / happy / sad / angry / surprised / caring /

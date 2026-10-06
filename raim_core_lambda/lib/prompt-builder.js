@@ -281,10 +281,12 @@ function buildFewShotMessages(scene, persona = RAIM_PERSONA) {
 
     messages.push({
       role: 'assistant',
+      // emotions を text より先に置く。モデルはこの順番を真似るので、
+      // ストリーミング中に本文より先に感情が分かり、表情を早く変えられる。
       content: JSON.stringify({
-        text: toSafeString(fs.raim),
         emotions: exampleEmotions,
         overall_intensity: exampleOverall,
+        text: toSafeString(fs.raim),
       }),
     });
   }
