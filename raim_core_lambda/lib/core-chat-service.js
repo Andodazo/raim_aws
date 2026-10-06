@@ -73,6 +73,10 @@ const { resolveThread, ensureThreadTitle } = require('./thread-resolver');
 const { appendTurn } = require('./conversation-thread-store');
 const { shouldSummarize } = require('./summary-trigger');
 const { dispatchSummarization } = require('./summary-dispatcher');
+const {
+  findLastTalkedAt,
+  buildConversationGapContext,
+} = require('./conversation-gap');
 
 // ─────────────────────────────────────────────
 // ツールループの設定
@@ -311,6 +315,18 @@ function createCoreChatService(dependencyOverrides = {}) {
     // systemプロンプトにツールの説明を入れるかどうかがここで決まる。
     const toolsEnabled = await dependencies.isToolUseEnabled();
 
+    // 3-b. 前回の発話からどれくらい経ったか。
+    // 「3日ぶりなのに『さっき』と言う」のを防ぎ、「久しぶり」と言えるようにする。
+    // スレッドは appendTurn の前の状態なので、最後のメッセージ＝前回の発話。
+    const conversationGap = buildConversationGapContext({
+      ...findLastTalkedAt({
+        thread: threadContext.thread,
+        isNew: threadContext.isNew,
+        session,
+      }),
+      now: dependencies.now ? dependencies.now() : new Date(),
+    });
+
     // 4. 初回ならsystem prompt・要約・Few-shotを含める。
     // 継続時はprevious_response_idを使うため、今回の発話を中心に組み立てる。
     let mantleInput = dependencies.buildMantleInput({
@@ -327,6 +343,7 @@ function createCoreChatService(dependencyOverrides = {}) {
       withTools: toolsEnabled,
       // アプリが使える機能。駅アラームのツールの説明を入れるかが決まる
       features: input.features,
+      conversationGap,
     });
     // policyが期限・存在状態を確認済みの時だけprevious_response_idを送る。
     let previousResponseId = sessionState.usePreviousResponseId
@@ -395,6 +412,7 @@ function createCoreChatService(dependencyOverrides = {}) {
           usePreviousResponseId: false,
           withTools: toolsEnabled,
           features: input.features,
+          conversationGap,
         });
 
         mantleInput = rebuiltInput;

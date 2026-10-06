@@ -36,6 +36,7 @@
 
 const {
   RAIM_SYSTEM_PROMPT_VERSION,
+  RAIM_PERSONA,
   RAIM_SYSTEM_PROMPT,
   PERSONA_DIGEST,
   TOOLS_DIGEST,
@@ -213,14 +214,36 @@ function buildSceneContext(scene) {
  *
  * そのため、Few-shotのassistant側も type は含めない。
  */
-function buildFewShotMessages(scene) {
-  if (!scene || !Array.isArray(scene.few_shots)) {
+/**
+ * 人格に合ったfew-shotを選ぶ。
+ *
+ * downer 人格のときは Scene の few_shots_downer を使う。
+ * 未登録（空）なら few_shots に戻す。bright は従来どおり few_shots。
+ * few-shot は口調のアンカーとして強いので、人格と食い違う例を見せないため。
+ */
+function selectFewShots(scene, persona = RAIM_PERSONA) {
+  if (!scene) {
+    return [];
+  }
+  if (
+    persona === 'downer' &&
+    Array.isArray(scene.few_shots_downer) &&
+    scene.few_shots_downer.length > 0
+  ) {
+    return scene.few_shots_downer;
+  }
+  return Array.isArray(scene.few_shots) ? scene.few_shots : [];
+}
+
+function buildFewShotMessages(scene, persona = RAIM_PERSONA) {
+  const fewShots = selectFewShots(scene, persona);
+  if (fewShots.length === 0) {
     return [];
   }
 
   const messages = [];
 
-  for (const fs of scene.few_shots) {
+  for (const fs of fewShots) {
     if (!fs || typeof fs !== 'object') {
       continue;
     }
@@ -300,6 +323,7 @@ function buildUserMemoryContext(userMemory) {
   return [
     '【ユーザーについて覚えていること】',
     '過去の会話から分かっていること。今回の話題と関係なければ無理に持ち出さない。',
+    'いつの会話かは分からないので、「さっき」「また」のように直前のことのようには言わない。',
     '',
     String(userMemory).trim(),
   ].join('\n');
@@ -316,6 +340,7 @@ function buildSessionSummaryContext(sessionSummary) {
   return [
     '以下は過去会話の要約です。',
     '必要な場合だけ、現在の会話の文脈として自然に利用してください。',
+    'いつの会話かは分からないので、「さっき」のように直前のことのようには言わないでください。',
     '要約の内容をそのままユーザーに説明し直す必要はありません。',
     '',
     sessionSummary,
@@ -412,6 +437,7 @@ function buildInitialMantleInput({
   scene = null,
   withTools = false,
   features = [],
+  conversationGap = '',
 }) {
   const messages = [];
 
@@ -441,6 +467,8 @@ function buildInitialMantleInput({
       '---',
       '',
       buildSceneContext(scene),
+      // 前回の発話からの経過時間（分からなければ入れない）
+      ...(conversationGap ? ['', '---', '', conversationGap] : []),
     ].join('\n'),
   });
 
@@ -489,6 +517,7 @@ function buildFollowupMantleInput({
   fewShotCount = FOLLOWUP_FEW_SHOT_COUNT,
   withTools = false,
   features = [],
+  conversationGap = '',
   now = new Date(),
 }) {
   const messages = [];
@@ -532,6 +561,12 @@ function buildFollowupMantleInput({
     // という状態だった。継続モードが実際に動き出すまで表面化しなかった。
     const situational = [`【現在の状況】\n${getTimeContext(now)}`];
 
+    // 前回の発話からの経過時間。同じスレッドを数日後に開いたときに
+    // 「さっき」と言わないよう、継続会話でも毎回渡す。
+    if (conversationGap) {
+      situational.push(conversationGap);
+    }
+
     if (withTools) {
       situational.push(TOOLS_DIGEST);
       if (hasStationAlarm(features)) {
@@ -548,6 +583,12 @@ function buildFollowupMantleInput({
     messages.push({
       role: 'system',
       content: situational.join('\n\n'),
+    });
+  } else if (conversationGap) {
+    // full モードでも経過時間だけは別に渡す（全文プロンプトには含まれないため）
+    messages.push({
+      role: 'system',
+      content: conversationGap,
     });
   }
 
@@ -573,9 +614,9 @@ function buildFollowupMantleInput({
   if (fewShotCount > 0 && scene) {
     const limitedScene = {
       ...scene,
-      few_shots: Array.isArray(scene.few_shots)
-        ? scene.few_shots.slice(0, fewShotCount)
-        : [],
+      // 人格に合わせて選んでから絞る。選び済みなので few_shots_downer は外す
+      few_shots: selectFewShots(scene).slice(0, fewShotCount),
+      few_shots_downer: undefined,
     };
     messages.push(...buildFewShotMessages(limitedScene));
   }
@@ -620,6 +661,7 @@ function buildMantleInput({
   usePreviousResponseId = false,
   withTools = false,
   features = [],
+  conversationGap = '',
 }) {
   if (usePreviousResponseId) {
     // 継続モードでは Mantle 側が文脈を保持しているため、
@@ -630,6 +672,7 @@ function buildMantleInput({
       scene,
       withTools,
       features,
+      conversationGap,
     });
   }
 
@@ -641,6 +684,7 @@ function buildMantleInput({
     scene,
     withTools,
     features,
+    conversationGap,
   });
 }
 
@@ -671,6 +715,7 @@ function summarizeMantleInput(input) {
 module.exports = {
   buildSceneContext,
   buildFewShotMessages,
+  selectFewShots,
   buildSessionSummaryContext,
   buildUserMemoryContext,
   buildUserContent,
