@@ -1,0 +1,27 @@
+# Scene 選択の確認用。「期待する Scene|入力」。embedding_examples に無い文にしておく
+default|こんにちは
+default|ねえねえ
+question|ブラックホールって何？
+question|なんで空は青いの？
+good_news|内定もらえた！
+good_news|ずっと頑張ってた資格に合格した
+sad_news|昨日、彼女に振られた
+sad_news|ペットのハムスターが死んじゃった
+unfair|先輩に理不尽に怒られてムカつく
+unfair|順番抜かしされて腹立った
+surprise|聞いて、道で1万円拾った
+surprise|え、明日休校になったらしい
+tired|今日バイトで疲れた
+tired|疲れたー
+praise|ライムっていつも優しいね
+praise|ライム最高だよ
+gaming|新しいRPG買った
+gaming|今日ずっとApexやってた
+share|最近ボルダリング始めたんだ
+share|この前初めて沖縄に行ってきた
+joke|面白い話して
+joke|一発ギャグやって
+advice|どっちのバイトにするか迷ってる
+advice|服どっちが似合うと思う？
+play|しりとりしよう
+play|なぞなぞやろうよ

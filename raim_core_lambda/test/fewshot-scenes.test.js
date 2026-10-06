@@ -80,3 +80,30 @@ test('scenes turn into few-shot messages for both personas', () => {
     assert.ok(downer[1].content.includes(scene.shots[0].downer.raim));
   }
 });
+
+test('every scene has example sentences for its centroid', () => {
+  for (const scene of scenes) {
+    assert.ok(Array.isArray(scene.embedding_examples), scene.id);
+    assert.ok(scene.embedding_examples.length >= 8, `${scene.id}: 例文 ${scene.embedding_examples.length}`);
+  }
+});
+
+test('check cases cover every scene and are not copies of the examples', () => {
+  const casesFile = path.join(__dirname, '..', '..', 'raim_test', 'fewshot', 'check_cases.txt');
+  const cases = fs.readFileSync(casesFile, 'utf8')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('#'))
+    .map((line) => line.split('|'));
+
+  const allExamples = new Set(scenes.flatMap((s) => s.embedding_examples));
+  const ids = new Set(scenes.map((s) => s.id));
+  const covered = new Set();
+
+  for (const [expected, text] of cases) {
+    assert.ok(ids.has(expected), `unknown scene: ${expected}`);
+    assert.ok(!allExamples.has(text), `例文と同じ文は確認に使わない: ${text}`);
+    covered.add(expected);
+  }
+  assert.deepEqual([...covered].sort(), [...ids].sort());
+});

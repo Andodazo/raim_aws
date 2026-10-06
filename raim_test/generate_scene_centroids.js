@@ -269,7 +269,10 @@ async function main() {
     console.log(`\n[${id}]`);
 
     try {
-      const embeddingText = getRequiredString(scene, "embedding_text");
+      const examples = getStringList(scene, "embedding_examples");
+      const embeddingText = examples.length > 0
+        ? examples.join(" / ")
+        : getRequiredString(scene, "embedding_text");
 
       // 既にtextCentroidが存在する場合、誤って上書きしないようデフォルトではスキップします。
       // 新しいembedding_textへ変更した後に再生成したい場合は `--force` を付けます。
@@ -279,19 +282,33 @@ async function main() {
         continue;
       }
 
-      console.log(`  source: embedding_text (${embeddingText.length} chars)`);
-      console.log(`  text  : ${embeddingText}`);
+      // embedding_examples（例文の配列）があれば、例文ごとにEmbeddingして平均する。
+      // 単語を並べた embedding_text は、ユーザーの普通の文とベクトルが近くなりにくく、
+      // 類似度が閾値（0.25）に届かず default に落ちることが多かった（2026-10 実測）。
+      // 例文の平均（本来の意味のセントロイド）の方が、普通の文に近くなる。
+      let centroid;
+      if (examples.length > 0) {
+        console.log(`  source: embedding_examples (${examples.length} sentences)`);
+        const vectors = [];
+        for (const example of examples) {
+          vectors.push(normalizeVector(await embedText(bedrock, options, example)));
+        }
+        centroid = normalizeVector(averageVectors(vectors));
+      } else {
+        console.log(`  source: embedding_text (${embeddingText.length} chars)`);
+        console.log(`  text  : ${embeddingText}`);
 
-      // Titan Text Embeddings V2を呼び出し、Scene判定用の代表ベクトルを取得します。
-      // normalize:true によりTitan側で正規化済みベクトルを返しますが、
-      // 後続処理との一貫性のため、保存前にこちらでもL2正規化を行います。
-      const embedding = await embedText(bedrock, options, embeddingText);
-      const centroid = normalizeVector(embedding);
+        // Titan Text Embeddings V2を呼び出し、Scene判定用の代表ベクトルを取得します。
+        // normalize:true によりTitan側で正規化済みベクトルを返しますが、
+        // 後続処理との一貫性のため、保存前にこちらでもL2正規化を行います。
+        centroid = normalizeVector(await embedText(bedrock, options, embeddingText));
+      }
 
       console.log(`  vector: ${centroid.length} dimensions`);
 
       if (options.apply) {
-        await saveCentroid(dynamodb, options, id, centroid, embeddingText);
+        await saveCentroid(dynamodb, options, id, centroid, embeddingText,
+          examples.length > 0 ? "embedding_examples" : "embedding_text");
         console.log("  saved : textCentroid updated");
         updated += 1;
       } else {
@@ -390,6 +407,23 @@ async function embedText(bedrock, options, inputText) {
   return embedding;
 }
 
+// 例文の配列（DynamoDB の L of S）。無ければ空配列。
+function getStringList(item, attributeName) {
+  const value = item[attributeName];
+  if (!value || !Array.isArray(value.L)) return [];
+  return value.L
+    .map((entry) => (entry && typeof entry.S === "string" ? entry.S.trim() : ""))
+    .filter(Boolean);
+}
+
+function averageVectors(vectors) {
+  const sum = new Array(vectors[0].length).fill(0);
+  for (const vector of vectors) {
+    for (let i = 0; i < vector.length; i += 1) sum[i] += vector[i];
+  }
+  return sum.map((value) => value / vectors.length);
+}
+
 function normalizeVector(vector) {
   const norm = Math.sqrt(vector.reduce((sum, value) => sum + value * value, 0));
   if (norm === 0 || !Number.isFinite(norm)) {
@@ -398,7 +432,7 @@ function normalizeVector(vector) {
   return vector.map((value) => value / norm);
 }
 
-async function saveCentroid(dynamodb, options, id, centroid, embeddingText) {
+async function saveCentroid(dynamodb, options, id, centroid, embeddingText, sourceAttribute = "embedding_text") {
   const now = new Date().toISOString();
 
   // DynamoDBのNumber型は文字列として渡します。
@@ -424,7 +458,7 @@ async function saveCentroid(dynamodb, options, id, centroid, embeddingText) {
       ":centroid": centroidAttribute,
       ":modelId": { S: options.modelId },
       ":dimensions": { N: String(options.dimensions) },
-      ":sourceAttribute": { S: "embedding_text" },
+      ":sourceAttribute": { S: sourceAttribute },
       ":sourceText": { S: embeddingText },
       ":updatedAt": { S: now },
     },

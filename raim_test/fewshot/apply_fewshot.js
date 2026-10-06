@@ -11,12 +11,12 @@
  *   node apply_fewshot.js --apply    # バックアップを取ってから反映する
  *
  * 書き換える属性
- *   description / embedding_text / default_emotions / target_emotion /
- *   few_shots（bright 用）/ few_shots_downer（downer 用）
+ *   description / embedding_text / embedding_examples / default_emotions /
+ *   target_emotion / few_shots（bright 用）/ few_shots_downer（downer 用）
  *
  * textCentroid には触れない（UpdateItem の SET なので残る）。
- * 新しい Scene と embedding_text を変えた Scene は、このあと
- * generate_scene_centroids.js で textCentroid を作り直す必要がある。
+ * 新しい Scene と、embedding_text / embedding_examples を変えた Scene は、
+ * このあと generate_scene_centroids.js で textCentroid を作り直す必要がある。
  */
 
 'use strict';
@@ -48,6 +48,9 @@ function validate(scenes) {
     ids.add(scene.id);
 
     if (!scene.embedding_text) errors.push(`${scene.id}: embedding_text が空`);
+    if (!Array.isArray(scene.embedding_examples) || scene.embedding_examples.length === 0) {
+      errors.push(`${scene.id}: embedding_examples が空`);
+    }
     if (scene.target && !EMOTIONS.has(scene.target)) {
       errors.push(`${scene.id}: target が不明な感情 ${scene.target}`);
     }
@@ -74,6 +77,7 @@ function toItemFields(scene) {
   return {
     description: scene.description || '',
     embedding_text: scene.embedding_text,
+    embedding_examples: scene.embedding_examples || [],
     default_emotions: scene.default_emotions || {},
     target_emotion: scene.target || '',
     few_shots: shots.map((shot) => ({
@@ -123,7 +127,7 @@ async function main() {
   do {
     const page = await client.send(new ScanCommand({
       TableName: TABLE,
-      ProjectionExpression: 'id, description, embedding_text, default_emotions, few_shots, few_shots_downer',
+      ProjectionExpression: 'id, description, embedding_text, embedding_examples, default_emotions, few_shots, few_shots_downer',
       ExclusiveStartKey: startKey,
     }));
     backup.push(...(page.Items || []));
@@ -158,16 +162,20 @@ async function main() {
 
     const before = existing.get(scene.id);
     const isNew = !before;
-    const textChanged = before && before.embedding_text !== scene.embedding_text;
+    const textChanged = before && (
+      before.embedding_text !== scene.embedding_text ||
+      JSON.stringify(before.embedding_examples || []) !== JSON.stringify(scene.embedding_examples || [])
+    );
     if (isNew || textChanged) needCentroid.push(scene.id);
 
-    console.log(`  updated: ${scene.id}${isNew ? '（新規）' : ''}${textChanged ? '（embedding_text 変更）' : ''}`);
+    console.log(`  updated: ${scene.id}${isNew ? '（新規）' : ''}${textChanged ? '（Scene 判定の例文・テキスト変更）' : ''}`);
   }
 
   if (needCentroid.length > 0) {
     const args = needCentroid.map((id) => `--scene-id ${id}`).join(' ');
-    console.log('\ntextCentroid を作り直す必要がある Scene があります。次を実行してください:');
-    console.log(`  node ../generate_scene_centroids.js --apply --force ${args}`);
+    console.log('\ntextCentroid を作り直す必要がある Scene があります。次の1行を実行してください（省略せずそのままコピー）:');
+    console.log('');
+    console.log(`node ../generate_scene_centroids.js --apply --force ${args}`);
   }
 }
 

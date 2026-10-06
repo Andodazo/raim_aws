@@ -41,10 +41,18 @@ node apply_fewshot.js --apply    # バックアップを取ってから反映
 node ../generate_scene_centroids.js --apply --force --scene-id question --scene-id good_news ...
 ```
 
-最後に、Scene 選択が狙いどおりか確かめる。
+最後に、Scene 選択が狙いどおりか確かめる（入力は `check_cases.txt`）。
 
 ```bash
 bash check_scene_selection.sh
 ```
 
-`NG` が出たら、その Scene の `embedding_text` を直して、もう一度 `--apply` → centroid 作り直し。
+`NG` が出たら、その Scene の `embedding_examples` に例文を足して、もう一度 `--apply` → centroid 作り直し。
+
+## Scene 判定のベクトル
+
+`textCentroid` は `embedding_examples`（各 Scene 10文の例文）を1文ずつ Titan でベクトルにして平均したもの。
+単語を並べた `embedding_text` だけで作ると、ユーザーの普通の文と類似度が上がらず、
+閾値（0.25）に届かずに default へ落ちることが多かった（2026-10 実測で 13件中6件）。
+`embedding_text` は説明用に残している（例文が無い Scene ではこちらを使う）。
+確認用の入力（`check_cases.txt`）は、例文と同じ文にしない。
