@@ -16,6 +16,21 @@
         "embarrassed": { "speaker_id": 8, "speedScale": 1.05, "pitchScale": 0.02, "intonationScale": 1.1, "volumeScale": 0.95 },
         "excited": { "speaker_id": 8, "speedScale": 1.20, "pitchScale": 0.05, "intonationScale": 1.4, "volumeScale": 1.05 }
       }
+    },
+    "tsumugi_downer": {
+      "description": "春日部つむぎ + ダウナー人格向け（全体に遅め・低め・抑揚少なめ。excited だけ素が出る）。耳で確認して調整する前提の初期値",
+      "speaker_name": "春日部つむぎ",
+      "default_speaker_id": 8,
+      "emotion_map": {
+        "neutral": { "speaker_id": 8, "speedScale": 0.93, "pitchScale": -0.02, "intonationScale": 0.85, "volumeScale": 0.95 },
+        "happy": { "speaker_id": 8, "speedScale": 1.00, "pitchScale": 0.00, "intonationScale": 1.00, "volumeScale": 0.95 },
+        "sad": { "speaker_id": 8, "speedScale": 0.88, "pitchScale": -0.04, "intonationScale": 0.70, "volumeScale": 0.90 },
+        "caring": { "speaker_id": 8, "speedScale": 0.92, "pitchScale": -0.01, "intonationScale": 0.85, "volumeScale": 0.95 },
+        "angry": { "speaker_id": 8, "speedScale": 1.00, "pitchScale": -0.04, "intonationScale": 1.05, "volumeScale": 1.00 },
+        "surprised": { "speaker_id": 8, "speedScale": 1.05, "pitchScale": 0.03, "intonationScale": 1.15, "volumeScale": 1.00 },
+        "embarrassed": { "speaker_id": 8, "speedScale": 0.97, "pitchScale": 0.00, "intonationScale": 0.95, "volumeScale": 0.90 },
+        "excited": { "speaker_id": 8, "speedScale": 1.12, "pitchScale": 0.03, "intonationScale": 1.25, "volumeScale": 1.00 }
+      }
     }
   }
 }

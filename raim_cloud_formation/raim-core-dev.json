@@ -392,6 +392,7 @@
             "RESPONSE_QUEUE_URL": { "Ref": "ResponseQueue" },
             "TTS_FUNCTION_NAME": { "Ref": "TtsLambdaFunctionName" },
             "RAIM_VOICE_PROFILE": "tsumugi_parametric",
+            "RAIM_PERSONA": "bright",
             "STREAM_CHUNK_MAX_CHARACTERS": "30",
             "TTS_AUDIO_FRAGMENT_BASE64_CHARACTERS": "24000",
             "REQUEST_LEASE_SECONDS": { "Ref": "RequestLeaseSeconds" },
