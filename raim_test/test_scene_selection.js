@@ -241,6 +241,13 @@ async function main() {
   }
 
   const best = ranked[0];
+
+  // Core Lambda（raim_core_lambda/lib/scene-selector.js）と同じルール:
+  // 閾値未満でも質問の形なら question Scene にする。パターンは両方で揃える。
+  const questionPattern = /(って(何|なに)|とは[？?]?$|なんで|なぜ|どうして|どういう(意味|こと|仕組み)|の意味|(何|なん)て言う|どれくらい|いくつ|何(キロ|メートル|グラム|年|人|時)|教えて)/;
+  const isQuestionForm = questionPattern.test(options.userText) && !/天気|気温/.test(options.userText);
+  const questionScene = candidates.find((scene) => scene.id === "question");
+
   const selected = best.score >= options.threshold
     ? {
         sceneId: best.scene.id,
@@ -248,6 +255,14 @@ async function main() {
         fallbackUsed: false,
         score: best.score,
         scene: best.scene,
+      }
+    : questionScene && isQuestionForm
+    ? {
+        sceneId: "question",
+        reason: "question-form",
+        fallbackUsed: false,
+        score: best.score,
+        scene: questionScene,
       }
     : {
         sceneId: options.defaultSceneId,

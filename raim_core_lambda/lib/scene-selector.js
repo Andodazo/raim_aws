@@ -31,6 +31,22 @@
 const { createTitanEmbedding } = require('./titan-embedding-client');
 
 const DEFAULT_SCENE_ID = process.env.DEFAULT_SCENE_ID || 'default';
+const QUESTION_SCENE_ID = process.env.QUESTION_SCENE_ID || 'question';
+
+// 質問の形の発話。閾値に届かなかったときだけ question Scene に寄せる。
+//
+// Titan のベクトルは「何の話題か」で近さが決まるため、「ブラックホールって何？」と
+// 「光合成ってどういう仕組み？」は形が同じ質問でも遠くなり、例文を足しても
+// question Scene の類似度が上がらない（2026-10 実測で 0.14〜0.17）。
+// 形で判断する方が確実なので、ここだけルールで拾う。
+// raim_test/test_scene_selection.js にも同じパターンがある（変えるときは両方直す）。
+const QUESTION_PATTERN = /(って(何|なに)|とは[？?]?$|なんで|なぜ|どうして|どういう(意味|こと|仕組み)|の意味|(何|なん)て言う|どれくらい|いくつ|何(キロ|メートル|グラム|年|人|時)|教えて)/;
+const QUESTION_EXCLUDE_PATTERN = /天気|気温/;
+
+function isQuestionForm(text) {
+  const value = String(text || '');
+  return QUESTION_PATTERN.test(value) && !QUESTION_EXCLUDE_PATTERN.test(value);
+}
 const SCENE_SIMILARITY_THRESHOLD = Number(
   process.env.SCENE_SIMILARITY_THRESHOLD || 0.25
 );
@@ -146,7 +162,17 @@ async function selectScene({
   }
 
   // 最高得点でも閾値未満なら、無理に専門Sceneへ寄せずdefaultを使う。
+  // ただし質問の形なら question Scene にする（上の QUESTION_PATTERN を参照）。
   if (bestScore < SCENE_SIMILARITY_THRESHOLD) {
+    const hasQuestionScene = candidates.some((scene) => scene.id === QUESTION_SCENE_ID);
+    if (hasQuestionScene && isQuestionForm(text)) {
+      return {
+        sceneId: QUESTION_SCENE_ID,
+        score: bestScore,
+        reason: 'question-form',
+        fallbackUsed: false,
+      };
+    }
     return createFallbackSelection('below-threshold', bestScore);
   }
 
@@ -173,6 +199,9 @@ function summarizeSceneSelection(selection) {
 
 module.exports = {
   DEFAULT_SCENE_ID,
+  QUESTION_SCENE_ID,
+  QUESTION_PATTERN,
+  isQuestionForm,
   SCENE_SIMILARITY_THRESHOLD,
   cosineSimilarity,
   isFiniteVector,
