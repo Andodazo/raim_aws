@@ -138,7 +138,7 @@ function buildMantleUrl(baseUrl, responsesPath = '/responses') {
  *
  * store=trueにより、今回の応答もMantle側へ保存され、返されたidを次回利用できる。
  */
-function buildMantleRequest({ mantleInput, previousResponseId, store, tools }, env) {
+function buildMantleRequest({ mantleInput, previousResponseId, store, tools, reasoningEffort: effortOverride = '' }, env) {
   // Responses APIのinputには2種類のアイテムが混在する。
   //
   //   1. 通常のメッセージ         { role, content }
@@ -200,7 +200,10 @@ function buildMantleRequest({ mantleInput, previousResponseId, store, tools }, e
   // 注意:
   // Responses APIではreasoningの内容が本文とは別のreasoning itemとして返るため、
   // Chat Completionsのように思考が content へ混ざり込むことはない。
-  const reasoningEffort = String(env.MANTLE_REASONING_EFFORT || 'none').trim();
+  //
+  // effortOverride: Scene ごとに effort を変えるときに呼び出し側から渡す
+  // （SCENE_REASONING_EFFORTS。lib/fact-check.js を参照）。
+  const reasoningEffort = String(effortOverride || env.MANTLE_REASONING_EFFORT || 'none').trim();
 
   if (reasoningEffort && reasoningEffort !== 'off') {
     request.reasoning = { effort: reasoningEffort };
@@ -559,6 +562,8 @@ function createMantleClient({
     // ツールを使うターンだけ渡す。
     // 渡さなければ通常の会話生成として動作する。
     tools = null,
+    // このターンだけ reasoning effort を変えるとき（空なら環境変数どおり）
+    reasoningEffort = '',
   }) {
     if (!mantleInput || typeof mantleInput !== 'object') {
       throw new Error('mantleInput is required');
@@ -607,6 +612,7 @@ function createMantleClient({
             mantleInput,
             previousResponseId,
             store,
+            reasoningEffort,
           }, env)),
           signal: controller.signal,
         }

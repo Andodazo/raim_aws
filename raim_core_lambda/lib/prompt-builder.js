@@ -47,6 +47,7 @@ const {
   getTimeContext,
   buildSystemPrompt,
 } = require('./prompts/raim-system-prompt');
+const { FACT_CHECK_INSTRUCTION } = require('./fact-check');
 
 // ─────────────────────────────────────────────
 // 内部ユーティリティ
@@ -438,6 +439,7 @@ function buildInitialMantleInput({
   withTools = false,
   features = [],
   conversationGap = '',
+  factCheck = false,
 }) {
   const messages = [];
 
@@ -469,6 +471,8 @@ function buildInitialMantleInput({
       buildSceneContext(scene),
       // 前回の発話からの経過時間（分からなければ入れない）
       ...(conversationGap ? ['', '---', '', conversationGap] : []),
+      // 事実の質問なら、先に調べるよう指示する
+      ...(factCheck ? ['', '---', '', FACT_CHECK_INSTRUCTION] : []),
     ].join('\n'),
   });
 
@@ -518,6 +522,7 @@ function buildFollowupMantleInput({
   withTools = false,
   features = [],
   conversationGap = '',
+  factCheck = false,
   now = new Date(),
 }) {
   const messages = [];
@@ -567,6 +572,10 @@ function buildFollowupMantleInput({
       situational.push(conversationGap);
     }
 
+    if (factCheck) {
+      situational.push(FACT_CHECK_INSTRUCTION);
+    }
+
     if (withTools) {
       situational.push(TOOLS_DIGEST);
       if (hasStationAlarm(features)) {
@@ -584,11 +593,13 @@ function buildFollowupMantleInput({
       role: 'system',
       content: situational.join('\n\n'),
     });
-  } else if (conversationGap) {
-    // full モードでも経過時間だけは別に渡す（全文プロンプトには含まれないため）
+  } else if (conversationGap || factCheck) {
+    // full モードでも経過時間と事実確認の指示は別に渡す（全文プロンプトには含まれないため）
     messages.push({
       role: 'system',
-      content: conversationGap,
+      content: [conversationGap, factCheck ? FACT_CHECK_INSTRUCTION : '']
+        .filter(Boolean)
+        .join('\n\n'),
     });
   }
 
@@ -662,6 +673,7 @@ function buildMantleInput({
   withTools = false,
   features = [],
   conversationGap = '',
+  factCheck = false,
 }) {
   if (usePreviousResponseId) {
     // 継続モードでは Mantle 側が文脈を保持しているため、
@@ -673,6 +685,7 @@ function buildMantleInput({
       withTools,
       features,
       conversationGap,
+      factCheck,
     });
   }
 
@@ -685,6 +698,7 @@ function buildMantleInput({
     withTools,
     features,
     conversationGap,
+    factCheck,
   });
 }
 

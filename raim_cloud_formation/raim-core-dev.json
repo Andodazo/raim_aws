@@ -393,6 +393,8 @@
             "TTS_FUNCTION_NAME": { "Ref": "TtsLambdaFunctionName" },
             "RAIM_VOICE_PROFILE": "tsumugi_parametric",
             "RAIM_PERSONA": "bright",
+            "FACT_CHECK_SEARCH": "true",
+            "SCENE_REASONING_EFFORTS": "",
             "STREAM_CHUNK_MAX_CHARACTERS": "30",
             "TTS_AUDIO_FRAGMENT_BASE64_CHARACTERS": "24000",
             "REQUEST_LEASE_SECONDS": { "Ref": "RequestLeaseSeconds" },

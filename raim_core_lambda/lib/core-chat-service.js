@@ -77,6 +77,11 @@ const {
   findLastTalkedAt,
   buildConversationGapContext,
 } = require('./conversation-gap');
+const {
+  isFactQuestion,
+  isFactCheckEnabled,
+  resolveSceneReasoningEffort,
+} = require('./fact-check');
 
 // ─────────────────────────────────────────────
 // ツールループの設定
@@ -315,6 +320,21 @@ function createCoreChatService(dependencyOverrides = {}) {
     // systemプロンプトにツールの説明を入れるかどうかがここで決まる。
     const toolsEnabled = await dependencies.isToolUseEnabled();
 
+    // 3-c. 事実を聞いている発話なら、先に調べるよう指示を足す（知ったかぶり防止）。
+    // ツールが使えないときは調べようがないので足さない。
+    const factCheck = Boolean(toolsEnabled) &&
+      isFactCheckEnabled(dependencies.env || process.env) &&
+      isFactQuestion(input.text);
+    if (factCheck) {
+      console.log(`[FactCheck] search requested: sceneId=${selectedScene?.id || ''}`);
+    }
+
+    // Scene ごとの reasoning effort（SCENE_REASONING_EFFORTS。未設定なら通常どおり）
+    const reasoningEffort = resolveSceneReasoningEffort(
+      selectedScene?.id,
+      dependencies.env || process.env
+    );
+
     // 3-b. 前回の発話からどれくらい経ったか。
     // 「3日ぶりなのに『さっき』と言う」のを防ぎ、「久しぶり」と言えるようにする。
     // スレッドは appendTurn の前の状態なので、最後のメッセージ＝前回の発話。
@@ -344,6 +364,7 @@ function createCoreChatService(dependencyOverrides = {}) {
       // アプリが使える機能。駅アラームのツールの説明を入れるかが決まる
       features: input.features,
       conversationGap,
+      factCheck,
     });
     // policyが期限・存在状態を確認済みの時だけprevious_response_idを送る。
     let previousResponseId = sessionState.usePreviousResponseId
@@ -383,6 +404,7 @@ function createCoreChatService(dependencyOverrides = {}) {
         onStreamEvent: onMantleStreamEvent,
         onTextDelta: onMantleTextDelta,
         tools,
+        reasoningEffort,
       });
     };
 
@@ -413,6 +435,7 @@ function createCoreChatService(dependencyOverrides = {}) {
           withTools: toolsEnabled,
           features: input.features,
           conversationGap,
+          factCheck,
         });
 
         mantleInput = rebuiltInput;
