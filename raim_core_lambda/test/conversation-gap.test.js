@@ -96,3 +96,34 @@ test('gap context reaches both initial and followup inputs', () => {
   // 人格プロンプト自体が【前回の発話】という見出しに触れているので、本文で判定する
   assert.ok(!systemText(withoutGap).includes('前に話したのは'));
 });
+
+test('a short gap in another conversation is not mentioned (avoids "また挨拶してくれた")', () => {
+  const now = new Date('2026-10-07T05:00:00Z');
+  assert.equal(buildConversationGapContext({
+    lastTalkedAt: '2026-10-07T04:50:00Z',
+    sameThread: false,
+    now,
+  }), '');
+
+  const longGap = buildConversationGapContext({
+    lastTalkedAt: '2026-10-03T04:50:00Z',
+    sameThread: false,
+    now,
+  });
+  assert.ok(longGap.includes('別の会話で最後に話したのは4日前'));
+  assert.ok(longGap.includes('久しぶり'));
+});
+
+test('the prompt limits "また" to things said in this conversation', () => {
+  const { buildSystemPrompt, getPersonaDigest } = require('../lib/prompts/raim-system-prompt');
+  assert.ok(buildSystemPrompt().includes('この会話の中に同じ発言が本当にあるときだけ'));
+  for (const persona of ['bright', 'downer']) {
+    assert.ok(getPersonaDigest(persona).includes('この会話の中に同じ発言が本当にあるときだけ'));
+  }
+});
+
+test('the tool rules tell the model to prefer newer articles', () => {
+  const { buildSystemPrompt, TOOLS_DIGEST } = require('../lib/prompts/raim-system-prompt');
+  assert.ok(buildSystemPrompt({ withTools: true }).includes('published_date が新しい方を信じる'));
+  assert.ok(TOOLS_DIGEST.includes('published_date が新しい記事を優先'));
+});
