@@ -107,3 +107,15 @@ test('check cases cover every scene and are not copies of the examples', () => {
   }
   assert.deepEqual([...covered].sort(), [...ids].sort());
 });
+
+test('greeting examples do not imply an earlier visit', () => {
+  // 「今日も話しに来てくれて」を見て、新しい会話でも「また挨拶してくれた」と返していた
+  for (const scene of scenes) {
+    for (const shot of scene.shots) {
+      if (!/こんにちは|おはよう|こんばんは/.test(shot.user)) continue;
+      for (const example of [shot.bright, shot.downer]) {
+        assert.ok(!/また|今日も|さっき/.test(example.raim), `${scene.id}: ${example.raim}`);
+      }
+    }
+  }
+});
