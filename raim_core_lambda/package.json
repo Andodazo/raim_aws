@@ -7,7 +7,8 @@
     "lib": "lib"
   },
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "package": "tar -a -c -f function.zip index.js lib voice-config.json package.json package-lock.json node_modules"
   },
   "keywords": [],
   "author": "",

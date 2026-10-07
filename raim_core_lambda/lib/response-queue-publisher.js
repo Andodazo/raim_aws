@@ -208,12 +208,23 @@ function createResponseQueuePublisher({
     return second;
   }
 
+  /**
+   * 読み上げる文字（文字・数字）があるか。
+   *
+   * 文の区切りで「？」や「…」だけのかたまりができることがあり、
+   * VOICEVOX はそれを読めずに失敗していた（AUDIO_QUERY_FAILED）。
+   * 失敗すると1回やり直すので、その間ほかの文の音声も待たされていた。
+   */
+  function hasSpeakableText(value) {
+    return /[\p{L}\p{N}]/u.test(String(value || ''));
+  }
+
   function isTtsFailure(result) {
     return Boolean(result?.error) || result?.ok === false;
   }
 
   function enqueueAudio({ chunkId, text }) {
-    if (!ttsClient || !text.trim()) {
+    if (!ttsClient || !hasSpeakableText(text)) {
       return;
     }
 

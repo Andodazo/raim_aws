@@ -246,6 +246,8 @@ function normalizeCoreEvent(event, { fallbackRequestId } = {}) {
     // 任意。アプリの現在地（約10kmに丸めたもの）。
     // 天気を聞かれて場所が指定されていないときだけ使う。
     location: normalizeLocation(payload.location),
+    // 任意。アプリで声を消しているとき false。読み上げ（TTS）を作らない。
+    speech: payload.speech !== false,
   };
 }
 

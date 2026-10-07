@@ -315,6 +315,8 @@ function createWebSocketHandler({
       features: normalized.features,
       // 現在地（約10kmに丸めたもの）。天気の場所が指定されないときだけ使う
       location: normalized.location,
+      // アプリで声を消しているときは false（Core が読み上げを作らない）
+      speech: normalized.speech,
     });
 
     // WebSocketの入口では「受付完了」だけを返す。

@@ -75,7 +75,9 @@ function createSqsCoreHandler(dependencyOverrides = {}) {
 
     try {
       let voiceParams = dependencies.getVoiceParamsFromEmotions(null, 0.5);
-      const ttsClient = dependencies.createTtsClient();
+      // アプリで声を消しているときは読み上げを作らない。
+      // 以前は消していても毎回 TTS を呼んでいた（料金と処理の無駄）。
+      const ttsClient = input.speech === false ? null : dependencies.createTtsClient();
 
       publisher = dependencies.createResponseQueuePublisher({
         requestId: input.requestId,

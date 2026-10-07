@@ -26,10 +26,10 @@ function mockFetch(t) {
   return calls;
 }
 
-test('場所の指定が無ければ現在地（緯度・経度）で引く', async (t) => {
+test('city が「現在地」なら現在地（緯度・経度）で引く', async (t) => {
   const calls = mockFetch(t);
 
-  const result = await getWeather('', null, 'key', {
+  const result = await getWeather('現在地', null, 'key', {
     location: { lat: 35.7, lon: 139.3 },
   });
 
@@ -78,5 +78,28 @@ test('executeTool が現在地を get_weather へ渡す', async (t) => {
 
 test('場所の指定が無いときの表示文', () => {
   assert.equal(getToolDescription('get_weather', {}), '今いるあたりの天気を調べています');
+  assert.equal(getToolDescription('get_weather', { city: '現在地' }), '今いるあたりの天気を調べています');
   assert.equal(getToolDescription('get_weather', { city: '東京' }), '東京の天気を調べています');
+});
+
+test('地名を英語にして引く（八王子）', async (t) => {
+  const calls = mockFetch(t);
+
+  await getWeather('八王子', null, 'key', {});
+
+  assert.equal(calls[0].searchParams.get('q'), 'Hachioji');
+});
+
+test('空の city も現在地として扱う', async (t) => {
+  const calls = mockFetch(t);
+
+  await getWeather('', null, 'key', { location: { lat: 35.7, lon: 139.3 } });
+
+  assert.equal(calls[0].searchParams.get('lat'), '35.7');
+});
+
+test('get_weather は city を必須にしている', () => {
+  const { TOOL_DEFINITIONS } = require('../lib/tools');
+  const weather = TOOL_DEFINITIONS.find((t) => t.name === 'get_weather');
+  assert.deepEqual(weather.parameters.required, ['city']);
 });

@@ -49,10 +49,12 @@ npm.cmd test
 ```powershell
 cd H:\dev\RAiM_prot\raim_aws\raim_core_lambda
 
-Remove-Item function.zip -Force -ErrorAction SilentlyContinue
-
-tar -a -c -f function.zip index.js lib voice-config.json package.json package-lock.json node_modules
+npm.cmd run package
 ```
+
+zip に入れるファイルは `package.json` の `package` に書いてあります。
+手で `tar` のコマンドを打つと入れ忘れが起きるので、この1行で作ってください
+（Edge / Summary / Authorizer も同じく `npm.cmd run package`）。
 
 > `voice-config.json` を入れ忘れると、感情ごとの声の調整が効かず、
 > どの感情でも同じ平らな声になります（ログに `[VoiceMapper] voice-config.json unavailable`）。
