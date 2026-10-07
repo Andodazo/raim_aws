@@ -143,24 +143,115 @@ function buildSummaryInput(history, previousSummary, mode) {
 // ─────────────────────────────────────────────
 
 /**
+ * Mantle の出力から要約の JSON を読む。崩れていても読める範囲で読む。
+ *
+ * Gemma は {"facts": [...], "relationship": ["..."} のように、
+ * 配列の閉じ括弧を落とした JSON を返すことがある（2026-10 実測）。
+ * そのまま JSON.parse すると失敗し、壊れた JSON 文字列のまま保存されて
+ * 初回プロンプトや userMemory の材料に混ざっていた。
+ *
+ * 1. そのまま読む
+ * 2. 閉じ括弧の数を合わせて読む
+ * 3. "facts" / "relationship" の配列から文字列だけを拾う
+ *
+ * どれでも読めなければ null。
+ */
+function parseSummaryJson(rawText) {
+  const text = String(rawText || '');
+  const start = text.indexOf('{');
+  if (start < 0) return null;
+  const end = text.lastIndexOf('}');
+  const body = end > start ? text.slice(start, end + 1) : text.slice(start);
+
+  const tryParse = (value) => {
+    try {
+      const result = JSON.parse(value);
+      return result && typeof result === 'object' ? result : null;
+    } catch {
+      return null;
+    }
+  };
+
+  // 1. そのまま
+  const direct = tryParse(body);
+  if (direct) return direct;
+
+  // 2. 足りない ] と } を補う（文字列の中の括弧は数えない）
+  const repaired = closeBrackets(text.slice(start));
+  const fixed = tryParse(repaired);
+  if (fixed) return fixed;
+
+  // 3. 配列の中の文字列だけを拾う
+  const loose = {};
+  for (const key of ['facts', 'relationship']) {
+    const match = new RegExp(`"${key}"\\s*:\\s*\\[([\\s\\S]*?)(?:\\]|\\}|$)`).exec(text);
+    if (!match) continue;
+    const items = [];
+    const stringPattern = /"((?:[^"\\]|\\.)*)"/g;
+    let item;
+    while ((item = stringPattern.exec(match[1])) !== null) {
+      const value = tryParse(`"${item[1]}"`);
+      if (typeof value === 'string' && value.trim()) items.push(value);
+    }
+    loose[key] = items;
+  }
+  return Object.keys(loose).length > 0 ? loose : null;
+}
+
+/**
+ * 開いたままの [ と { を、開いた順と逆に閉じる。
+ * 例: {"a": ["x"} → {"a": ["x"]}
+ */
+function closeBrackets(value) {
+  const stack = [];
+  let output = '';
+  let inString = false;
+  let escaped = false;
+
+  for (const character of value) {
+    if (inString) {
+      output += character;
+      if (escaped) escaped = false;
+      else if (character === '\\') escaped = true;
+      else if (character === '"') inString = false;
+      continue;
+    }
+
+    if (character === '"') {
+      inString = true;
+      output += character;
+    } else if (character === '[' || character === '{') {
+      stack.push(character);
+      output += character;
+    } else if (character === ']' || character === '}') {
+      const expected = character === ']' ? '[' : '{';
+      // 対応しない閉じ括弧の前に、開いたままの括弧を閉じる
+      while (stack.length > 0 && stack[stack.length - 1] !== expected) {
+        output += stack.pop() === '[' ? ']' : '}';
+      }
+      if (stack.length > 0) {
+        stack.pop();
+        output += character;
+      }
+    } else {
+      output += character;
+    }
+  }
+
+  while (stack.length > 0) {
+    output += stack.pop() === '[' ? ']' : '}';
+  }
+  return output;
+}
+
+/**
  * Mantle の生出力（JSON文字列）を人間可読な箇条書きへ整形する。
  *
  * DynamoDB には文字列で保存し、prompt-builder がそのまま初回プロンプトへ
  * 埋め込む。JSON のままだと読みにくいため整形する。
  */
 function formatSummary(rawText) {
-  let parsed = null;
-
-  try {
-    const start = String(rawText).indexOf('{');
-    const end = String(rawText).lastIndexOf('}');
-    if (start >= 0 && end > start) {
-      parsed = JSON.parse(String(rawText).slice(start, end + 1));
-    }
-  } catch {
-    parsed = null;
-  }
-
+  const parsed = parseSummaryJson(rawText);
   // JSON として解釈できなければ生テキストをそのまま返す（保存はする）。
   if (!parsed) {
     return String(rawText || '').trim();
@@ -231,6 +322,7 @@ module.exports = {
   generateSummary,
   buildSummaryInput,
   formatSummary,
+  parseSummaryJson,
   SUMMARY_INSTRUCTION_FULL,
   SUMMARY_INSTRUCTION_FACTS,
 };

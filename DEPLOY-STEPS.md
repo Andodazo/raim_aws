@@ -51,8 +51,11 @@ cd H:\dev\RAiM_prot\raim_aws\raim_core_lambda
 
 Remove-Item function.zip -Force -ErrorAction SilentlyContinue
 
-tar -a -c -f function.zip index.js lib package.json package-lock.json node_modules
+tar -a -c -f function.zip index.js lib voice-config.json package.json package-lock.json node_modules
 ```
+
+> `voice-config.json` を入れ忘れると、感情ごとの声の調整が効かず、
+> どの感情でも同じ平らな声になります（ログに `[VoiceMapper] voice-config.json unavailable`）。
 
 > `Compress-Archive` は使わないこと。
 > Windows PowerShell 5.1 の `Compress-Archive` はパス区切りを `\` で書き込むため、
@@ -63,6 +66,7 @@ tar -a -c -f function.zip index.js lib package.json package-lock.json node_modul
 
 ```powershell
 tar -tf function.zip | Select-String "lib/tools"
+tar -tf function.zip | Select-String "voice-config"
 (Get-Item function.zip).Length / 1MB
 ```
 

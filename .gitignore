@@ -2,4 +2,4 @@ node_modules/
 .env
 .env.*
 *.zip
-.DS_Store
+.DS_Storeraim_test/voice_preview/

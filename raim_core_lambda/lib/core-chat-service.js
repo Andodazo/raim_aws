@@ -455,6 +455,8 @@ function createCoreChatService(dependencyOverrides = {}) {
     const seenToolCalls = new Set();
 
     let toolTurn = 0;
+    // 会話の記録に残す、このターンで使ったツール（分析用）
+    const toolLog = [];
     let toolExecuted = false;
     let toolFailed = false;
     let exitedDueToDuplicate = false;
@@ -483,6 +485,7 @@ function createCoreChatService(dependencyOverrides = {}) {
       // 同じツールを同じ引数で呼び直すループを検知して打ち切る。
       if (seenToolCalls.has(callKey)) {
         exitedDueToDuplicate = true;
+        toolLog.push({ name: toolName, skipped: 'duplicate' });
         break;
       }
 
@@ -502,6 +505,7 @@ function createCoreChatService(dependencyOverrides = {}) {
       if (!dependencies.isKnownTool(toolName) || !offeredToolNames.has(toolName)) {
         console.warn(`[Tool] 未知のツール名を無視しました: ${toolName}`);
         exitedDueToUnknownTool = true;
+        toolLog.push({ name: String(toolName || ''), skipped: 'unknown' });
         break;
       }
 
@@ -533,6 +537,13 @@ function createCoreChatService(dependencyOverrides = {}) {
       if (toolResult && toolResult.error) {
         toolFailed = true;
       }
+
+      toolLog.push({
+        name: toolName,
+        // 何を調べたか（検索語・都市・駅）。分析で「どう調べたか」を見るため
+        query: String(toolArgs?.query || toolArgs?.city || toolArgs?.station || ''),
+        ok: !(toolResult && toolResult.error),
+      });
 
       // ツール結果をResponses APIの形式でMantleへ戻す。
       // previous_response_idで会話を継続するため、直前の呼出のcall_idと対応させる。
@@ -653,6 +664,21 @@ function createCoreChatService(dependencyOverrides = {}) {
         assistantMessage: {
           text: output.text,
           emotions: output.emotions,
+          // 分析用の記録。あとで「どの Scene・ツール・設定で話したか」を見られるようにする。
+          // 以前はログと時刻を突き合わせて推測するしかなかった。
+          meta: {
+            sceneId: selectedScene?.id || sceneSelection?.sceneId || '',
+            sceneReason: sceneSelection?.reason || '',
+            sceneScore: Number.isFinite(sceneSelection?.score)
+              ? Math.round(sceneSelection.score * 1000) / 1000
+              : undefined,
+            tools: toolLog,
+            factCheck,
+            promptVersion: mantleInput?.promptVersion || '',
+            mode: mantleInput?.mode || '',
+            reasoningEffort: reasoningEffort ||
+              String((dependencies.env || process.env).MANTLE_REASONING_EFFORT || 'none'),
+          },
         },
         inputTokens: mantleResponse.usage
           ? Number(mantleResponse.usage.input_tokens) || 0
