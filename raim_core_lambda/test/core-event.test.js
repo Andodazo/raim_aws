@@ -28,6 +28,7 @@ test('normalizeCoreEvent normalizes a direct Core Lambda event', () => {
     threadId: '',
     features: [],
     location: null,
+    speech: true,
   });
 });
 
@@ -84,6 +85,7 @@ test('normalizeCoreEvent accepts the Edge Lambda Request Queue message shape', (
     threadId: '',
     features: [],
     location: null,
+    speech: true,
   });
 });
 

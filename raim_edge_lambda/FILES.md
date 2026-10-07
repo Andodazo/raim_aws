@@ -243,6 +243,9 @@ Coreへ伝わります（知らない名前は捨てます）。付けたとき�
 （約10km）に丸めてから Core へ渡し、保存もログ出力もしません。
 位置情報の許可が無い、または設定で OFF のクライアントは付けません。
 
+クライアントは声を消しているとき `speech: false` を付けます。Core は読み上げ（TTS）を
+作らず、文字だけを返します。付けなければ今まで通り読み上げます。
+
 `tool_call` は、Core LambdaがResponse Queueへ送った `stream.tool` を変換して送ります。
 実際のTool Lambda呼び出し自体はCore Lambda側の責務で、Edge Lambdaは表示用イベントを中継するだけです。
 

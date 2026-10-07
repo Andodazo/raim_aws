@@ -33,6 +33,7 @@ function createRequestQueuePublisher({ client, env = process.env } = {}) {
     threadId = '',
     features = [],
     location = null,
+    speech = true,
   }) {
     const message = {
       schemaVersion: REQUEST_SCHEMA_VERSION,
@@ -49,6 +50,8 @@ function createRequestQueuePublisher({ client, env = process.env } = {}) {
       features: Array.isArray(features) ? features : [],
       // 現在地（約10kmに丸めたもの）。送られてこなければ入れない
       ...(location ? { location } : {}),
+      // 声を消しているときだけ入れる（読み上げを作らない）
+      ...(speech === false ? { speech: false } : {}),
       createdAt: new Date().toISOString(),
     };
 

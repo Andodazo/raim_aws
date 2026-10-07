@@ -221,6 +221,8 @@ function normalizeWebSocketEvent(event, lambdaContext = {}) {
   const beforeIndex = normalizeBeforeIndex(payload.beforeIndex);
   const features = normalizeFeatures(payload.features);
   const location = normalizeLocation(payload.location);
+  // アプリで声を消しているとき false。読み上げ（TTS）を作らない
+  const speech = payload.speech !== false;
 
   // text/images が要るのはチャット送信のときだけ。
   // thread.list のような読み取り要求は本文を持たない。
@@ -250,6 +252,7 @@ function normalizeWebSocketEvent(event, lambdaContext = {}) {
     features,
     // 現在地（約10kmに丸めたもの）。天気の場所が指定されないときに使う
     location,
+    speech,
     // 履歴を遡る位置。null なら最新側から返す
     beforeIndex,
     rawPayload: payload,

@@ -151,3 +151,42 @@ test('passes client actions from the tool loop to the publisher', async () => {
     ['completed'],
   ]);
 });
+
+test('アプリで声を消しているときは TTS を使わない', async () => {
+  let ttsCreated = 0;
+  let publisherTts = 'unset';
+  const handler = createSqsCoreHandler({
+    normalizeCoreEvent: () => ({
+      sub: 'user-1',
+      requestId: 'req-mute',
+      connectionId: 'connection-1',
+      source: 'websocket',
+      text: 'hello',
+      images: [],
+      speech: false,
+    }),
+    claimRequest: async () => ({ claimed: true, requestKey: 'user-1#req-mute' }),
+    createTtsClient: () => {
+      ttsCreated += 1;
+      return { synthesize: async () => ({ ok: true }) };
+    },
+    createResponseQueuePublisher: (_meta, options) => {
+      publisherTts = options.ttsClient;
+      return {
+        start: async () => {},
+        appendText: async () => {},
+        emotion: async () => {},
+        completed: async () => {},
+        error: async () => {},
+      };
+    },
+    handleCoreChat: async (input) => ({ ok: true, type: 'chat', requestId: input.requestId, text: 'ok' }),
+    markRequestCompleted: async () => {},
+    markRequestFailed: async () => {},
+  });
+
+  await handler({ Records: [createRecord('mute-1')] }, { awsRequestId: 'invocation-mute' });
+
+  assert.equal(ttsCreated, 0);
+  assert.equal(publisherTts, null);
+});

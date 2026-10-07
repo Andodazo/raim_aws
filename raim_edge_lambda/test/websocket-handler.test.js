@@ -87,6 +87,7 @@ test('$default publishes a chat request to Core request queue', async () => {
     threadId: '',
     features: [],
     location: null,
+    speech: true,
   });
 });
 
@@ -209,4 +210,32 @@ test('$default forwards a rounded location', async () => {
   });
 
   assert.deepEqual(published[0].location, { lat: 35.7, lon: 139.3 });
+});
+
+test('$default は声を消しているとき speech: false を Core へ渡す', async () => {
+  const published = [];
+  const handler = createWebSocketHandler({
+    connectionStore: {
+      putConnection: async () => {},
+      getConnection: async () => null,
+      deleteConnection: async () => {},
+    },
+    requestPublisher: {
+      publishChatRequest: async (message) => {
+        published.push(message);
+        return message;
+      },
+    },
+  });
+
+  await handler({
+    requestContext: {
+      routeKey: '$default',
+      connectionId: 'conn-001',
+      authorizer: { claims: { sub: 'user-001' } },
+    },
+    body: JSON.stringify({ requestId: 'req-004', text: 'こんにちは', speech: false }),
+  });
+
+  assert.equal(published[0].speech, false);
 });
