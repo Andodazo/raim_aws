@@ -98,7 +98,7 @@ test('game talk waits for the user in every prompt (v5.1)', () => {
     const digest = getPersonaDigest(persona);
     for (const text of [prompt, digest]) {
       assert.ok(text.includes('相手の話をゲームに結びつけない'), persona);
-      assert.ok(text.includes('夜空や星'), persona);
+      assert.ok(text.includes('漫画や小説'), persona);
     }
   }
 });
