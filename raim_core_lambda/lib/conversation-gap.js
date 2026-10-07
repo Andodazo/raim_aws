@@ -92,6 +92,15 @@ function buildConversationGapContext({ lastTalkedAt, sameThread, now = new Date(
 
   // 時計のずれで未来になった場合は 0 分として扱う
   const minutes = Math.max(0, (now.getTime() - Date.parse(lastTalkedAt)) / 60000);
+
+  // 別の会話との間隔は、1日以上空いたときだけ伝える。
+  // 「別の会話で数分前に話した」と伝えると、新しい会話の1ターン目でも
+  // 「また挨拶してくれた」と返していた（2026-10 のテスト）。
+  // 短い間隔は伝えなくても困らない。「久しぶり」を言える場面だけ伝える。
+  if (!sameThread && minutes < 60 * 24) {
+    return '';
+  }
+
   const label = describeElapsed(minutes);
 
   const lines = ['【前回の発話】'];

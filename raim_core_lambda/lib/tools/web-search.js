@@ -17,6 +17,13 @@
 // 対策:
 // - answer がある場合はそれを最優先（Tavily が既に要約してくれてる）
 // - results はトップ3件、各 content は冒頭 200文字でカット
+//
+// 【v3 での変更点】記事の日付を付ける
+// 「ジェラードンは今何人？」のように、時間で変わる事実を古い記事のまま答えていた
+// （2026-10 のテスト。2025年に1人抜けて2人組なのに、検索しても「トリオ」と答えた）。
+// - include_published_date で各記事の公開日を受け取り、published_date として渡す
+// - 調べた日（searched_on）も渡し、どれくらい古い情報か比べられるようにする
+// - 新しい記事も拾えるよう、渡す件数を3件→5件にする
 
 'use strict';
 
@@ -26,7 +33,20 @@ const TAVILY_API_URL = 'https://api.tavily.com/search';
 const TOOL_TIMEOUT_MS = Number(process.env.TOOL_TIMEOUT_MS || 8000);
 
 const MAX_RESULT_CONTENT_LENGTH = 200;  // 各結果の content の最大文字数
-const MAX_RESULTS_RETURNED = 3;          // LLM に渡す結果の最大件数
+const MAX_RESULTS_RETURNED = 5;          // LLM に渡す結果の最大件数
+
+// 調べた日（日本時間の YYYY-MM-DD）
+function todayInJapan(now = new Date()) {
+  return new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Tokyo' }).format(now);
+}
+
+// Tavily の published_date を YYYY-MM-DD にそろえる。分からなければ null
+function toDateOnly(value) {
+  if (!value) return null;
+  const time = Date.parse(value);
+  if (!Number.isFinite(time)) return null;
+  return new Date(time).toISOString().slice(0, 10);
+}
 
 /**
  * Tavily で Web 検索を実行
@@ -39,7 +59,7 @@ const MAX_RESULTS_RETURNED = 3;          // LLM に渡す結果の最大件数
  *   summary: Array,             // 簡潔化された結果リスト
  * }
  */
-async function searchWeb(query, maxResults = 3, injectedApiKey = null) {
+async function searchWeb(query, maxResults = MAX_RESULTS_RETURNED, injectedApiKey = null, deps = {}) {
   // Lambdaでは環境変数へ平文保存せず、Secrets Managerから取得したキーを注入する。
   // ローカル検証用に環境変数フォールバックも残す。
   const apiKey = injectedApiKey || process.env.TAVILY_API_KEY;
@@ -50,18 +70,20 @@ async function searchWeb(query, maxResults = 3, injectedApiKey = null) {
     throw new Error('query is required and must be a string');
   }
 
-  const limit = Math.max(1, Math.min(10, maxResults || 3));
+  const limit = Math.max(1, Math.min(10, maxResults || MAX_RESULTS_RETURNED));
 
   const requestBody = {
     api_key: apiKey,
     query: query,
     max_results: limit,
     include_answer: true,    // 必須：Tavily 要約取得
+    include_published_date: true, // 各記事の公開日（分からなければ null）
   };
 
   // Node の fetch は既定でタイムアウトしない。
   // 相手が応答しないと Lambda 自身のタイムアウトまで待つことになる。
-  const res = await fetch(TAVILY_API_URL, {
+  const fetchImpl = deps.fetch || fetch;
+  const res = await fetchImpl(TAVILY_API_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(requestBody),
@@ -83,11 +105,15 @@ async function searchWeb(query, maxResults = 3, injectedApiKey = null) {
     .map((r, idx) => ({
       rank: idx + 1,
       title: r.title || '(無題)',
+      // 記事の公開日。null は「日付が分からない」（古い情報の可能性がある）
+      published_date: toDateOnly(r.published_date),
       content: truncate(r.content || '', MAX_RESULT_CONTENT_LENGTH),
     }));
 
   return {
     query: data.query || query,
+    searched_on: todayInJapan(deps.now ? deps.now() : new Date()),
+    // Tavily の要約。古い記事から作られていることもあるので、summary の日付と見比べる
     answer: data.answer || null,
     summary: summaryResults,
     // 内部用：オリジナルの URL は履歴記録時に使えるよう保持
@@ -100,4 +126,4 @@ function truncate(text, max) {
   return text.slice(0, max) + '…';
 }
 
-module.exports = { searchWeb };
+module.exports = { searchWeb, MAX_RESULTS_RETURNED };
