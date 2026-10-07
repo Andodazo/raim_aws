@@ -290,3 +290,39 @@ test('clientAction sends stream.action without an intro or bubble_break', async 
   assert.equal(action.action, 'station_alarm.start');
   assert.deepEqual(action.params, { station: '新宿' });
 });
+
+test('記号だけのかたまりは読み上げない（文字は送る）', async () => {
+  const commands = [];
+  const ttsCalls = [];
+  const publisher = createResponseQueuePublisher({
+    requestId: 'req-punct',
+    connectionId: 'connection-1',
+    sub: 'user-1',
+    source: 'websocket',
+  }, {
+    client: { send: async (command) => commands.push(command.input) },
+    env: {
+      RESPONSE_QUEUE_URL: 'https://sqs.example/response.fifo',
+      STREAM_CHUNK_MIN_CHARACTERS: '1',
+      STREAM_CHUNK_MAX_CHARACTERS: '30',
+    },
+    ttsClient: {
+      synthesize: async (request) => {
+        ttsCalls.push(request);
+        return { ok: true, format: 'wav', contentType: 'audio/wav', audio: 'AAAA', audioByteLength: 3 };
+      },
+    },
+    getVoiceParams: () => ({ speaker_id: 8 }),
+  });
+
+  await publisher.start();
+  await publisher.appendText('そうなの。');
+  await publisher.appendText('？');
+  await publisher.completed({ text: 'そうなの。？' });
+
+  const messages = commands.map((command) => JSON.parse(command.MessageBody));
+  const deltas = messages.filter((m) => m.type === 'stream.delta').map((m) => m.textDelta).join('');
+
+  assert.equal(deltas, 'そうなの。？');
+  assert.equal(ttsCalls.length, 1);
+});
