@@ -258,6 +258,13 @@ function createToolCallMessage(coreEvent, base) {
   };
 }
 
+// 今の人格（'bright' | 'downer'）。Core が付けてきたときだけ載せる。
+// アプリは駅アラームの声など、自分で鳴らすセリフを人格に合わせる。
+function personaField(coreEvent) {
+  const persona = String(coreEvent.persona || '').trim();
+  return persona ? { persona } : {};
+}
+
 function toClientMessage(coreEvent) {
   const base = {
     type: coreEvent.type,
@@ -271,6 +278,7 @@ function toClientMessage(coreEvent) {
         ...base,
         type: 'metadata',
         ...createEmotionPayload(coreEvent),
+        ...personaField(coreEvent),
       };
 
     // 本文より先に分かった感情。クライアントは metadata を受け取ると表情を反映するので、
@@ -328,6 +336,7 @@ function toClientMessage(coreEvent) {
         threadId: String(coreEvent.threadId || ''),
         full_text: String(coreEvent.text || ''),
         ...createEmotionPayload(coreEvent),
+        ...personaField(coreEvent),
       };
 
     case 'stream.error': {

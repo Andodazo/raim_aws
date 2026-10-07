@@ -338,3 +338,16 @@ test('toClientMessage maps stream.emotion to client metadata with emotions', () 
   assert.equal(message.overall_intensity, 0.8);
   assert.equal(message.emotions.happy, 0.667);
 });
+
+test('persona is passed to metadata and chat_end only when Core sends it', () => {
+  const start = toClientMessage({ type: 'stream.start', requestId: 'r', sequence: 0, persona: 'downer' });
+  assert.equal(start.type, 'metadata');
+  assert.equal(start.persona, 'downer');
+
+  const end = toClientMessage({ type: 'stream.completed', requestId: 'r', sequence: 3, text: 'ん', persona: 'downer' });
+  assert.equal(end.type, 'chat_end');
+  assert.equal(end.persona, 'downer');
+
+  const old = toClientMessage({ type: 'stream.start', requestId: 'r', sequence: 0 });
+  assert.equal('persona' in old, false);
+});

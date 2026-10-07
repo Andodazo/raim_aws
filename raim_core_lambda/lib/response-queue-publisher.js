@@ -46,6 +46,9 @@ function createResponseQueuePublisher({
   env = process.env,
   ttsClient = null,
   getVoiceParams = () => null,
+  // 今の人格（'bright' | 'downer'）。クライアントへ知らせる。
+  // 駅アラームの声など、アプリ側で鳴らすセリフを人格に合わせるため。
+  persona = '',
 } = {}) {
   const queueUrl = requiredEnvironmentValue(env, 'RESPONSE_QUEUE_URL');
   const sqsClient = client || new SQSClient({
@@ -300,7 +303,7 @@ function createResponseQueuePublisher({
     start() {
       // threadId はこの時点では未確定（resolveThread は handleCoreChat の中で走る）。
       // クライアントへは stream.completed で返す。
-      return send('stream.start');
+      return send('stream.start', persona ? { persona } : {});
     },
 
     /**
@@ -353,6 +356,7 @@ function createResponseQueuePublisher({
         // 後方互換: 旧Flutter/Unity実装はこの2つだけ見ていても動く。
         emotion: result.emotion,
         intensity: result.intensity,
+        ...(persona ? { persona } : {}),
       });
     },
 

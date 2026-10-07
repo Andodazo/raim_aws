@@ -171,39 +171,77 @@ function getClientAction(toolName, args = {}) {
 // 「調べるね」に相当する発話をLLMに作らせることができない。
 // そのためサーバー側で固定セリフを持ち、ライムの発話として先に送る。
 //
-// ローカル実装からそのまま移植。
+// 人格（RAIM_PERSONA）ごとに口調を変える。
+//
+// 【読み上げの注意】
+// このセリフはそのまま VOICEVOX で読み上げる。読み方が割れる漢字は使わない。
+// 例: 「今チェックする」は「こんチェックする」と読まれたので「いま」と書く。
+
+const { RAIM_PERSONA, resolvePersonaName } = require('../prompts/raim-system-prompt');
 
 const TOOL_INTROS = {
-  web_search: {
-    first: [
-      'んー、ちょっと調べてみるね',
-      'えっと、それ気になる。少し待って？',
-      'あ、それ調べた方がいいな。ちょっと待って',
-      'うーん、調べてみるよ',
-    ],
-    second: [
-      'もう少し詳しく調べてみる',
-      'ふむふむ、もうちょっと深掘りするね',
-      'んー、別の角度からも見てみる',
-    ],
-    third: [
-      '念のため、もうちょっと確認する',
-      'えっと、最後に確認させて',
-    ],
+  bright: {
+    web_search: {
+      first: [
+        'ちょっと調べてみるね',
+        'それ気になる！少し待っててね',
+        '調べてくるから、ちょっと待っててね',
+        'うーん、調べてみるよ',
+      ],
+      second: [
+        'もう少し詳しく調べてみるね',
+        'もうちょっとだけ調べさせて',
+      ],
+      third: [
+        '念のため、もう一回確かめるね',
+      ],
+    },
+    get_weather: {
+      first: [
+        '天気見てくるね、ちょっと待ってて',
+        'いま天気をチェックするね',
+        '空の様子、調べてみるよ',
+      ],
+      second: [
+        'ほかの場所の天気も見てみるね',
+        'もう一回、天気を見てみるね',
+      ],
+      third: [
+        '念のため、もう一回見てみるね',
+      ],
+    },
+    fallback: 'ちょっと待ってね',
   },
-  get_weather: {
-    first: [
-      '天気見てくる、ちょっと待って',
-      'んー、天気ね。今チェックする',
-      'あ、空のこと？調べるよ',
-    ],
-    second: [
-      '他の地域の天気も確認するね',
-      '別の天気情報も見てみる',
-    ],
-    third: [
-      '念のため、もう一回見てみる',
-    ],
+  downer: {
+    web_search: {
+      first: [
+        'ん、ちょっと調べる',
+        '調べてみる。待ってて',
+        'ちょっと待って。調べるから',
+        'えっと、調べてくる',
+      ],
+      second: [
+        'もう少し見てみる',
+        'もうちょっと調べる',
+      ],
+      third: [
+        '念のため、もう一回見る',
+      ],
+    },
+    get_weather: {
+      first: [
+        '天気ね。ちょっと見てくる',
+        'ん、いま天気見る',
+        '空の様子、見てくるね',
+      ],
+      second: [
+        'ほかの場所も見てみる',
+      ],
+      third: [
+        '念のため、もう一回見る',
+      ],
+    },
+    fallback: 'ん、ちょっと待って',
   },
 };
 
@@ -213,18 +251,20 @@ const TOOL_INTROS = {
  * @param {string} toolName
  * @param {number} turn 何回目のツール呼出か（1〜3）
  * @param {Function} random テスト時に固定できるよう注入可能
+ * @param {string} persona 'bright' | 'downer'（既定は RAIM_PERSONA）
  */
-function pickToolIntro(toolName, turn, random = Math.random) {
+function pickToolIntro(toolName, turn, random = Math.random, persona = RAIM_PERSONA) {
   // アプリに頼むツールは待ち時間が無いので、前置きは言わない。
   // 「ちょっと待って」の直後に「新宿で起こすね」が来ると不自然なため。
   if (STATION_ALARM_TOOL_NAMES.includes(toolName)) {
     return '';
   }
 
-  const intros = TOOL_INTROS[toolName];
+  const lines = TOOL_INTROS[resolvePersonaName(persona)];
+  const intros = lines[toolName];
 
   if (!intros) {
-    return 'えっと、ちょっと待って';
+    return lines.fallback;
   }
 
   const key = turn === 1 ? 'first' : turn === 2 ? 'second' : 'third';
@@ -232,10 +272,6 @@ function pickToolIntro(toolName, turn, random = Math.random) {
 
   return pool[Math.floor(random() * pool.length)];
 }
-
-// ─────────────────────────────────────────────
-// ツール説明文（クライアントのUI表示用）
-// ─────────────────────────────────────────────
 
 const TOOL_DESCRIPTIONS = {
   web_search: (args) => `「${args.query}」を検索しています`,

@@ -24,6 +24,7 @@ const { StreamingChatJsonExtractor } = require('./streaming-chat-json-extractor'
 const { createTtsClient } = require('./tts-client');
 const { getVoiceParamsFromEmotions } = require('./voice-mapper');
 const { createChat } = require('./types');
+const { RAIM_PERSONA } = require('./prompts/raim-system-prompt');
 
 function isSqsEvent(event) {
   return Array.isArray(event?.Records) &&
@@ -85,6 +86,7 @@ function createSqsCoreHandler(dependencyOverrides = {}) {
       }, {
         ttsClient,
         getVoiceParams: () => voiceParams,
+        persona: dependencies.persona || RAIM_PERSONA,
       });
       const extractor = new StreamingChatJsonExtractor({
         onText: (text) => publisher.appendText(text),

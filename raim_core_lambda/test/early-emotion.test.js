@@ -116,3 +116,21 @@ test('few-shot examples and output rules put emotions before text', () => {
     assert.ok(!/\{"text"/.test(prompt), 'text が先の JSON 例が残っている');
   }
 });
+
+test('publisher tells the client which persona is active', async () => {
+  const commands = [];
+  const publisher = createResponseQueuePublisher({
+    requestId: 'req-2', connectionId: 'c', sub: 'u', source: 'websocket',
+  }, {
+    client: { send: async (command) => commands.push(command.input) },
+    env: { RESPONSE_QUEUE_URL: 'https://sqs.example/r.fifo' },
+    persona: 'downer',
+  });
+
+  await publisher.start();
+  await publisher.completed({ text: 'ん', emotion: 'neutral', intensity: 0.5 });
+
+  const messages = commands.map((command) => JSON.parse(command.MessageBody));
+  assert.equal(messages[0].persona, 'downer');
+  assert.equal(messages[1].persona, 'downer');
+});

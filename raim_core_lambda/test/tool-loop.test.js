@@ -118,14 +118,18 @@ test('makeToolCallKey is stable regardless of key order', () => {
 
 test('pickToolIntro returns a character-appropriate line per turn', () => {
   // randomを固定して先頭要素を選ばせる
-  const first = pickToolIntro('get_weather', 1, () => 0);
-  const second = pickToolIntro('get_weather', 2, () => 0);
+  const first = pickToolIntro('get_weather', 1, () => 0, 'bright');
+  const second = pickToolIntro('get_weather', 2, () => 0, 'bright');
 
-  assert.equal(first, '天気見てくる、ちょっと待って');
-  assert.equal(second, '他の地域の天気も確認するね');
+  assert.equal(first, '天気見てくるね、ちょっと待ってて');
+  assert.equal(second, 'ほかの場所の天気も見てみるね');
+
+  // 人格ごとに口調が変わる
+  assert.equal(pickToolIntro('get_weather', 1, () => 0, 'downer'), '天気ね。ちょっと見てくる');
 
   // 未知のツールでもフォールバックする
-  assert.equal(pickToolIntro('unknown_tool', 1, () => 0), 'えっと、ちょっと待って');
+  assert.equal(pickToolIntro('unknown_tool', 1, () => 0, 'bright'), 'ちょっと待ってね');
+  assert.equal(pickToolIntro('unknown_tool', 1, () => 0, 'downer'), 'ん、ちょっと待って');
 });
 
 test('TOOL_DEFINITIONS use the flat Responses API schema', () => {
@@ -300,4 +304,21 @@ test('passes tool failures to Mantle instead of throwing', async () => {
   // 失敗内容はMantleへ渡っている
   const toolOutput = mantleStub.calls[1].mantleInput.messages[0].output;
   assert.ok(toolOutput.includes('都市が見つかりません'));
+});
+
+test('tool intro lines avoid kanji that VOICEVOX misreads and keep the persona tone', () => {
+  // 「今チェック」が「こんチェック」と読まれたため、「今」は使わない
+  for (const persona of ['bright', 'downer']) {
+    for (const tool of ['web_search', 'get_weather', 'unknown_tool']) {
+      for (const turn of [1, 2, 3]) {
+        for (const r of [0, 0.34, 0.67, 0.99]) {
+          const line = pickToolIntro(tool, turn, () => r, persona);
+          assert.ok(!line.includes('今'), line);
+          if (persona === 'downer') {
+            assert.ok(!line.includes('！') && !line.includes('ふふっ'), line);
+          }
+        }
+      }
+    }
+  }
 });
