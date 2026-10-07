@@ -90,3 +90,15 @@ test('few-shot messages carry the persona example text', () => {
   assert.equal(messages.length, 2);
   assert.ok(messages[1].content.includes('ん、こんにちは'));
 });
+
+test('game talk waits for the user in every prompt (v5.1)', () => {
+  // 好きなものがゲームだけだと、何の話でもゲームに結びつけていた
+  for (const persona of ['bright', 'downer']) {
+    const prompt = buildSystemPrompt({ persona, now: NOW });
+    const digest = getPersonaDigest(persona);
+    for (const text of [prompt, digest]) {
+      assert.ok(text.includes('相手の話をゲームに結びつけない'), persona);
+      assert.ok(text.includes('漫画や小説'), persona);
+    }
+  }
+});

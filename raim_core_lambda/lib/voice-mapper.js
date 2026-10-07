@@ -11,6 +11,8 @@
 const fs = require('fs');
 const path = require('path');
 
+// プロファイルに無い感情の置き換え先。
+// 今の voice-config.json は12感情すべてを持つので、古い・自作のプロファイル用の保険。
 const EMOTION_FALLBACK = Object.freeze({
   curious: 'happy',
   amused: 'happy',
@@ -37,10 +39,40 @@ function loadConfig() {
   }
 }
 
+/**
+ * 使う音声プロファイルの名前を決める。
+ *
+ * RAIM_VOICE_PROFILE
+ *   プロファイル名  … それを使う（例: tsumugi_downer）
+ *   auto / 未設定   … RAIM_PERSONA に合わせて persona_profiles から選ぶ
+ *                     （bright → tsumugi_parametric、downer → tsumugi_downer）
+ *
+ * 以前は人格（RAIM_PERSONA）と声（RAIM_VOICE_PROFILE）を別々に変える必要があり、
+ * ダウナーにしても声は明るいままになりやすかった。
+ * 名前が見つからないときは active_profile を使う。
+ */
+function resolveVoiceProfileName(env = process.env, config = VOICE_CONFIG) {
+  const profiles = config?.profiles || {};
+  const fallback = String(config?.active_profile || 'tsumugi_parametric');
+  const requested = String(env.RAIM_VOICE_PROFILE || '').trim();
+
+  if (requested && requested.toLowerCase() !== 'auto') {
+    if (profiles[requested]) {
+      return requested;
+    }
+    console.warn(`[VoiceMapper] unknown RAIM_VOICE_PROFILE: ${requested}. using ${fallback}`);
+    return fallback;
+  }
+
+  const persona = String(env.RAIM_PERSONA || '').trim().toLowerCase() === 'downer'
+    ? 'downer'
+    : 'bright';
+  const linked = config?.persona_profiles?.[persona];
+  return linked && profiles[linked] ? linked : fallback;
+}
+
 const VOICE_CONFIG = loadConfig();
-const ACTIVE_PROFILE_NAME = String(
-  process.env.RAIM_VOICE_PROFILE || VOICE_CONFIG?.active_profile || 'tsumugi_parametric'
-);
+const ACTIVE_PROFILE_NAME = resolveVoiceProfileName(process.env, VOICE_CONFIG);
 const ACTIVE_PROFILE = VOICE_CONFIG?.profiles?.[ACTIVE_PROFILE_NAME] || null;
 
 function clamp01(value, fallback = 0.5) {
@@ -121,6 +153,7 @@ function getVoiceParamsFromEmotions(emotions, overallIntensity = 1.0) {
 
 module.exports = {
   ACTIVE_PROFILE_NAME,
+  resolveVoiceProfileName,
   EMOTION_FALLBACK,
   defaultVoiceParams,
   getVoiceParams,

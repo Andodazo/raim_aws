@@ -206,7 +206,7 @@ async function listThreads(sub, options = {}, deps = {}) {
  * 画像はバイナリではなく imageDescription（マルチモーダルで生成済みの説明文）
  * を保存する。容量が軽く、「前に見せた写真のこと」をライムが覚えていられる。
  */
-function buildMessageRecord({ role, text, imageDescription, emotions, createdAt }) {
+function buildMessageRecord({ role, text, imageDescription, emotions, meta, createdAt }) {
   const record = {
     role: role === 'assistant' ? 'assistant' : 'user',
     text: String(text || ''),
@@ -220,6 +220,20 @@ function buildMessageRecord({ role, text, imageDescription, emotions, createdAt 
   // 感情はスレッド再開時の表情復元に使えるので、assistant 側だけ残す。
   if (record.role === 'assistant' && emotions && typeof emotions === 'object') {
     record.emotions = emotions;
+  }
+
+  // 分析用の記録（Scene・ツール・プロンプト版・reasoning など）。assistant 側だけ。
+  // 値の無い項目は保存しない。
+  if (record.role === 'assistant' && meta && typeof meta === 'object') {
+    const cleaned = {};
+    for (const [key, value] of Object.entries(meta)) {
+      if (value === undefined || value === null || value === '') continue;
+      if (Array.isArray(value) && value.length === 0) continue;
+      cleaned[key] = value;
+    }
+    if (Object.keys(cleaned).length > 0) {
+      record.meta = cleaned;
+    }
   }
 
   return record;
