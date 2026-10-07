@@ -129,6 +129,49 @@ function extractJsonLikeText(rawText) {
   return cleaned.slice(firstBrace, lastBrace + 1);
 }
 
+/**
+ * 先頭の JSON オブジェクト1つ分だけを取り出す（文字列の中の括弧は数えない）。
+ *
+ * モデルが JSON を2つ続けて出したり、JSON の後ろに余計な文を付けたりすると、
+ * 「最初の { から最後の } まで」では JSON として読めない。
+ * 本文はストリーミングで既にユーザーに届いているので、最初の1つが読めれば使う。
+ * 見つからなければ null。
+ */
+function extractFirstJsonObject(text) {
+  const start = text.indexOf('{');
+  if (start === -1) return null;
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let i = start; i < text.length; i += 1) {
+    const ch = text[i];
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === '\\') {
+        escaped = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = true;
+    } else if (ch === '{') {
+      depth += 1;
+    } else if (ch === '}') {
+      depth -= 1;
+      if (depth === 0) return text.slice(start, i + 1);
+    }
+  }
+
+  return null;
+}
+
 // ─────────────────────────────────────────────
 // Mantle rawText のJSON parse
 // ─────────────────────────────────────────────
@@ -171,6 +214,27 @@ function parseMantleOutput(rawOutput) {
       parsed: JSON.parse(jsonText),
     };
   } catch (error) {
+    // 最初の JSON だけなら読めることがある（JSON が2つ続いた、後ろに文が付いた など）
+    const first = extractFirstJsonObject(stripMarkdownCodeFence(rawOutput));
+
+    if (first && first.length < jsonText.length) {
+      try {
+        const parsed = JSON.parse(first);
+        // 中身は会話なので出さない。長さだけ
+        console.warn(
+          `[Mantle] 応答の後ろに余分な出力があったため、最初の JSON だけを使いました ` +
+          `(使った長さ=${first.length} / 全体=${rawOutput.length})`
+        );
+        return {
+          ok: true,
+          error: '',
+          parsed,
+        };
+      } catch (_) {
+        // 最初の1つも読めなければ、元のエラーを返す
+      }
+    }
+
     return {
       ok: false,
       error: error.message,

@@ -336,7 +336,8 @@ const TOOLS_APPENDIX = `
 【get_weather の使い方】
 - 都市名は **必ず英語名（ローマ字）** で指定
   例: "東京" → "Tokyo"、"大阪" → "Osaka"、"福岡" → "Fukuoka"
-- 場所を言われていないとき（「今日の天気は？」）は city を空にして呼ぶ。都市を勝手に決めない
+- ユーザーが地名を言ったら、必ずその地名を city に入れる（「今日の八王子の天気は」→ Hachioji）
+- 地名を言っていないときだけ city に "現在地" と入れる。都市を勝手に決めない
 - 結果に source: "current_location" があれば、ユーザーの今いるあたりの天気
 - 結果に needs_place があれば、天気を答えずに「どこの天気？」と聞く
 - get_weather で分かるのは「今の天気」だけ。明日以降の天気は web_search で調べる
@@ -640,7 +641,7 @@ const TOOLS_DIGEST = `
 【ツール】
 - 使えるのは web_search と get_weather の2つだけ。他の名前は存在しない
 - get_weather の都市名は必ず英語（東京→Tokyo）
-- 場所を言われていなければ city を空にして get_weather を呼ぶ（都市を勝手に決めない）。
+- 地名を言われたら必ず city に入れる。言われていないときだけ city は "現在地"（都市を勝手に決めない）。
   結果に needs_place があれば、どこの天気か聞く
 - get_weather は今の天気だけ。明日以降は web_search で調べる
 - 人・作品・ゲームなどの固有名詞を聞かれたら、知っているつもりでも web_search で確かめる
