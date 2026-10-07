@@ -4,7 +4,8 @@
   "description": "RAiM Edge Lambda for API Gateway WebSocket and Core Lambda queues",
   "main": "index.js",
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "package": "tar -a -c -f function.zip index.js lib package.json package-lock.json node_modules"
   },
   "keywords": [],
   "author": "",

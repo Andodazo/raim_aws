@@ -4,7 +4,8 @@
   "description": "RAiM Summary Lambda - 会話要約の生成とユーザー記憶の更新",
   "main": "index.js",
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "package": "tar -a -c -f function.zip index.js lib package.json package-lock.json node_modules"
   },
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.700.0",
