@@ -61,10 +61,12 @@ function createRequestQueuePublisher({ client, env = process.env } = {}) {
       ? connectionId
       : hashForFifo(connectionId);
 
-    // 同じrequestIdの再送は重複扱いにしたい。
-    const deduplicationId = requestId.length <= 128
-      ? requestId
-      : hashForFifo(requestId);
+    // 同じ人の同じrequestIdの再送は重複扱いにしたい。
+    //
+    // 以前は requestId だけを使っていたため、別の人がたまたま同じ requestId を
+    // 5分以内に送ると、後の要求が重複として捨てられ得た（キューは全員で共有している）。
+    // sub と組み合わせて、人ごとの重複判定にする。
+    const deduplicationId = hashForFifo(`${sub}\u0000${requestId}`);
 
     await sqs.send(new SendMessageCommand({
       QueueUrl: config.requestQueueUrl,
