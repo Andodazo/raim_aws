@@ -342,3 +342,59 @@ test('$default accepts old connections that have no stored expiry', async () => 
   assert.equal(response.statusCode, 202);
   assert.equal(published.length, 1);
 });
+
+test('$default uses the expiry from the authorizer context when it is there', async () => {
+  const posted = [];
+  const handler = createWebSocketHandler({
+    connectionStore: {
+      putConnection: async () => {},
+      // 接続テーブルに期限が無くても、context の期限で断る
+      getConnection: async () => ({ sub: 'user-001' }),
+      deleteConnection: async () => {},
+    },
+    requestPublisher: {
+      publishChatRequest: async () => {
+        throw new Error('should not publish');
+      },
+    },
+    postback: {
+      postJson: async (connectionId, payload) => {
+        posted.push(payload);
+        return { ok: true };
+      },
+      disconnect: async () => ({ ok: true }),
+    },
+    now: () => 1700000001 * 1000,
+  });
+
+  const response = await handler({
+    requestContext: {
+      routeKey: '$default',
+      connectionId: 'conn-001',
+      authorizer: { sub: 'user-001', exp: '1700000000' },
+    },
+    body: JSON.stringify({ requestId: 'req-001', text: 'こんにちは' }),
+  });
+
+  assert.equal(response.statusCode, 401);
+  assert.equal(posted[0].code, 'TOKEN_EXPIRED');
+});
+
+test('$default answers with an error instead of crashing when the connection lookup fails', async () => {
+  const handler = createWebSocketHandler({
+    connectionStore: {
+      putConnection: async () => {},
+      getConnection: async () => {
+        throw new Error('DynamoDB down');
+      },
+      deleteConnection: async () => {},
+    },
+  });
+
+  const response = await handler({
+    requestContext: { routeKey: '$default', connectionId: 'conn-001' },
+    body: JSON.stringify({ requestId: 'req-001', text: 'こんにちは' }),
+  });
+
+  assert.equal(response.statusCode, 500);
+});

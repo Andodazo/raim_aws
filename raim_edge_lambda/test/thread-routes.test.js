@@ -209,8 +209,8 @@ test('thread.delete succeeds even if the memory refresh request fails', async ()
   assert.equal(sent[0].memoryRefreshRequested, false);
 });
 
-test('thread.delete fails without reporting success if the memory cannot be cleared', async () => {
-  // 記憶を空にできないまま「消えました」と返さない。やり直せば記憶だけ空にし直せる
+test('thread.delete still succeeds when the memory refresh is requested even if clearing fails', async () => {
+  // 作り直しは残っているスレッドだけから行うので、消した内容は記憶から抜ける
   const { handler, sent, sqsSent } = setup({
     clearMemoryForDeletion: async () => {
       throw new Error('DynamoDB down');
@@ -219,9 +219,42 @@ test('thread.delete fails without reporting success if the memory cannot be clea
 
   const response = await handler(event({ type: 'thread.delete', threadId: 't1' }));
 
+  assert.equal(response.statusCode, 202);
+  assert.equal(sent[0].type, 'thread_deleted');
+  assert.equal(sent[0].memoryCleared, false);
+  assert.equal(sent[0].memoryRefreshRequested, true);
+  assert.equal(sqsSent.length, 1);
+});
+
+test('thread.delete fails when the memory can neither be cleared nor rebuilt', async () => {
+  const sent = [];
+  const postback = createWebSocketPostback({
+    client: {
+      send: async (command) => {
+        sent.push(JSON.parse(Buffer.from(command.input.Data).toString('utf8')));
+      },
+    },
+    env: ENV,
+  });
+
+  const handler = createWebSocketHandler({
+    connectionStore: { getConnection: async () => ({ sub: 'user-1' }) },
+    postback,
+    threadStore: { deleteThread: async () => true },
+    sessionStore: {
+      clearMemoryForDeletion: async () => {
+        throw new Error('DynamoDB down');
+      },
+    },
+    sqsClient: { send: async () => { throw new Error('SQS down'); } },
+    memoryQueueUrl: 'https://sqs.example/summary.fifo',
+  });
+
+  const response = await handler(event({ type: 'thread.delete', threadId: 't1' }));
+
+  // 消した内容が記憶に残ったままなので、成功とは返さない
   assert.equal(response.statusCode, 500);
   assert.equal(sent.length, 0);
-  assert.equal(sqsSent.length, 0);
 });
 
 test('memory refresh requests get a different deduplication id each time', async () => {
