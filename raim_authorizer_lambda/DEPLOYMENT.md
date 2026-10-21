@@ -95,10 +95,17 @@ wscat -c "wss://{api-id}.execute-api.ap-northeast-1.amazonaws.com/dev?access_tok
     "sub": "cognito-user-sub",
     "username": "user name if present",
     "email": "email if present",
-    "tokenUse": "access"
+    "tokenUse": "access",
+    "exp": 1700003600
   }
 }
 ```
+
+`exp` はトークンの期限（UNIX 秒）。Edge Lambda が `$connect` で接続テーブルに保存し、
+期限が切れた接続からの要求を断るのに使う（`TOKEN_EXPIRED`）。
+
+`ALLOW_QUERY_TOKEN` が `true` でないときは、トークンを `Authorization` ヘッダーからだけ読む
+（`identitySource` 配列の値も使わない）。
 
 Edge Lambdaは、`requestContext.authorizer.principalId` または `requestContext.authorizer.sub` から `sub` を取得します。
 

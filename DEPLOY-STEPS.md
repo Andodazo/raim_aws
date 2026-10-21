@@ -214,3 +214,23 @@ Core Lambda は `sub`（ユーザー識別子）ごとに、DynamoDB の
 | `Cannot find module '@aws-sdk/...'` | `node_modules` 未インストール | `npm.cmd install` |
 | ツールが動かない | `TOOL_API_KEY_SECRET_ARN` 未設定 | 環境変数を確認（未設定でも会話自体は動作） |
 | アシスタント口調のまま | 継続モードで人格が届いていない | `FOLLOWUP_PERSONA_MODE=full` を試す |
+
+## 補足: スレッド削除と記憶まわりの権限（2026-10）
+
+スレッドを消したときに記憶（userMemory）をすぐ空にし、古い記憶が書き戻されないようにした。
+次の権限が新しく要る。
+
+| Lambda | テーブル | 権限 | 用途 |
+|---|---|---|---|
+| Edge | `RAiM-UserSession-dev` | `dynamodb:UpdateItem` | 削除の完了を返す前に記憶を空にし、世代番号（`memoryGeneration`）を進める |
+| Summary | `RAiM-UserSession-dev` | `dynamodb:GetItem` | 記憶を作り始める前に世代番号を読む。無いと記憶の作り直しが毎回失敗し、記憶が空のままになる |
+
+あわせて、Edge の `execute-api:ManageConnections` に `DELETE/@connections/*` を足す
+（期限が切れた接続をこちらから切るため。詳しくは raim_edge_lambda/DEPLOYMENT.md）。
+
+展示用の掃除 Lambda（raim_demo_cleanup_lambda）は消した。AWS 上の関数と、
+それを毎分呼んでいる EventBridge のスケジュールも止めること。
+
+UserSession の項目を手で消すと世代番号も消える。そのとき作り直し中の処理が
+古い記憶を書き込むことがあるので、項目を消したあとは対象のユーザーで一度会話を消し直すか、
+記憶の作り直しを依頼し直す。
