@@ -39,6 +39,7 @@ MantleやTitanはEdge Lambdaでは呼びません。
 | `WEBSOCKET_API_ENDPOINT` | `https://DUMMY_WEBSOCKET_API_ID.execute-api.ap-northeast-1.amazonaws.com/dev` | ApiGatewayManagementApiのendpoint |
 | `CONNECTION_TTL_SECONDS` | `86400` | 接続情報をDynamoDB TTLで掃除するまでの秒数 |
 | `MAX_WEBSOCKET_MESSAGE_BYTES` | `30720` | WebSocketへ1回で送るJSONの最大サイズ |
+| `USER_SESSION_TABLE_NAME` | `RAiM-UserSession-dev` | スレッド削除時にユーザー記憶を空にするテーブル（省略時はこの名前） |
 
 `WEBSOCKET_API_ENDPOINT` は、WebSocket APIのInvoke URLです。
 
@@ -199,7 +200,10 @@ Edge Lambdaの実行ロールには最低限次が必要です。
       "Action": [
         "execute-api:ManageConnections"
       ],
-      "Resource": "arn:aws:execute-api:ap-northeast-1:990442281360:DUMMY_WEBSOCKET_API_ID/dev/POST/@connections/*"
+      "Resource": [
+        "arn:aws:execute-api:ap-northeast-1:990442281360:DUMMY_WEBSOCKET_API_ID/dev/POST/@connections/*",
+        "arn:aws:execute-api:ap-northeast-1:990442281360:DUMMY_WEBSOCKET_API_ID/dev/DELETE/@connections/*"
+      ]
     },
     {
       "Sid": "WriteCoreRequestQueue",
@@ -228,10 +232,23 @@ Edge Lambdaの実行ロールには最低限次が必要です。
         "dynamodb:DeleteItem"
       ],
       "Resource": "arn:aws:dynamodb:ap-northeast-1:990442281360:table/RAiM-WebSocketConnection-dev"
+    },
+    {
+      "Sid": "ClearUserMemoryOnThreadDelete",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:UpdateItem"
+      ],
+      "Resource": "arn:aws:dynamodb:ap-northeast-1:990442281360:table/RAiM-UserSession-dev"
     }
   ]
 }
 ```
+
+- `DELETE/@connections/*` は、アクセストークンの期限が切れた接続をこちらから切るために使う。
+  無くても期限切れの通知（`TOKEN_EXPIRED`）は届き、クライアントがつなぎ直す。
+- `RAiM-UserSession-dev` の `UpdateItem` は、スレッド削除の完了を返す前にユーザー記憶を空にするために使う。
+  無いとスレッド削除が失敗（`THREAD_DELETE_FAILED`）になる。
 
 ## `function.zip` に含めるもの
 
