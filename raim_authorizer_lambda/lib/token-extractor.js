@@ -77,9 +77,13 @@ function extractToken(event, { env = process.env } = {}) {
     }
   }
 
-  // 一部のAPI Gateway Authorizer設定では identitySource 由来の値が
-  // identitySource配列に入る。Authorizationヘッダーを指定した場合の保険。
-  if (Array.isArray(event?.identitySource)) {
+  // identitySource 配列の値は、クエリが許されているときだけ使う。
+  //
+  // identitySource にはクエリ文字列の値も入り得る（設定でクエリを指定した場合）。
+  // 以前は ALLOW_QUERY_TOKEN=false でもここから URL のトークンを受け取れてしまい、
+  // 「URL に資格情報を載せさせない」という設定の意味が無くなっていた。
+  // ヘッダーのトークンは上の event.headers で先に読んでいるので、ここで捨てても困らない。
+  if (isQueryTokenAllowed(env) && Array.isArray(event?.identitySource)) {
     for (const candidate of event.identitySource) {
       const token = stripBearer(candidate);
 
