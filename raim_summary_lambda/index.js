@@ -145,7 +145,16 @@ async function summarizeThread({ sub, threadId }, deps = {}) {
     return { ok: false, reason: 'empty_summary' };
   }
 
-  await (deps.saveThreadSummary || saveThreadSummary)(sub, threadId, summary);
+  try {
+    await (deps.saveThreadSummary || saveThreadSummary)(sub, threadId, summary);
+  } catch (error) {
+    if (error?.name === 'ThreadDeletedError') {
+      // 要約を作っている間にスレッドが消された。作り直さずに終える
+      console.log(`[Summary] thread deleted while summarizing: sub=${sub} threadId=${threadId}`);
+      return { ok: false, reason: 'thread_deleted' };
+    }
+    throw error;
+  }
 
   // 要約からタイトルを付け直す。
   //

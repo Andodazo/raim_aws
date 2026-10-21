@@ -479,3 +479,28 @@ test('refreshUserMemory does not write back when a thread was deleted meanwhile'
 
   assert.equal(updated, false);
 });
+
+// ── 要約中にスレッドが消された ───────────────────
+
+test('summarizeThread stops without recreating a thread deleted meanwhile', async () => {
+  let titleUpdated = false;
+  const result = await summarizeThread({ sub: 'u1', threadId: 't1' }, {
+    getThread: async () => ({
+      threadId: 't1',
+      messages: [
+        { role: 'user', text: 'こんにちは' },
+        { role: 'assistant', text: 'やあ' },
+      ],
+    }),
+    generateSummary: async () => ({ summary: '要約' }),
+    saveThreadSummary: async () => {
+      const error = new Error('deleted');
+      error.name = 'ThreadDeletedError';
+      throw error;
+    },
+    updateTitleFromSummary: async () => { titleUpdated = true; },
+  });
+
+  assert.deepEqual(result, { ok: false, reason: 'thread_deleted' });
+  assert.equal(titleUpdated, false);
+});
