@@ -71,3 +71,42 @@ test('extractToken rejects missing token', () => {
     TokenExtractorError
   );
 });
+
+test('identitySource values that came from the query string are rejected when query tokens are not allowed', () => {
+  const event = {
+    queryStringParameters: { access_token: 'jwt-from-url' },
+    identitySource: ['jwt-from-url'],
+  };
+
+  assert.throws(
+    () => extractToken(event, { env: { ALLOW_QUERY_TOKEN: 'false' } }),
+    /Authorization token is required/
+  );
+});
+
+test('identitySource values from the query string are accepted when query tokens are allowed', () => {
+  const event = {
+    queryStringParameters: { access_token: 'jwt-from-url' },
+    identitySource: ['jwt-from-url'],
+  };
+
+  assert.equal(extractToken(event, { env: { ALLOW_QUERY_TOKEN: 'true' } }), 'jwt-from-url');
+});
+
+test('identitySource is not used when query tokens are not allowed (headers are read directly)', () => {
+  // クエリを重ねて queryStringParameters と identitySource の値をずらしても通らない
+  const event = {
+    queryStringParameters: { access_token: 'b' },
+    identitySource: ['a'],
+  };
+  assert.throws(
+    () => extractToken(event, { env: {} }),
+    /Authorization token is required/
+  );
+
+  const withHeader = {
+    headers: { Authorization: 'Bearer jwt-from-header' },
+    identitySource: ['Bearer jwt-from-header'],
+  };
+  assert.equal(extractToken(withHeader, { env: {} }), 'jwt-from-header');
+});

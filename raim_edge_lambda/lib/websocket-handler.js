@@ -23,6 +23,8 @@ const { createRequestQueuePublisher } = require('./request-queue-publisher');
 const { normalizeWebSocketEvent, WebSocketEventError } = require('./websocket-event');
 const { createWebSocketPostback } = require('./websocket-postback');
 const threadListStore = require('./thread-list-store');
+const userSessionStore = require('./user-session-store');
+const crypto = require('crypto');
 const { SQSClient, SendMessageCommand } = require('@aws-sdk/client-sqs');
 const {
   createAcceptedResponse,
@@ -35,16 +37,22 @@ function createWebSocketHandler({
   requestPublisher,
   postback,
   threadStore,
+  sessionStore,
   sqsClient,
   memoryQueueUrl,
+  now = () => Date.now(),
 } = {}) {
-  const getConnectionStore = () => connectionStore || createConnectionStore();
+  // 接続テーブルは $default のたびに読むので、作ったものを使い回す
+  let cachedConnectionStore = null;
+  const getConnectionStore = () =>
+    connectionStore || (cachedConnectionStore ||= createConnectionStore());
   const getRequestPublisher = () => requestPublisher || createRequestQueuePublisher();
 
   // スレッド一覧・履歴は SQS を経由せず、Edge が DynamoDB を直接読んで
   // WebSocket へ書き戻す。そのため postback と thread store が必要。
   const getPostback = () => postback || createWebSocketPostback();
   const getThreadListStore = () => threadStore || threadListStore;
+  const getUserSessionStore = () => sessionStore || userSessionStore;
 
   // スレッド削除後にユーザー記憶の再生成を依頼するために使う
   let cachedSqs = null;
@@ -62,6 +70,8 @@ function createWebSocketHandler({
       sub: normalized.sub,
       domainName: normalized.domainName,
       stage: normalized.stage,
+      // 接続に使ったアクセストークンの期限（秒）。$default で毎回確かめる
+      tokenExpiresAt: normalized.tokenExpiresAt,
     });
 
     return createOkResponse({
@@ -177,12 +187,17 @@ function createWebSocketHandler({
    *
    * userMemory は各スレッドの要約を集約したものなので、スレッドだけ消すと
    * 「消したのにライムが覚えている」状態になる。
-   * そのため削除後に Summary Lambda へ再生成を依頼する。
-   * 再生成は残っているスレッドの要約だけから作り直すので、
-   * 消したスレッドの内容は記憶からも消える。
+   * そのため、削除の完了を返す前に userMemory を空にする（世代番号も進める）。
+   * 残っているスレッドからの記憶の作り直しは Summary Lambda へ依頼する。
    *
-   * 再生成の依頼に失敗しても削除自体は成功扱いにする。
-   * 週次バッチでも userMemory は作り直されるため、最悪そこで回収される。
+   * 順番は「スレッドを消す → 記憶を空にする → 作り直しを依頼」。
+   * 記憶を先に空にすると、その直後に始まった作り直しが、まだ消えていない
+   * スレッドを読んで、世代番号も新しいまま古い内容を書き込めてしまう。
+   *
+   * 記憶を空にできなくても、作り直しを依頼できれば消したスレッドの内容は
+   * 記憶から抜ける（残っているスレッドだけから作り直すため）。どちらも
+   * できなかったときだけ失敗を返す。スレッドは消えているので、やり直すと
+   * 削除はそのまま通り、記憶だけ空にし直せる。
    */
   async function handleThreadDelete(sub, normalized) {
     if (!normalized.threadId) {
@@ -195,7 +210,16 @@ function createWebSocketHandler({
     try {
       await getThreadListStore().deleteThread(sub, normalized.threadId);
 
-      // 記憶の作り直しを依頼する（失敗しても削除は成立させる）
+      // 消した会話の内容が記憶に残らないよう、完了を返す前に空にする
+      let memoryCleared = false;
+      try {
+        await getUserSessionStore().clearMemoryForDeletion(sub);
+        memoryCleared = true;
+      } catch (error) {
+        console.error(`[ThreadDelete] could not clear userMemory: ${error.message}`);
+      }
+
+      // 残っているスレッドから記憶を作り直してもらう
       let memoryRefreshRequested = false;
       try {
         memoryRefreshRequested = await requestMemoryRefresh(sub);
@@ -203,10 +227,20 @@ function createWebSocketHandler({
         console.warn(`[ThreadDelete] memory refresh request failed: ${error.message}`);
       }
 
+      if (!memoryCleared && !memoryRefreshRequested) {
+        // 消した会話の内容が記憶に残ったままになるので、成功とは返さない
+        return createHttpResponse(500, {
+          code: 'THREAD_DELETE_FAILED',
+          message: 'The thread was deleted but its memory could not be cleared',
+        });
+      }
+
       await getPostback().postJson(normalized.connectionId, {
         type: 'thread_deleted',
         requestId: normalized.requestId,
         threadId: normalized.threadId,
+        // 記憶をもう空にしたか（false でも作り直しの依頼は出ている）
+        memoryCleared,
         memoryRefreshRequested,
       });
 
@@ -227,7 +261,9 @@ function createWebSocketHandler({
   /**
    * Summary Lambda へユーザー記憶の再生成を依頼する。
    *
-   * キューが未設定なら何もしない（週次バッチに任せる）。
+   * キューが未設定なら何もしない。
+   * （週次バッチが作り直すのは、その週に要約されたスレッドがある人だけなので、
+   *  キューは必ず設定しておくこと）
    */
   async function requestMemoryRefresh(sub) {
     const queueUrl = String(
@@ -254,7 +290,12 @@ function createWebSocketHandler({
         // 以前は `memory-refresh:${sub}` 固定だったため、5分以内に
         // 2つ目のスレッドを削除すると2回目の依頼が重複排除で捨てられ、
         // 消したはずの内容が userMemory に残っていた。
-        MessageDeduplicationId: `memory-refresh:${sub}:${Date.now()}`,
+        // 時刻だけだと同じミリ秒の削除が重なったときに同じ値になるので、乱数も足す。
+        // （128文字の上限があるので sub はハッシュにする）
+        MessageDeduplicationId: crypto
+          .createHash('sha256')
+          .update(`memory-refresh:${sub}:${crypto.randomUUID()}`)
+          .digest('hex'),
       })
     );
 
@@ -268,9 +309,27 @@ function createWebSocketHandler({
     // WebSocket APIでは、認証情報が `$connect` には存在しても、
     // 後続の `$default` イベントに毎回含まれるとは限らない。
     // そのため `$connect` 時に保存した接続テーブルからsubを補完する。
-    if (!sub) {
-      const connection = await getConnectionStore().getConnection?.(normalized.connectionId);
-      sub = String(connection?.sub || '').trim();
+    // トークンの期限も、Authorizer の context に無ければ接続テーブルから読む。
+    let tokenExpiresAt = Number(normalized.tokenExpiresAt || 0);
+    if (!sub || !tokenExpiresAt) {
+      let connection = null;
+      try {
+        connection = await getConnectionStore().getConnection?.(normalized.connectionId);
+      } catch (error) {
+        console.error(`[Connection] lookup failed: ${error.message}`);
+        if (!sub) {
+          return createHttpResponse(500, {
+            code: 'CONNECTION_LOOKUP_FAILED',
+            message: 'Failed to look up the connection',
+          });
+        }
+      }
+      if (!sub) {
+        sub = String(connection?.sub || '').trim();
+      }
+      if (!tokenExpiresAt) {
+        tokenExpiresAt = Number(connection?.tokenExpiresAt || 0);
+      }
     }
 
     if (!sub) {
@@ -278,6 +337,16 @@ function createWebSocketHandler({
         code: 'UNAUTHORIZED',
         message: 'Cognito sub is required',
       });
+    }
+
+    // 接続したときのトークンの期限が切れていたら受け付けない。
+    //
+    // API Gateway の認証は接続するとき（$connect）にしか走らない。
+    // 以前は一度つながると、トークンが切れても接続が続く限り（最大2時間）使えた。
+    // クライアントには理由を送ってから切断する。クライアントは新しいトークンでつなぎ直す。
+    // 期限を持っていない古い接続は、これまでどおり通す。
+    if (tokenExpiresAt > 0 && now() / 1000 >= tokenExpiresAt) {
+      return rejectExpiredToken(normalized);
     }
 
     // ─────────────────────────────────────────────
@@ -324,6 +393,35 @@ function createWebSocketHandler({
     return createAcceptedResponse({
       type: 'accepted',
       requestId: request.requestId,
+    });
+  }
+
+  /**
+   * トークンの期限切れを伝えて、接続を切る。
+   */
+  async function rejectExpiredToken(normalized) {
+    const postback = getPostback();
+
+    try {
+      await postback.postJson(normalized.connectionId, {
+        type: 'error',
+        code: 'TOKEN_EXPIRED',
+        requestId: normalized.requestId,
+        message: 'Access token has expired. Please reconnect.',
+      });
+    } catch (error) {
+      console.warn(`[Auth] could not notify token expiry: ${error.message}`);
+    }
+
+    try {
+      await postback.disconnect?.(normalized.connectionId);
+    } catch (error) {
+      console.warn(`[Auth] could not close expired connection: ${error.message}`);
+    }
+
+    return createHttpResponse(401, {
+      code: 'TOKEN_EXPIRED',
+      message: 'Access token has expired',
     });
   }
 

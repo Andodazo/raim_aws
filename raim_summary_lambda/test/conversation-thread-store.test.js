@@ -121,3 +121,22 @@ test('resetThreadSession clears lastResponseId', async () => {
   assert.ok(input.UpdateExpression.includes('lastResponseId = :empty'));
   assert.equal(input.ExpressionAttributeValues[':empty'], '');
 });
+
+test('saveThreadSummary does not recreate a deleted thread', async () => {
+  const { saveThreadSummary, ThreadDeletedError } = require('../lib/conversation-thread-store');
+  const commands = [];
+  const docClient = {
+    send: async (command) => {
+      commands.push(command.input);
+      const error = new Error('The conditional request failed');
+      error.name = 'ConditionalCheckFailedException';
+      throw error;
+    },
+  };
+
+  await assert.rejects(
+    saveThreadSummary('u1', 't1', '要約', {}, { docClient }),
+    ThreadDeletedError
+  );
+  assert.equal(commands[0].ConditionExpression, 'attribute_exists(threadId)');
+});

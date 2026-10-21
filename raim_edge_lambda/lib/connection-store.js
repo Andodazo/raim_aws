@@ -25,7 +25,7 @@ function createConnectionStore({ client, env = process.env } = {}) {
     new DynamoDBClient({ region: config.awsRegion })
   );
 
-  async function putConnection({ connectionId, sub, domainName, stage }) {
+  async function putConnection({ connectionId, sub, domainName, stage, tokenExpiresAt }) {
     const now = new Date().toISOString();
     const expiresAt = Math.floor(Date.now() / 1000) + config.connectionTtlSeconds;
 
@@ -39,6 +39,8 @@ function createConnectionStore({ client, env = process.env } = {}) {
         connectedAt: now,
         updatedAt: now,
         expiresAt,
+        // 接続に使ったアクセストークンの期限（秒）。分からなければ入れない
+        ...(tokenExpiresAt > 0 ? { tokenExpiresAt } : {}),
       },
     }));
   }

@@ -341,15 +341,28 @@ async function appendTurn(
   values[':tokens'] = Number(inputTokens) || 0;
   values[':one'] = 1;
 
-  const result = await client.send(
-    new UpdateCommand({
-      TableName: deps.tableName || TABLE_NAME,
-      Key: { sub, threadId },
-      UpdateExpression: updateExpression,
-      ExpressionAttributeValues: values,
-      ReturnValues: 'ALL_NEW',
-    })
-  );
+  let result;
+  try {
+    result = await client.send(
+      new UpdateCommand({
+        TableName: deps.tableName || TABLE_NAME,
+        Key: { sub, threadId },
+        UpdateExpression: updateExpression,
+        // 返事を作っている間にスレッドが消されていたら書かない。
+        // UpdateItem は項目が無いと新しく作るので、条件が無いと消したスレッドが
+        // 今回の1往復だけで復活していた（スレッドは resolveThread が先に作っている）。
+        ConditionExpression: 'attribute_exists(threadId)',
+        ExpressionAttributeValues: values,
+        ReturnValues: 'ALL_NEW',
+      })
+    );
+  } catch (error) {
+    if (error?.name === 'ConditionalCheckFailedException') {
+      console.log(`[Thread] skipped append to a deleted thread: sub=${sub} threadId=${threadId}`);
+      return null;
+    }
+    throw error;
+  }
 
   const attributes = result.Attributes || {};
 
@@ -403,18 +416,26 @@ async function trimMessages(sub, threadId, messages, deps = {}) {
 
   const trimmed = picked.reverse();
 
-  const result = await client.send(
-    new UpdateCommand({
-      TableName: deps.tableName || TABLE_NAME,
-      Key: { sub, threadId },
-      UpdateExpression: 'SET messages = :messages, trimmedAt = :now',
-      ExpressionAttributeValues: {
-        ':messages': trimmed,
-        ':now': nowIso(deps),
-      },
-      ReturnValues: 'ALL_NEW',
-    })
-  );
+  let result;
+  try {
+    result = await client.send(
+      new UpdateCommand({
+        TableName: deps.tableName || TABLE_NAME,
+        Key: { sub, threadId },
+        UpdateExpression: 'SET messages = :messages, trimmedAt = :now',
+        // 消されたスレッドを作り直さない
+        ConditionExpression: 'attribute_exists(threadId)',
+        ExpressionAttributeValues: {
+          ':messages': trimmed,
+          ':now': nowIso(deps),
+        },
+        ReturnValues: 'ALL_NEW',
+      })
+    );
+  } catch (error) {
+    if (error?.name === 'ConditionalCheckFailedException') return null;
+    throw error;
+  }
 
   console.log(
     `[Thread] trimmed messages: sub=${sub} threadId=${threadId} ${messages.length} -> ${trimmed.length}`
@@ -436,22 +457,29 @@ async function updateThreadTitle(sub, threadId, title, source = 'user', deps = {
 
   const client = deps.docClient || getDocClient();
 
-  const result = await client.send(
-    new UpdateCommand({
-      TableName: deps.tableName || TABLE_NAME,
-      Key: { sub, threadId },
-      // 明示的なタイトル更新は 'user' 扱いにし、要約による自動差し替えを止める。
-      UpdateExpression: 'SET title = :title, titleSource = :source, updatedAt = :now',
-      ExpressionAttributeValues: {
-        ':title': String(title).slice(0, 100),
-        ':source': String(source || 'user'),
-        ':now': nowIso(deps),
-      },
-      ReturnValues: 'ALL_NEW',
-    })
-  );
+  try {
+    const result = await client.send(
+      new UpdateCommand({
+        TableName: deps.tableName || TABLE_NAME,
+        Key: { sub, threadId },
+        // 明示的なタイトル更新は 'user' 扱いにし、要約による自動差し替えを止める。
+        UpdateExpression: 'SET title = :title, titleSource = :source, updatedAt = :now',
+        // 消されたスレッドを作り直さない
+        ConditionExpression: 'attribute_exists(threadId)',
+        ExpressionAttributeValues: {
+          ':title': String(title).slice(0, 100),
+          ':source': String(source || 'user'),
+          ':now': nowIso(deps),
+        },
+        ReturnValues: 'ALL_NEW',
+      })
+    );
 
-  return result.Attributes;
+    return result.Attributes;
+  } catch (error) {
+    if (error?.name === 'ConditionalCheckFailedException') return null;
+    throw error;
+  }
 }
 
 /**

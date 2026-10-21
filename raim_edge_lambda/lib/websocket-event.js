@@ -53,6 +53,22 @@ const MAX_TEXT_LENGTH = Number(process.env.MAX_TEXT_LENGTH || 4000);
 // 1回の送信で受け付ける画像の枚数。
 const MAX_IMAGE_COUNT = Number(process.env.MAX_IMAGE_COUNT || 4);
 
+/**
+ * 接続に使ったアクセストークンの期限（UNIX 秒）。
+ *
+ * Authorizer が context に入れた exp を読む。無ければ 0（期限を確かめない）。
+ */
+function extractTokenExpiresAt(event) {
+  const authorizer = event?.requestContext?.authorizer || {};
+  const exp = Number(
+    authorizer?.exp ??
+    authorizer?.claims?.exp ??
+    authorizer?.jwt?.claims?.exp ??
+    0
+  );
+  return Number.isFinite(exp) && exp > 0 ? Math.floor(exp) : 0;
+}
+
 function createRequestId(context, payload) {
   const provided = String(payload.requestId || '').trim();
 
@@ -206,6 +222,7 @@ function normalizeWebSocketEvent(event, lambdaContext = {}) {
 
   const payload = parseJsonBody(event.body);
   const sub = extractSub(event);
+  const tokenExpiresAt = extractTokenExpiresAt(event);
   const requestId = createRequestId(lambdaContext, payload);
 
   // $connect時点ではAPI GatewayのCognito Authorizerが通っている想定。
@@ -244,6 +261,7 @@ function normalizeWebSocketEvent(event, lambdaContext = {}) {
     domainName,
     stage,
     sub,
+    tokenExpiresAt,
     requestId,
     action,
     text,
@@ -270,4 +288,5 @@ module.exports = {
   normalizeWebSocketEvent,
   parseJsonBody,
   extractSub,
+  extractTokenExpiresAt,
 };

@@ -71,10 +71,52 @@ async function getUserMemory(sub, deps = {}) {
 }
 
 /**
+ * 記憶の世代番号を読む。まだ無ければ null。
+ *
+ * スレッドを削除するたびに Edge が1つ進める（同時に記憶を空にする）。
+ * 記憶を作り始める前にこれを読んでおき、保存するときに変わっていないか確かめる。
+ * 削除の直後に読むことがあるので、強い整合性で読む。
+ */
+async function getMemoryGeneration(sub, deps = {}) {
+  if (!sub) {
+    throw new Error('sub is required');
+  }
+
+  const client = deps.docClient || getDocClient();
+
+  const result = await client.send(
+    new GetCommand({
+      TableName: deps.tableName || TABLE_NAME,
+      Key: { sub },
+      ProjectionExpression: 'memoryGeneration',
+      ConsistentRead: true,
+    })
+  );
+
+  const value = result.Item?.memoryGeneration;
+  return value === undefined || value === null ? null : Number(value);
+}
+
+/**
+ * 保存しようとしたら、作り始めてから記憶の世代が変わっていた（間にスレッドが消された）。
+ */
+class MemoryGenerationChangedError extends Error {
+  constructor() {
+    super('userMemory generation changed while it was being rebuilt');
+    this.name = 'MemoryGenerationChangedError';
+  }
+}
+
+/**
  * ユーザー記憶を保存する。
  *
  * UserSession の項目自体は Core Lambda が作成済みの想定だが、
  * 週次バッチが先に走る可能性もあるため UpdateCommand で upsert する。
+ *
+ * deps.expectedGeneration を渡すと、世代番号がその値のままのときだけ保存する
+ * （null は「まだ番号が無い」）。作っている間にスレッドが消されていたら
+ * MemoryGenerationChangedError を投げる。消した会話の内容を含む古い記憶を、
+ * 削除のあとで書き戻さないため。
  *
  * @param {string} sub
  * @param {string} memory 整形済みの記憶テキスト
@@ -92,24 +134,42 @@ async function updateUserMemory(sub, memory, deps = {}) {
   const client = deps.docClient || getDocClient();
   const now = (deps.now ? deps.now() : new Date()).toISOString();
 
-  const result = await client.send(
-    new UpdateCommand({
-      TableName: deps.tableName || TABLE_NAME,
-      Key: { sub },
-      UpdateExpression: [
-        'SET userMemory = :memory',
-        'userMemoryUpdatedAt = :now',
-        'updatedAt = :now',
-      ].join(', '),
-      ExpressionAttributeValues: {
-        ':memory': String(memory).trim(),
-        ':now': now,
-      },
-      ReturnValues: 'ALL_NEW',
-    })
-  );
+  const values = {
+    ':memory': String(memory).trim(),
+    ':now': now,
+  };
 
-  return result.Attributes;
+  let condition;
+  if (deps.expectedGeneration === null) {
+    condition = 'attribute_not_exists(memoryGeneration)';
+  } else if (deps.expectedGeneration !== undefined) {
+    condition = 'memoryGeneration = :generation';
+    values[':generation'] = Number(deps.expectedGeneration);
+  }
+
+  try {
+    const result = await client.send(
+      new UpdateCommand({
+        TableName: deps.tableName || TABLE_NAME,
+        Key: { sub },
+        UpdateExpression: [
+          'SET userMemory = :memory',
+          'userMemoryUpdatedAt = :now',
+          'updatedAt = :now',
+        ].join(', '),
+        ...(condition ? { ConditionExpression: condition } : {}),
+        ExpressionAttributeValues: values,
+        ReturnValues: 'ALL_NEW',
+      })
+    );
+
+    return result.Attributes;
+  } catch (error) {
+    if (error?.name === 'ConditionalCheckFailedException') {
+      throw new MemoryGenerationChangedError();
+    }
+    throw error;
+  }
 }
 
 /**
@@ -148,6 +208,8 @@ async function clearUserMemory(sub, deps = {}) {
 
 module.exports = {
   TABLE_NAME,
+  MemoryGenerationChangedError,
+  getMemoryGeneration,
   getUserMemory,
   updateUserMemory,
   clearUserMemory,

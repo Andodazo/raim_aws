@@ -39,6 +39,9 @@ MantleやTitanはEdge Lambdaでは呼びません。
 | `WEBSOCKET_API_ENDPOINT` | `https://DUMMY_WEBSOCKET_API_ID.execute-api.ap-northeast-1.amazonaws.com/dev` | ApiGatewayManagementApiのendpoint |
 | `CONNECTION_TTL_SECONDS` | `86400` | 接続情報をDynamoDB TTLで掃除するまでの秒数 |
 | `MAX_WEBSOCKET_MESSAGE_BYTES` | `30720` | WebSocketへ1回で送るJSONの最大サイズ |
+| `USER_SESSION_TABLE_NAME` | `RAiM-UserSession-dev` | スレッド削除時にユーザー記憶を空にするテーブル（省略時はこの名前） |
+| `CONVERSATION_THREAD_TABLE_NAME` | `RAiM-ConversationThread-dev` | スレッド一覧・履歴・削除で読むテーブル（省略時はこの名前） |
+| `SUMMARY_REQUEST_QUEUE_URL` | Core Lambda と同じ値 | スレッド削除後に記憶の作り直しを依頼するキュー。未設定だと作り直されない |
 
 `WEBSOCKET_API_ENDPOINT` は、WebSocket APIのInvoke URLです。
 
@@ -199,7 +202,10 @@ Edge Lambdaの実行ロールには最低限次が必要です。
       "Action": [
         "execute-api:ManageConnections"
       ],
-      "Resource": "arn:aws:execute-api:ap-northeast-1:990442281360:DUMMY_WEBSOCKET_API_ID/dev/POST/@connections/*"
+      "Resource": [
+        "arn:aws:execute-api:ap-northeast-1:990442281360:DUMMY_WEBSOCKET_API_ID/dev/POST/@connections/*",
+        "arn:aws:execute-api:ap-northeast-1:990442281360:DUMMY_WEBSOCKET_API_ID/dev/DELETE/@connections/*"
+      ]
     },
     {
       "Sid": "WriteCoreRequestQueue",
@@ -228,10 +234,43 @@ Edge Lambdaの実行ロールには最低限次が必要です。
         "dynamodb:DeleteItem"
       ],
       "Resource": "arn:aws:dynamodb:ap-northeast-1:990442281360:table/RAiM-WebSocketConnection-dev"
+    },
+    {
+      "Sid": "ReadAndDeleteThreads",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:Query",
+        "dynamodb:GetItem",
+        "dynamodb:DeleteItem"
+      ],
+      "Resource": "arn:aws:dynamodb:ap-northeast-1:990442281360:table/RAiM-ConversationThread-dev"
+    },
+    {
+      "Sid": "RequestMemoryRefresh",
+      "Effect": "Allow",
+      "Action": [
+        "sqs:SendMessage"
+      ],
+      "Resource": "arn:aws:sqs:ap-northeast-1:990442281360:<Core の SUMMARY_REQUEST_QUEUE_URL と同じキュー名>"
+    },
+    {
+      "Sid": "ClearUserMemoryOnThreadDelete",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:UpdateItem"
+      ],
+      "Resource": "arn:aws:dynamodb:ap-northeast-1:990442281360:table/RAiM-UserSession-dev"
     }
   ]
 }
 ```
+
+- `DELETE/@connections/*` は、アクセストークンの期限が切れた接続をこちらから切るために使う。
+  無くても期限切れの通知（`TOKEN_EXPIRED`）は届き、クライアントがつなぎ直す。
+- `RAiM-UserSession-dev` の `UpdateItem` は、スレッド削除の完了を返す前にユーザー記憶を空にするために使う。
+  無くても作り直しの依頼が出せれば削除は成功するが、それまで記憶が残る。
+- ConversationThread とキューの権限は以前から必要だったもの（この文書に書かれていなかった）。
+  キューの名前は Core Lambda の `SUMMARY_REQUEST_QUEUE_URL` と同じものにする。
 
 ## `function.zip` に含めるもの
 

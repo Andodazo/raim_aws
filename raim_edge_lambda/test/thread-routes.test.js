@@ -20,9 +20,10 @@ const ENV = {
 /// テストが通ってしまう。実際に postJson の呼び出し方を間違えて
 /// `postToConnection is not a function` を本番で踏んだため、
 /// ここでは本物を通す。
-function setup({ listThreads, getThreadHistory, deleteThread } = {}) {
+function setup({ listThreads, getThreadHistory, deleteThread, clearMemoryForDeletion } = {}) {
   const sent = [];
   const sqsSent = [];
+  const cleared = [];
 
   const postback = createWebSocketPostback({
     client: {
@@ -41,6 +42,12 @@ function setup({ listThreads, getThreadHistory, deleteThread } = {}) {
       getThreadHistory: getThreadHistory || (async () => null),
       deleteThread: deleteThread || (async () => true),
     },
+    sessionStore: {
+      clearMemoryForDeletion: clearMemoryForDeletion || (async (sub) => {
+        cleared.push(sub);
+        return 1;
+      }),
+    },
     sqsClient: {
       send: async (command) => {
         sqsSent.push(JSON.parse(command.input.MessageBody));
@@ -49,7 +56,7 @@ function setup({ listThreads, getThreadHistory, deleteThread } = {}) {
     memoryQueueUrl: 'https://sqs.example/summary.fifo',
   });
 
-  return { handler, sent, sqsSent };
+  return { handler, sent, sqsSent, cleared };
 }
 
 function event(body) {
@@ -140,7 +147,7 @@ test('a message without type is still treated as a chat request', async () => {
 
 test('thread.delete removes the thread and asks for a memory refresh', async () => {
   const deleted = [];
-  const { handler, sent, sqsSent } = setup({
+  const { handler, sent, sqsSent, cleared } = setup({
     deleteThread: async (sub, threadId) => {
       deleted.push({ sub, threadId });
       return true;
@@ -155,6 +162,10 @@ test('thread.delete removes the thread and asks for a memory refresh', async () 
   assert.equal(sent[0].type, 'thread_deleted');
   assert.equal(sent[0].threadId, 't1');
   assert.equal(sent[0].memoryRefreshRequested, true);
+
+  // 完了を返す前に記憶を空にしている
+  assert.deepEqual(cleared, ['user-1']);
+  assert.equal(sent[0].memoryCleared, true);
 
   // userMemory には削除したスレッドの内容が残るため、作り直しを依頼する
   assert.equal(sqsSent.length, 1);
@@ -185,6 +196,7 @@ test('thread.delete succeeds even if the memory refresh request fails', async ()
     connectionStore: { getConnection: async () => ({ sub: 'user-1' }) },
     postback,
     threadStore: { deleteThread: async () => true },
+    sessionStore: { clearMemoryForDeletion: async () => 1 },
     // SQS が落ちても削除自体は成立させる（週次バッチで回収される）
     sqsClient: { send: async () => { throw new Error('SQS down'); } },
     memoryQueueUrl: 'https://sqs.example/summary.fifo',
@@ -195,6 +207,79 @@ test('thread.delete succeeds even if the memory refresh request fails', async ()
   assert.equal(response.statusCode, 202);
   assert.equal(sent[0].type, 'thread_deleted');
   assert.equal(sent[0].memoryRefreshRequested, false);
+});
+
+test('thread.delete still succeeds when the memory refresh is requested even if clearing fails', async () => {
+  // 作り直しは残っているスレッドだけから行うので、消した内容は記憶から抜ける
+  const { handler, sent, sqsSent } = setup({
+    clearMemoryForDeletion: async () => {
+      throw new Error('DynamoDB down');
+    },
+  });
+
+  const response = await handler(event({ type: 'thread.delete', threadId: 't1' }));
+
+  assert.equal(response.statusCode, 202);
+  assert.equal(sent[0].type, 'thread_deleted');
+  assert.equal(sent[0].memoryCleared, false);
+  assert.equal(sent[0].memoryRefreshRequested, true);
+  assert.equal(sqsSent.length, 1);
+});
+
+test('thread.delete fails when the memory can neither be cleared nor rebuilt', async () => {
+  const sent = [];
+  const postback = createWebSocketPostback({
+    client: {
+      send: async (command) => {
+        sent.push(JSON.parse(Buffer.from(command.input.Data).toString('utf8')));
+      },
+    },
+    env: ENV,
+  });
+
+  const handler = createWebSocketHandler({
+    connectionStore: { getConnection: async () => ({ sub: 'user-1' }) },
+    postback,
+    threadStore: { deleteThread: async () => true },
+    sessionStore: {
+      clearMemoryForDeletion: async () => {
+        throw new Error('DynamoDB down');
+      },
+    },
+    sqsClient: { send: async () => { throw new Error('SQS down'); } },
+    memoryQueueUrl: 'https://sqs.example/summary.fifo',
+  });
+
+  const response = await handler(event({ type: 'thread.delete', threadId: 't1' }));
+
+  // 消した内容が記憶に残ったままなので、成功とは返さない
+  assert.equal(response.statusCode, 500);
+  assert.equal(sent.length, 0);
+});
+
+test('memory refresh requests get a different deduplication id each time', async () => {
+  const ids = [];
+  const handler = createWebSocketHandler({
+    connectionStore: { getConnection: async () => ({ sub: 'user-1' }) },
+    postback: { postJson: async () => ({ ok: true }) },
+    threadStore: { deleteThread: async () => true },
+    sessionStore: { clearMemoryForDeletion: async () => 1 },
+    sqsClient: {
+      send: async (command) => {
+        ids.push(command.input.MessageDeduplicationId);
+      },
+    },
+    memoryQueueUrl: 'https://sqs.example/summary.fifo',
+    // 同じミリ秒に2回削除しても重ならないこと
+    now: () => 1700000000000,
+  });
+
+  await handler(event({ type: 'thread.delete', threadId: 't1' }));
+  await handler(event({ type: 'thread.delete', threadId: 't2' }));
+
+  assert.equal(ids.length, 2);
+  assert.notEqual(ids[0], ids[1]);
+  assert.ok(ids.every((id) => id.length <= 128));
 });
 
 test('thread.history passes beforeIndex through to the store', async () => {

@@ -695,32 +695,36 @@ function createCoreChatService(dependencyOverrides = {}) {
         responseCreatedAt: mantleResponse.createdAt,
       });
 
-      // 「新しい会話」が並ばないよう、最初の発話からタイトルを付ける。
-      if (threadContext.isNew) {
-        await dependencies.ensureThreadTitle({
-          sub: input.sub,
-          threadId: threadContext.threadId,
-          thread: threadContext.thread,
-          userText: input.text,
-        });
-      }
+      // 返事を作っている間にスレッドが消されていたら（appendTurn が null）、
+      // タイトルや要約で作り直さないよう、ここで終える
+      if (updatedThread) {
+        // 「新しい会話」が並ばないよう、最初の発話からタイトルを付ける。
+        if (threadContext.isNew) {
+          await dependencies.ensureThreadTitle({
+            sub: input.sub,
+            threadId: threadContext.threadId,
+            thread: threadContext.thread,
+            userText: input.text,
+          });
+        }
 
-      // 8. 履歴が溜まっていれば要約を依頼する。
-      //
-      // appendTurn は更新後のスレッド（ALL_NEW）を返すので、
-      // 累積トークンと往復数はここで最新値を見られる。
-      //
-      // 実際の要約は Summary Lambda が別プロセスで行う。ここで待つと
-      // その往復だけ Mantle 呼び出しが2回になりレイテンシが倍近くなるため、
-      // 依頼を投げるだけにする。
-      const trigger = dependencies.shouldSummarize(updatedThread);
+        // 8. 履歴が溜まっていれば要約を依頼する。
+        //
+        // appendTurn は更新後のスレッド（ALL_NEW）を返すので、
+        // 累積トークンと往復数はここで最新値を見られる。
+        //
+        // 実際の要約は Summary Lambda が別プロセスで行う。ここで待つと
+        // その往復だけ Mantle 呼び出しが2回になりレイテンシが倍近くなるため、
+        // 依頼を投げるだけにする。
+        const trigger = dependencies.shouldSummarize(updatedThread);
 
-      if (trigger.shouldSummarize) {
-        await dependencies.dispatchSummarization({
-          sub: input.sub,
-          threadId: threadContext.threadId,
-          reason: trigger.reason,
-        });
+        if (trigger.shouldSummarize) {
+          await dependencies.dispatchSummarization({
+            sub: input.sub,
+            threadId: threadContext.threadId,
+            reason: trigger.reason,
+          });
+        }
       }
     } catch (error) {
       console.error(`[Thread] append failed (non-fatal): ${error.message}`);

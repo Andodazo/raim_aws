@@ -286,3 +286,28 @@ test('appendTurn tracks two separate token counters', async () => {
   assert.ok(expr.includes('ADD turnCount :one'));
   assert.equal(client.calls[0].ExpressionAttributeValues[':tokens'], 1500);
 });
+
+test('appendTurn does not recreate a thread deleted while replying', async () => {
+  const commands = [];
+  const docClient = {
+    send: async (command) => {
+      commands.push(command.input);
+      const error = new Error('The conditional request failed');
+      error.name = 'ConditionalCheckFailedException';
+      throw error;
+    },
+  };
+
+  const result = await appendTurn(
+    {
+      sub: 'u1',
+      threadId: 't1',
+      userMessage: { text: 'こんにちは' },
+      assistantMessage: { text: 'やあ' },
+    },
+    { docClient }
+  );
+
+  assert.equal(result, null);
+  assert.equal(commands[0].ConditionExpression, 'attribute_exists(threadId)');
+});

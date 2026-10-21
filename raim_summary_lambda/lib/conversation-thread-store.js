@@ -83,6 +83,7 @@ async function getThread(sub, threadId, deps = {}) {
  * @param {string} sub
  * @param {Object} [options]
  * @param {boolean} [options.includeMessages] true なら messages も取得（既定 false）
+ * @param {boolean} [options.consistentRead] true なら強い整合性で読む（削除の直後に読むとき）
  */
 async function listThreads(sub, options = {}, deps = {}) {
   if (!sub) {
@@ -98,6 +99,12 @@ async function listThreads(sub, options = {}, deps = {}) {
     ExpressionAttributeNames: { '#sub': 'sub' },
     ExpressionAttributeValues: { ':sub': sub },
   };
+
+  // DynamoDB の既定の読み取りは、直前の書き込み・削除がまだ反映されていないことがある。
+  // 記憶の作り直しは削除の直後に走るので、消したスレッドの要約を拾わないよう強く読む。
+  if (options.consistentRead) {
+    params.ConsistentRead = true;
+  }
 
   // 一覧表示や集約では messages（最も重い属性）が不要なことが多い。
   // 取得サイズを抑えるため既定では除外する。
@@ -217,17 +224,38 @@ async function saveThreadSummary(sub, threadId, summary, options = {}, deps = {}
     values[':zero'] = 0;
   }
 
-  const result = await client.send(
-    new UpdateCommand({
-      TableName: deps.tableName || TABLE_NAME,
-      Key: { sub, threadId },
-      UpdateExpression: `SET ${setParts.join(', ')}`,
-      ExpressionAttributeValues: values,
-      ReturnValues: 'ALL_NEW',
-    })
-  );
+  try {
+    const result = await client.send(
+      new UpdateCommand({
+        TableName: deps.tableName || TABLE_NAME,
+        Key: { sub, threadId },
+        UpdateExpression: `SET ${setParts.join(', ')}`,
+        // 要約を作っている間にスレッドが消されていたら書かない。
+        // UpdateItem は項目が無いと新しく作るので、条件が無いと消したスレッドが
+        // 要約付きで復活し、その要約から記憶も作り直されていた。
+        ConditionExpression: 'attribute_exists(threadId)',
+        ExpressionAttributeValues: values,
+        ReturnValues: 'ALL_NEW',
+      })
+    );
 
-  return result.Attributes;
+    return result.Attributes;
+  } catch (error) {
+    if (error?.name === 'ConditionalCheckFailedException') {
+      throw new ThreadDeletedError(threadId);
+    }
+    throw error;
+  }
+}
+
+/**
+ * 書こうとしたスレッドがもう無い（処理している間に消された）。
+ */
+class ThreadDeletedError extends Error {
+  constructor(threadId) {
+    super(`thread was deleted: ${threadId}`);
+    this.name = 'ThreadDeletedError';
+  }
 }
 
 /**
@@ -245,24 +273,31 @@ async function resetThreadSession(sub, threadId, deps = {}) {
   const client = deps.docClient || getDocClient();
   const now = (deps.now ? deps.now() : new Date()).toISOString();
 
-  const result = await client.send(
-    new UpdateCommand({
-      TableName: deps.tableName || TABLE_NAME,
-      Key: { sub, threadId },
-      UpdateExpression: [
-        'SET lastResponseId = :empty',
-        'lastResponseCreatedAt = :empty',
-        // 鎖を切ったので Mantle 側の文脈もゼロから積み直しになる
-        'sessionInputTokens = :zero',
-        'summarizedAtInputTokens = :zero',
-        'updatedAt = :now',
-      ].join(', '),
-      ExpressionAttributeValues: { ':empty': '', ':zero': 0, ':now': now },
-      ReturnValues: 'ALL_NEW',
-    })
-  );
+  try {
+    const result = await client.send(
+      new UpdateCommand({
+        TableName: deps.tableName || TABLE_NAME,
+        Key: { sub, threadId },
+        UpdateExpression: [
+          'SET lastResponseId = :empty',
+          'lastResponseCreatedAt = :empty',
+          // 鎖を切ったので Mantle 側の文脈もゼロから積み直しになる
+          'sessionInputTokens = :zero',
+          'summarizedAtInputTokens = :zero',
+          'updatedAt = :now',
+        ].join(', '),
+        // 消されたスレッドを作り直さない
+        ConditionExpression: 'attribute_exists(threadId)',
+        ExpressionAttributeValues: { ':empty': '', ':zero': 0, ':now': now },
+        ReturnValues: 'ALL_NEW',
+      })
+    );
 
-  return result.Attributes;
+    return result.Attributes;
+  } catch (error) {
+    if (error?.name === 'ConditionalCheckFailedException') return null;
+    throw error;
+  }
 }
 
 // ─────────────────────────────────────────────
@@ -384,8 +419,10 @@ async function updateTitleFromSummary(sub, threadId, summary, deps = {}) {
         UpdateExpression: 'SET title = :title, titleSource = :source, updatedAt = :now',
         // ユーザーが手で付けたタイトルは上書きしない。
         // titleSource が未設定の古いスレッドは対象に含める。
+        // 消されたスレッドは作り直さない。
         ConditionExpression:
-          'attribute_not_exists(titleSource) OR titleSource <> :user',
+          'attribute_exists(threadId) AND ' +
+          '(attribute_not_exists(titleSource) OR titleSource <> :user)',
         ExpressionAttributeValues: {
           ':title': title,
           ':source': 'summary',
@@ -413,6 +450,7 @@ async function updateTitleFromSummary(sub, threadId, summary, deps = {}) {
 }
 
 module.exports = {
+  ThreadDeletedError,
   TABLE_NAME,
   getThread,
   listThreads,

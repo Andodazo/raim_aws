@@ -30,6 +30,7 @@ raim_edge_lambda/
 │   ├── connection-store.js           ← WebSocket connectionIdをDynamoDBへ保存/取得/削除する
 │   ├── request-queue-publisher.js    ← ユーザー入力をCore Lambda用Request Queueへ送る
 │   ├── response-queue-handler.js     ← Core Response QueueイベントをWebSocketへ中継する
+│   ├── user-session-store.js         ← スレッド削除時にユーザー記憶を空にし、世代番号を進める
 │   ├── websocket-event.js            ← API Gateway WebSocketイベントを正規化する
 │   ├── websocket-handler.js          ← $connect/$disconnect/$default routeを処理する
 │   ├── websocket-postback.js         ← ApiGatewayManagementApiでconnectionIdへpostする
