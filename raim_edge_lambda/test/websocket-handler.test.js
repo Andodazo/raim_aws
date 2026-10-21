@@ -239,3 +239,106 @@ test('$default は声を消しているとき speech: false を Core へ渡す',
 
   assert.equal(published[0].speech, false);
 });
+
+// ── 接続中のトークン期限 ─────────────────────
+
+test('$connect stores the access token expiry from the authorizer', async () => {
+  const stored = [];
+  const handler = createWebSocketHandler({
+    connectionStore: {
+      putConnection: async (item) => stored.push(item),
+      getConnection: async () => null,
+      deleteConnection: async () => {},
+    },
+  });
+
+  await handler({
+    requestContext: {
+      routeKey: '$connect',
+      connectionId: 'conn-001',
+      // Lambda Authorizer の context は文字列で届くこともある
+      authorizer: { sub: 'user-001', exp: '1700003600' },
+    },
+  });
+
+  assert.equal(stored[0].tokenExpiresAt, 1700003600);
+});
+
+function expiryHandler({ tokenExpiresAt, nowMs }) {
+  const posted = [];
+  const disconnected = [];
+  const published = [];
+
+  const handler = createWebSocketHandler({
+    connectionStore: {
+      putConnection: async () => {},
+      getConnection: async () => ({ sub: 'user-001', tokenExpiresAt }),
+      deleteConnection: async () => {},
+    },
+    requestPublisher: {
+      publishChatRequest: async (message) => {
+        published.push(message);
+        return message;
+      },
+    },
+    postback: {
+      postJson: async (connectionId, payload) => {
+        posted.push(payload);
+        return { ok: true };
+      },
+      disconnect: async (connectionId) => {
+        disconnected.push(connectionId);
+        return { ok: true };
+      },
+    },
+    now: () => nowMs,
+  });
+
+  const send = () => handler({
+    requestContext: { routeKey: '$default', connectionId: 'conn-001' },
+    body: JSON.stringify({ requestId: 'req-001', text: 'こんにちは' }),
+  });
+
+  return { send, posted, disconnected, published };
+}
+
+test('$default rejects and disconnects when the access token has expired', async () => {
+  const { send, posted, disconnected, published } = expiryHandler({
+    tokenExpiresAt: 1700000000,
+    nowMs: 1700000001 * 1000,
+  });
+
+  const response = await send();
+
+  assert.equal(response.statusCode, 401);
+  assert.equal(published.length, 0);
+  assert.equal(posted[0].type, 'error');
+  assert.equal(posted[0].code, 'TOKEN_EXPIRED');
+  assert.equal(posted[0].requestId, 'req-001');
+  assert.deepEqual(disconnected, ['conn-001']);
+});
+
+test('$default accepts while the access token is still valid', async () => {
+  const { send, posted, published } = expiryHandler({
+    tokenExpiresAt: 1700000000,
+    nowMs: 1699999999 * 1000,
+  });
+
+  const response = await send();
+
+  assert.equal(response.statusCode, 202);
+  assert.equal(published.length, 1);
+  assert.equal(posted.length, 0);
+});
+
+test('$default accepts old connections that have no stored expiry', async () => {
+  const { send, published } = expiryHandler({
+    tokenExpiresAt: undefined,
+    nowMs: 1800000000 * 1000,
+  });
+
+  const response = await send();
+
+  assert.equal(response.statusCode, 202);
+  assert.equal(published.length, 1);
+});

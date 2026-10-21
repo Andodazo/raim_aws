@@ -37,6 +37,8 @@ function createAllowPolicy({ sub, methodArn, claims = {} }) {
       username: String(claims.username || claims['cognito:username'] || ''),
       email: String(claims.email || ''),
       tokenUse: String(claims.token_use || ''),
+      // トークンの期限（UNIX 秒）。Edge が接続に保存し、期限切れの接続を切るのに使う
+      exp: Number(claims.exp) || 0,
     },
   });
 }

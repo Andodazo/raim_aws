@@ -16,6 +16,7 @@
 const {
   ApiGatewayManagementApiClient,
   PostToConnectionCommand,
+  DeleteConnectionCommand,
 } = require('@aws-sdk/client-apigatewaymanagementapi');
 const { getEdgeConfig } = require('./config');
 
@@ -83,8 +84,26 @@ function createWebSocketPostback({ client, env = process.env } = {}) {
     }
   }
 
+  /**
+   * 接続をこちらから切る。もう切れていれば何もしない。
+   */
+  async function disconnect(connectionId) {
+    try {
+      await apiClient.send(new DeleteConnectionCommand({
+        ConnectionId: connectionId,
+      }));
+      return { ok: true };
+    } catch (error) {
+      if (createGoneErrorDetector(error)) {
+        return { ok: false, gone: true };
+      }
+      throw error;
+    }
+  }
+
   return {
     postJson,
+    disconnect,
   };
 }
 

@@ -40,6 +40,7 @@ function createWebSocketHandler({
   sessionStore,
   sqsClient,
   memoryQueueUrl,
+  now = () => Date.now(),
 } = {}) {
   const getConnectionStore = () => connectionStore || createConnectionStore();
   const getRequestPublisher = () => requestPublisher || createRequestQueuePublisher();
@@ -66,6 +67,8 @@ function createWebSocketHandler({
       sub: normalized.sub,
       domainName: normalized.domainName,
       stage: normalized.stage,
+      // 接続に使ったアクセストークンの期限（秒）。$default で毎回確かめる
+      tokenExpiresAt: normalized.tokenExpiresAt,
     });
 
     return createOkResponse({
@@ -282,8 +285,9 @@ function createWebSocketHandler({
     // WebSocket APIでは、認証情報が `$connect` には存在しても、
     // 後続の `$default` イベントに毎回含まれるとは限らない。
     // そのため `$connect` 時に保存した接続テーブルからsubを補完する。
+    // トークンの期限も接続テーブルにあるので、毎回読む。
+    const connection = await getConnectionStore().getConnection?.(normalized.connectionId);
     if (!sub) {
-      const connection = await getConnectionStore().getConnection?.(normalized.connectionId);
       sub = String(connection?.sub || '').trim();
     }
 
@@ -292,6 +296,17 @@ function createWebSocketHandler({
         code: 'UNAUTHORIZED',
         message: 'Cognito sub is required',
       });
+    }
+
+    // 接続したときのトークンの期限が切れていたら受け付けない。
+    //
+    // API Gateway の認証は接続するとき（$connect）にしか走らない。
+    // 以前は一度つながると、トークンが切れても接続が続く限り（最大2時間）使えた。
+    // クライアントには理由を送ってから切断する。クライアントは新しいトークンでつなぎ直す。
+    // 期限を持っていない古い接続は、これまでどおり通す。
+    const tokenExpiresAt = Number(connection?.tokenExpiresAt || 0);
+    if (tokenExpiresAt > 0 && now() / 1000 >= tokenExpiresAt) {
+      return rejectExpiredToken(normalized);
     }
 
     // ─────────────────────────────────────────────
@@ -338,6 +353,35 @@ function createWebSocketHandler({
     return createAcceptedResponse({
       type: 'accepted',
       requestId: request.requestId,
+    });
+  }
+
+  /**
+   * トークンの期限切れを伝えて、接続を切る。
+   */
+  async function rejectExpiredToken(normalized) {
+    const postback = getPostback();
+
+    try {
+      await postback.postJson(normalized.connectionId, {
+        type: 'error',
+        code: 'TOKEN_EXPIRED',
+        requestId: normalized.requestId,
+        message: 'Access token has expired. Please reconnect.',
+      });
+    } catch (error) {
+      console.warn(`[Auth] could not notify token expiry: ${error.message}`);
+    }
+
+    try {
+      await postback.disconnect?.(normalized.connectionId);
+    } catch (error) {
+      console.warn(`[Auth] could not close expired connection: ${error.message}`);
+    }
+
+    return createHttpResponse(401, {
+      code: 'TOKEN_EXPIRED',
+      message: 'Access token has expired',
     });
   }
 

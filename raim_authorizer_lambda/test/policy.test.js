@@ -35,3 +35,13 @@ test('createDenyPolicy returns deny response', () => {
   assert.equal(policy.policyDocument.Statement[0].Effect, 'Deny');
   assert.equal(policy.context.reason, 'Unauthorized');
 });
+
+test('allow policy passes the token expiry to the context', () => {
+  const policy = createAllowPolicy({
+    sub: 'user-1',
+    methodArn: 'arn:aws:execute-api:x',
+    claims: { exp: 1700003600 },
+  });
+
+  assert.equal(policy.context.exp, 1700003600);
+});
