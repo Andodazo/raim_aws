@@ -83,6 +83,7 @@ async function getThread(sub, threadId, deps = {}) {
  * @param {string} sub
  * @param {Object} [options]
  * @param {boolean} [options.includeMessages] true なら messages も取得（既定 false）
+ * @param {boolean} [options.consistentRead] true なら強い整合性で読む（削除の直後に読むとき）
  */
 async function listThreads(sub, options = {}, deps = {}) {
   if (!sub) {
@@ -98,6 +99,12 @@ async function listThreads(sub, options = {}, deps = {}) {
     ExpressionAttributeNames: { '#sub': 'sub' },
     ExpressionAttributeValues: { ':sub': sub },
   };
+
+  // DynamoDB の既定の読み取りは、直前の書き込み・削除がまだ反映されていないことがある。
+  // 記憶の作り直しは削除の直後に走るので、消したスレッドの要約を拾わないよう強く読む。
+  if (options.consistentRead) {
+    params.ConsistentRead = true;
+  }
 
   // 一覧表示や集約では messages（最も重い属性）が不要なことが多い。
   // 取得サイズを抑えるため既定では除外する。

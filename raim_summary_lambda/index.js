@@ -38,7 +38,12 @@ const {
   toSummaryHistory,
   updateTitleFromSummary,
 } = require('./lib/conversation-thread-store');
-const { updateUserMemory, clearUserMemory } = require('./lib/user-memory-store');
+const {
+  MemoryGenerationChangedError,
+  getMemoryGeneration,
+  updateUserMemory,
+  clearUserMemory,
+} = require('./lib/user-memory-store');
 
 // ─────────────────────────────────────────────
 // 設定
@@ -311,9 +316,16 @@ async function handleScheduledEvent(event, deps = {}) {
 async function refreshUserMemory(sub, deps = {}) {
   const env = deps.env || process.env;
 
+  // 作り始める時点の記憶の世代。保存するときに変わっていたら（間にスレッドが
+  // 消されていたら）保存しない。消した会話を含む古い記憶を書き戻さないため。
+  // スレッドを読むより先に読む。
+  const generation = await (deps.getMemoryGeneration || getMemoryGeneration)(sub);
+
   // messages は不要（各スレッドの要約だけ集める）。
+  // 削除の直後に呼ばれるので、消したスレッドを拾わないよう強い整合性で読む。
   const threads = await (deps.listThreads || listThreads)(sub, {
     includeMessages: false,
+    consistentRead: true,
   });
 
   const summaries = threads
@@ -344,7 +356,20 @@ async function refreshUserMemory(sub, deps = {}) {
     return false;
   }
 
-  await (deps.updateUserMemory || updateUserMemory)(sub, summary);
+  try {
+    await (deps.updateUserMemory || updateUserMemory)(sub, summary, {
+      expectedGeneration: generation,
+    });
+  } catch (error) {
+    if (error instanceof MemoryGenerationChangedError ||
+        error?.name === 'MemoryGenerationChangedError') {
+      // 作っている間にスレッドが消された。削除のときに出た作り直しの依頼が、
+      // 新しい状態から作り直すので、ここでは保存しない
+      console.log(`[Summary] userMemory skipped: sub=${sub} (a thread was deleted meanwhile)`);
+      return false;
+    }
+    throw error;
+  }
 
   console.log(
     `[Summary] userMemory updated: sub=${sub} threads=${summaries.length} chars=${summary.length}`

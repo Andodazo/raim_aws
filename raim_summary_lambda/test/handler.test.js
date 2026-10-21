@@ -251,6 +251,7 @@ test('handleScheduledEvent summarizes idle threads and updates user memory', asy
       generateSummary: async () => ({ summary: '【事実】\n- あり' }),
       saveThreadSummary: async () => {},
       resetThreadSession: async () => {},
+      getMemoryGeneration: async () => null,
       listThreads: async () => [{ threadId: 't1', title: 'A', sessionSummary: '【事実】\n- あり' }],
       updateUserMemory: async (sub, m) => { memories.push({ sub, m }); },
     }
@@ -297,6 +298,7 @@ test('handleScheduledEvent continues after a single thread failure', async () =>
       generateSummary: async () => ({ summary: 'ok' }),
       saveThreadSummary: async () => {},
       resetThreadSession: async () => {},
+      getMemoryGeneration: async () => null,
       listThreads: async () => [{ threadId: 'good', sessionSummary: 'ok' }],
       updateUserMemory: async () => {},
     }
@@ -312,6 +314,7 @@ test('refreshUserMemory aggregates thread summaries', async () => {
 
   const updated = await refreshUserMemory('u1', {
     env: ENV,
+    getMemoryGeneration: async () => null,
     listThreads: async () => [
       { threadId: 't1', title: 'AWSの相談', sessionSummary: '【事実】\n- 移行中' },
       { threadId: 't2', title: '雑談', sessionSummary: '【事実】\n- タピオカ好き' },
@@ -350,6 +353,7 @@ test('memory.refresh rebuilds user memory without needing a threadId', async () 
     {
       env: ENV,
       // 削除後に残っているスレッドの要約だけを集める
+      getMemoryGeneration: async () => null,
       listThreads: async () => [
         { threadId: 't2', title: '残った会話', sessionSummary: '【事実】\n- 残っている' },
       ],
@@ -379,6 +383,7 @@ test('memory.refresh is retried when it fails', async () => {
     },
     {
       env: ENV,
+      getMemoryGeneration: async () => null,
       listThreads: async () => { throw new Error('DynamoDB down'); },
     }
   );
@@ -408,6 +413,7 @@ test('refreshUserMemory clears the memory when every thread is deleted', async (
   // 「会話を全部消したのにライムが覚えている」状態になる
   const updated = await refreshUserMemory('u1', {
     env: ENV,
+    getMemoryGeneration: async () => null,
     listThreads: async () => [],
     clearUserMemory: async (sub) => { cleared.push(sub); },
     updateUserMemory: async () => { updateCalled = true; },
@@ -426,6 +432,7 @@ test('refreshUserMemory clears the memory when threads have no summary yet', asy
   // 集約する材料が無いので記憶は空にする
   const updated = await refreshUserMemory('u1', {
     env: ENV,
+    getMemoryGeneration: async () => null,
     listThreads: async () => [
       { threadId: 't1', title: '新しい会話', sessionSummary: '' },
     ],
@@ -435,4 +442,40 @@ test('refreshUserMemory clears the memory when threads have no summary yet', asy
 
   assert.equal(updated, true);
   assert.deepEqual(cleared, ['u1']);
+});
+
+// ── 記憶の世代番号 ─────────────────────────────
+
+test('refreshUserMemory saves only if the memory generation is unchanged', async () => {
+  const saved = [];
+  const updated = await refreshUserMemory('u1', {
+    getMemoryGeneration: async () => 3,
+    listThreads: async (sub, options) => {
+      // 削除の直後に読むので強い整合性で読む
+      assert.equal(options.consistentRead, true);
+      return [{ threadId: 't1', title: 'A', sessionSummary: '要約' }];
+    },
+    generateSummary: async () => ({ summary: '記憶' }),
+    updateUserMemory: async (sub, memory, options) => {
+      saved.push({ sub, memory, options });
+    },
+  });
+
+  assert.equal(updated, true);
+  assert.deepEqual(saved, [{ sub: 'u1', memory: '記憶', options: { expectedGeneration: 3 } }]);
+});
+
+test('refreshUserMemory does not write back when a thread was deleted meanwhile', async () => {
+  const updated = await refreshUserMemory('u1', {
+    getMemoryGeneration: async () => 3,
+    listThreads: async () => [{ threadId: 't1', title: 'A', sessionSummary: '要約' }],
+    generateSummary: async () => ({ summary: '古い記憶' }),
+    updateUserMemory: async () => {
+      const error = new Error('changed');
+      error.name = 'MemoryGenerationChangedError';
+      throw error;
+    },
+  });
+
+  assert.equal(updated, false);
 });

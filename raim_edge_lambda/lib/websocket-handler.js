@@ -23,6 +23,8 @@ const { createRequestQueuePublisher } = require('./request-queue-publisher');
 const { normalizeWebSocketEvent, WebSocketEventError } = require('./websocket-event');
 const { createWebSocketPostback } = require('./websocket-postback');
 const threadListStore = require('./thread-list-store');
+const userSessionStore = require('./user-session-store');
+const crypto = require('crypto');
 const { SQSClient, SendMessageCommand } = require('@aws-sdk/client-sqs');
 const {
   createAcceptedResponse,
@@ -35,6 +37,7 @@ function createWebSocketHandler({
   requestPublisher,
   postback,
   threadStore,
+  sessionStore,
   sqsClient,
   memoryQueueUrl,
 } = {}) {
@@ -45,6 +48,7 @@ function createWebSocketHandler({
   // WebSocket へ書き戻す。そのため postback と thread store が必要。
   const getPostback = () => postback || createWebSocketPostback();
   const getThreadListStore = () => threadStore || threadListStore;
+  const getUserSessionStore = () => sessionStore || userSessionStore;
 
   // スレッド削除後にユーザー記憶の再生成を依頼するために使う
   let cachedSqs = null;
@@ -177,12 +181,12 @@ function createWebSocketHandler({
    *
    * userMemory は各スレッドの要約を集約したものなので、スレッドだけ消すと
    * 「消したのにライムが覚えている」状態になる。
-   * そのため削除後に Summary Lambda へ再生成を依頼する。
-   * 再生成は残っているスレッドの要約だけから作り直すので、
-   * 消したスレッドの内容は記憶からも消える。
+   * そのため、削除の完了を返す前に userMemory を空にする（世代番号も進める）。
+   * 空にできなかったときは失敗を返す。クライアントがやり直せば、
+   * スレッドはもう無いので削除はそのまま通り、記憶だけ空にし直せる。
    *
-   * 再生成の依頼に失敗しても削除自体は成功扱いにする。
-   * 週次バッチでも userMemory は作り直されるため、最悪そこで回収される。
+   * 残っているスレッドからの記憶の作り直しは Summary Lambda へ依頼する。
+   * こちらは失敗しても削除自体は成功扱いにする（記憶は空のまま。週次バッチで作り直される）。
    */
   async function handleThreadDelete(sub, normalized) {
     if (!normalized.threadId) {
@@ -194,6 +198,9 @@ function createWebSocketHandler({
 
     try {
       await getThreadListStore().deleteThread(sub, normalized.threadId);
+
+      // 消した会話の内容が記憶に残らないよう、完了を返す前に空にする
+      await getUserSessionStore().clearMemoryForDeletion(sub);
 
       // 記憶の作り直しを依頼する（失敗しても削除は成立させる）
       let memoryRefreshRequested = false;
@@ -207,6 +214,8 @@ function createWebSocketHandler({
         type: 'thread_deleted',
         requestId: normalized.requestId,
         threadId: normalized.threadId,
+        // 記憶はもう空になっている（作り直しは非同期）
+        memoryCleared: true,
         memoryRefreshRequested,
       });
 
@@ -254,7 +263,12 @@ function createWebSocketHandler({
         // 以前は `memory-refresh:${sub}` 固定だったため、5分以内に
         // 2つ目のスレッドを削除すると2回目の依頼が重複排除で捨てられ、
         // 消したはずの内容が userMemory に残っていた。
-        MessageDeduplicationId: `memory-refresh:${sub}:${Date.now()}`,
+        // 時刻だけだと同じミリ秒の削除が重なったときに同じ値になるので、乱数も足す。
+        // （128文字の上限があるので sub はハッシュにする）
+        MessageDeduplicationId: crypto
+          .createHash('sha256')
+          .update(`memory-refresh:${sub}:${crypto.randomUUID()}`)
+          .digest('hex'),
       })
     );
 
