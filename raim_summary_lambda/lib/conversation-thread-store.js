@@ -71,7 +71,11 @@ async function getThread(sub, threadId, deps = {}) {
     })
   );
 
-  return result.Item || null;
+  // 消したスレッドの墓標（Edge が残す）は、スレッドとして扱わない
+  if (!result.Item || result.Item.deletedAt) {
+    return null;
+  }
+  return result.Item;
 }
 
 /**
@@ -98,6 +102,8 @@ async function listThreads(sub, options = {}, deps = {}) {
     KeyConditionExpression: '#sub = :sub',
     ExpressionAttributeNames: { '#sub': 'sub' },
     ExpressionAttributeValues: { ':sub': sub },
+    // 消したスレッドの墓標は、記憶の作り直しにも一覧にも使わない
+    FilterExpression: 'attribute_not_exists(deletedAt)',
   };
 
   // DynamoDB の既定の読み取りは、直前の書き込み・削除がまだ反映されていないことがある。
@@ -233,7 +239,7 @@ async function saveThreadSummary(sub, threadId, summary, options = {}, deps = {}
         // 要約を作っている間にスレッドが消されていたら書かない。
         // UpdateItem は項目が無いと新しく作るので、条件が無いと消したスレッドが
         // 要約付きで復活し、その要約から記憶も作り直されていた。
-        ConditionExpression: 'attribute_exists(threadId)',
+        ConditionExpression: 'attribute_exists(threadId) AND attribute_not_exists(deletedAt)',
         ExpressionAttributeValues: values,
         ReturnValues: 'ALL_NEW',
       })
@@ -287,7 +293,7 @@ async function resetThreadSession(sub, threadId, deps = {}) {
           'updatedAt = :now',
         ].join(', '),
         // 消されたスレッドを作り直さない
-        ConditionExpression: 'attribute_exists(threadId)',
+        ConditionExpression: 'attribute_exists(threadId) AND attribute_not_exists(deletedAt)',
         ExpressionAttributeValues: { ':empty': '', ':zero': 0, ':now': now },
         ReturnValues: 'ALL_NEW',
       })
@@ -421,7 +427,7 @@ async function updateTitleFromSummary(sub, threadId, summary, deps = {}) {
         // titleSource が未設定の古いスレッドは対象に含める。
         // 消されたスレッドは作り直さない。
         ConditionExpression:
-          'attribute_exists(threadId) AND ' +
+          'attribute_exists(threadId) AND attribute_not_exists(deletedAt) AND ' +
           '(attribute_not_exists(titleSource) OR titleSource <> :user)',
         ExpressionAttributeValues: {
           ':title': title,

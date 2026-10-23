@@ -103,6 +103,28 @@ async function getThread(sub, threadId, deps = {}) {
 }
 
 /**
+ * 消したスレッドの墓標か（Edge の deleteThread が残す。キーと deletedAt だけの項目）。
+ */
+function isDeletedThread(item) {
+  return Boolean(item && item.deletedAt);
+}
+
+/**
+ * 消したスレッドに書こうとしたときのエラー。
+ *
+ * 再試行しても結果は変わらないので retriable は false。
+ */
+class ThreadDeletedError extends Error {
+  constructor(threadId) {
+    super('Conversation thread was deleted');
+    this.name = 'ThreadDeletedError';
+    this.code = 'THREAD_DELETED';
+    this.retriable = false;
+    this.threadId = threadId;
+  }
+}
+
+/**
  * スレッドが無ければ作る。あればそのまま返す。
  *
  * if_not_exists を使うことで、同時に複数リクエストが来ても
@@ -116,39 +138,49 @@ async function ensureThread({ sub, threadId, title }, deps = {}) {
   const client = deps.docClient || getDocClient();
   const now = nowIso(deps);
 
-  const result = await client.send(
-    new UpdateCommand({
-      TableName: deps.tableName || TABLE_NAME,
-      Key: { sub, threadId },
-      UpdateExpression: [
-        'SET createdAt = if_not_exists(createdAt, :now)',
-        'title = if_not_exists(title, :title)',
-        // タイトルの出所。'message' は最初の発話から自動生成したもので、
-        // 要約が生成されたら Summary Lambda が 'summary' へ差し替える。
-        // ユーザーが手で付けた場合は 'user' になり、以後上書きされない。
-        'titleSource = if_not_exists(titleSource, :titleSource)',
-        'messages = if_not_exists(messages, :emptyList)',
-        'sessionSummary = if_not_exists(sessionSummary, :empty)',
-        'lastResponseId = if_not_exists(lastResponseId, :empty)',
-        'lastResponseCreatedAt = if_not_exists(lastResponseCreatedAt, :empty)',
-        'cumulativeInputTokens = if_not_exists(cumulativeInputTokens, :zero)',
-        // Mantle のセッションを開始してからの累積。
-        // 要約ではリセットされず、鎖を切ったときだけ 0 に戻る。
-        'sessionInputTokens = if_not_exists(sessionInputTokens, :zero)',
-        'turnCount = if_not_exists(turnCount, :zero)',
-        'updatedAt = :now',
-      ].join(', '),
-      ExpressionAttributeValues: {
-        ':now': now,
-        ':title': title || '新しい会話',
-        ':titleSource': 'message',
-        ':emptyList': [],
-        ':empty': '',
-        ':zero': 0,
-      },
-      ReturnValues: 'ALL_NEW',
-    })
-  );
+  let result;
+  try {
+    result = await client.send(
+      new UpdateCommand({
+        TableName: deps.tableName || TABLE_NAME,
+        Key: { sub, threadId },
+        // 消したスレッド（墓標）は作り直さない（R-02）
+        ConditionExpression: 'attribute_not_exists(deletedAt)',
+        UpdateExpression: [
+          'SET createdAt = if_not_exists(createdAt, :now)',
+          'title = if_not_exists(title, :title)',
+          // タイトルの出所。'message' は最初の発話から自動生成したもので、
+          // 要約が生成されたら Summary Lambda が 'summary' へ差し替える。
+          // ユーザーが手で付けた場合は 'user' になり、以後上書きされない。
+          'titleSource = if_not_exists(titleSource, :titleSource)',
+          'messages = if_not_exists(messages, :emptyList)',
+          'sessionSummary = if_not_exists(sessionSummary, :empty)',
+          'lastResponseId = if_not_exists(lastResponseId, :empty)',
+          'lastResponseCreatedAt = if_not_exists(lastResponseCreatedAt, :empty)',
+          'cumulativeInputTokens = if_not_exists(cumulativeInputTokens, :zero)',
+          // Mantle のセッションを開始してからの累積。
+          // 要約ではリセットされず、鎖を切ったときだけ 0 に戻る。
+          'sessionInputTokens = if_not_exists(sessionInputTokens, :zero)',
+          'turnCount = if_not_exists(turnCount, :zero)',
+          'updatedAt = :now',
+        ].join(', '),
+        ExpressionAttributeValues: {
+          ':now': now,
+          ':title': title || '新しい会話',
+          ':titleSource': 'message',
+          ':emptyList': [],
+          ':empty': '',
+          ':zero': 0,
+        },
+        ReturnValues: 'ALL_NEW',
+      })
+    );
+  } catch (error) {
+    if (error?.name === 'ConditionalCheckFailedException') {
+      throw new ThreadDeletedError(threadId);
+    }
+    throw error;
+  }
 
   return result.Attributes;
 }
@@ -171,6 +203,8 @@ async function listThreads(sub, options = {}, deps = {}) {
     KeyConditionExpression: '#sub = :sub',
     ExpressionAttributeNames: { '#sub': 'sub' },
     ExpressionAttributeValues: { ':sub': sub },
+    // 消したスレッドの墓標は一覧に出さない
+    FilterExpression: 'attribute_not_exists(deletedAt)',
   };
 
   if (!options.includeMessages) {
@@ -351,7 +385,7 @@ async function appendTurn(
         // 返事を作っている間にスレッドが消されていたら書かない。
         // UpdateItem は項目が無いと新しく作るので、条件が無いと消したスレッドが
         // 今回の1往復だけで復活していた（スレッドは resolveThread が先に作っている）。
-        ConditionExpression: 'attribute_exists(threadId)',
+        ConditionExpression: 'attribute_exists(threadId) AND attribute_not_exists(deletedAt)',
         ExpressionAttributeValues: values,
         ReturnValues: 'ALL_NEW',
       })
@@ -424,7 +458,7 @@ async function trimMessages(sub, threadId, messages, deps = {}) {
         Key: { sub, threadId },
         UpdateExpression: 'SET messages = :messages, trimmedAt = :now',
         // 消されたスレッドを作り直さない
-        ConditionExpression: 'attribute_exists(threadId)',
+        ConditionExpression: 'attribute_exists(threadId) AND attribute_not_exists(deletedAt)',
         ExpressionAttributeValues: {
           ':messages': trimmed,
           ':now': nowIso(deps),
@@ -465,7 +499,7 @@ async function updateThreadTitle(sub, threadId, title, source = 'user', deps = {
         // 明示的なタイトル更新は 'user' 扱いにし、要約による自動差し替えを止める。
         UpdateExpression: 'SET title = :title, titleSource = :source, updatedAt = :now',
         // 消されたスレッドを作り直さない
-        ConditionExpression: 'attribute_exists(threadId)',
+        ConditionExpression: 'attribute_exists(threadId) AND attribute_not_exists(deletedAt)',
         ExpressionAttributeValues: {
           ':title': String(title).slice(0, 100),
           ':source': String(source || 'user'),
@@ -498,6 +532,8 @@ function deriveTitle(text) {
 }
 
 module.exports = {
+  ThreadDeletedError,
+  isDeletedThread,
   TABLE_NAME,
   MAX_MESSAGES,
   MAX_MESSAGE_BYTES,

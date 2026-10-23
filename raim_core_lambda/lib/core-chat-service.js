@@ -286,11 +286,28 @@ function createCoreChatService(dependencyOverrides = {}) {
     // クライアント指定 > UserSession の activeThreadId > 新規作成、の優先順位。
     // スレッド側にも lastResponseId を持たせるため、Mantle の継続判定は
     // スレッドの状態を優先する。
-    const threadContext = await dependencies.resolveThread({
-      sub: input.sub,
-      requestedThreadId: input.threadId,
-      userText: input.text,
-    });
+    let threadContext;
+    try {
+      threadContext = await dependencies.resolveThread({
+        sub: input.sub,
+        requestedThreadId: input.threadId,
+        userText: input.text,
+      });
+    } catch (error) {
+      // 消したスレッドへの発言。再試行しても同じなので、やり直さないエラーで返す。
+      // アプリはこれを見て、新しい会話に切り替える。
+      if (error?.code !== 'THREAD_DELETED') {
+        throw error;
+      }
+
+      return createCoreError({
+        requestId: input.requestId,
+        code: 'THREAD_DELETED',
+        message: 'Conversation thread was deleted',
+        retriable: false,
+        details: { threadId: input.threadId },
+      });
+    }
 
     // 継続判定はスレッド単位で行う。
     // 別スレッドへ切り替えたときに前スレッドの response_id を使い回さないため。

@@ -3,7 +3,12 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { listThreads, getThreadHistory } = require('../lib/thread-list-store');
+const {
+  listThreads,
+  getThreadHistory,
+  deleteThread,
+  THREAD_TOMBSTONE_DAYS,
+} = require('../lib/thread-list-store');
 
 function fakeClient(responder) {
   const calls = [];
@@ -224,4 +229,33 @@ test('getThreadHistory treats a zero cursor as the beginning', async () => {
 
   assert.deepEqual(result.messages, []);
   assert.equal(result.hasMore, false);
+});
+
+// ── 墓標（R-02） ─────────────────────────────
+
+test('deleteThread は項目を、キーと削除時刻だけの墓標に置き換える', async () => {
+  const client = fakeClient();
+  const now = Date.parse('2026-10-23T00:00:00.000Z');
+
+  await deleteThread('u', 't1', { docClient: client, now: () => now });
+
+  assert.deepEqual(client.calls[0].Item, {
+    sub: 'u',
+    threadId: 't1',
+    deletedAt: '2026-10-23T00:00:00.000Z',
+    expiresAt: Math.floor(now / 1000) + THREAD_TOMBSTONE_DAYS * 24 * 60 * 60,
+  });
+});
+
+test('listThreads は墓標を一覧に出さない', async () => {
+  const client = fakeClient(() => ({ Items: [] }));
+  await listThreads('u', { docClient: client });
+  assert.equal(client.calls[0].FilterExpression, 'attribute_not_exists(deletedAt)');
+});
+
+test('getThreadHistory は墓標を会話として返さない', async () => {
+  const client = fakeClient(() => ({
+    Item: { sub: 'u', threadId: 't1', deletedAt: '2026-10-23T00:00:00.000Z' },
+  }));
+  assert.equal(await getThreadHistory('u', 't1', { docClient: client }), null);
 });
