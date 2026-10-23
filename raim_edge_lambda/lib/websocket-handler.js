@@ -20,7 +20,11 @@
 
 const { createConnectionStore } = require('./connection-store');
 const { createRequestQueuePublisher } = require('./request-queue-publisher');
-const { normalizeWebSocketEvent, WebSocketEventError } = require('./websocket-event');
+const {
+  normalizeWebSocketEvent,
+  REQUEST_ID_PATTERN,
+  WebSocketEventError,
+} = require('./websocket-event');
 const { createWebSocketPostback } = require('./websocket-postback');
 const threadListStore = require('./thread-list-store');
 const userSessionStore = require('./user-session-store');
@@ -425,6 +429,43 @@ function createWebSocketHandler({
     });
   }
 
+  /**
+   * $default の失敗を、WebSocket でもクライアントへ伝える。
+   *
+   * この API にはルートレスポンスを設定していないので、Lambda が返す
+   * statusCode と body はクライアントに届かない。以前は入力の誤りや
+   * 「スレッドが無い」などがクライアントに伝わらず、10〜60秒待ってから
+   * タイムアウトになっていた。どの要求の失敗か分かるように requestId を付ける
+   * （X-03: クライアントは自分の requestId の応答・エラーだけを受け取る）。
+   */
+  async function notifyFailure(connectionId, requestId, response, threadId) {
+    if (!connectionId || !response || response.statusCode < 400) return;
+
+    let body = {};
+    try {
+      body = JSON.parse(response.body || '{}');
+    } catch (_) {
+      body = {};
+    }
+    // TOKEN_EXPIRED は rejectExpiredToken が送ってから切断している
+    if (body.code === 'TOKEN_EXPIRED') return;
+
+    const message = String(body.message || 'Request failed');
+    try {
+      await getPostback().postJson(connectionId, {
+        type: 'error',
+        code: String(body.code || 'INTERNAL_ERROR'),
+        message,
+        text: message,
+        ...(requestId ? { requestId } : {}),
+        ...(threadId ? { threadId } : {}),
+        retriable: response.statusCode >= 500,
+      });
+    } catch (error) {
+      console.warn(`[Edge] could not notify failure: ${error.message}`);
+    }
+  }
+
   return async function handleWebSocketEvent(event, context = {}) {
     let normalized;
 
@@ -432,11 +473,19 @@ function createWebSocketHandler({
       normalized = normalizeWebSocketEvent(event, context);
     } catch (error) {
       if (error instanceof WebSocketEventError) {
-        return createHttpResponse(400, {
+        const response = createHttpResponse(400, {
           code: error.code,
           message: error.message,
           details: error.details,
         });
+        if (event?.requestContext?.routeKey === '$default') {
+          await notifyFailure(
+            event.requestContext.connectionId,
+            readClientRequestId(event),
+            response
+          );
+        }
+        return response;
       }
 
       throw error;
@@ -450,10 +499,32 @@ function createWebSocketHandler({
         return handleDisconnect(normalized);
 
       case '$default':
-      default:
-        return handleDefault(normalized);
+      default: {
+        const response = await handleDefault(normalized);
+        await notifyFailure(
+          normalized.connectionId,
+          normalized.requestId,
+          response,
+          normalized.threadId
+        );
+        return response;
+      }
     }
   };
+}
+
+/**
+ * 入力の誤りで正規化できなかった要求から、クライアントの requestId を読む。
+ * 形式が合わないものは使わない（websocket-event.js と同じ決まり）。
+ */
+function readClientRequestId(event) {
+  try {
+    const body = JSON.parse(event?.body || '{}');
+    const requestId = String(body?.requestId || '').trim();
+    return REQUEST_ID_PATTERN.test(requestId) ? requestId : '';
+  } catch (_) {
+    return '';
+  }
 }
 
 function handleWebSocketEvent(event, context = {}) {
