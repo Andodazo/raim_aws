@@ -51,6 +51,7 @@ const { MESSAGE_TYPES } = require('./types');
 const {
   getToolDefinitions,
   getClientAction,
+  isClientActionRequested,
   executeTool,
   pickToolIntro,
   getToolDescription,
@@ -193,6 +194,7 @@ const defaultDependencies = Object.freeze({
   isToolUseEnabled,
   getToolDefinitions,
   getClientAction,
+  isClientActionRequested,
   executeTool: executeToolWithSecrets,
   pickToolIntro,
   getToolDescription,
@@ -526,6 +528,18 @@ function createCoreChatService(dependencyOverrides = {}) {
         break;
       }
 
+      // アプリに頼むツール（駅アラームなど）か。頼むなら、今回の発言で
+      // 利用者が本当に頼んだかを確かめる。ライムの判断だけで送ると、
+      // userMemory や検索結果に紛れ込んだ文で、頼まれていない操作が
+      // 始まり得るため（プロンプト注入の予防）。
+      const clientAction = dependencies.getClientAction(toolName, toolArgs);
+      const clientActionAllowed = !clientAction ||
+        dependencies.isClientActionRequested(clientAction, input.text);
+
+      if (!clientActionAllowed) {
+        console.warn(`[Tool] 頼まれていない操作なので送りませんでした: ${clientAction.action}`);
+      }
+
       // ツール呼出中であることをクライアントへ知らせる。
       // Gemmaは本文を返せないため、ここはサーバー側の固定セリフ。
       await notifyToolCall({
@@ -538,16 +552,21 @@ function createCoreChatService(dependencyOverrides = {}) {
 
       // アプリに頼むツール（駅アラームなど）は、ライムの返事より先に
       // アプリへ操作を送る。返事の生成を待たずに乗車モードを始められる。
-      const clientAction = dependencies.getClientAction(toolName, toolArgs);
-
-      if (clientAction) {
+      if (clientAction && clientActionAllowed) {
         await notifyClientAction(clientAction);
       }
 
       // 天気の場所が指定されないときのために、アプリの現在地（約10kmに丸めたもの）も渡す
-      const toolResult = await dependencies.executeTool(toolName, toolArgs, {
-        location: input.location,
-      });
+      const toolResult = clientActionAllowed
+        ? await dependencies.executeTool(toolName, toolArgs, {
+          location: input.location,
+        })
+        : {
+          error: true,
+          message: '利用者が今回そう頼んだと確かめられなかったので、アプリには頼んでいません。' +
+            '本当にそうしてほしいか、利用者に聞いてください。',
+          tool: toolName,
+        };
 
       toolExecuted = true;
 
