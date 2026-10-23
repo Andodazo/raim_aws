@@ -26,6 +26,7 @@ const {
   WebSocketEventError,
 } = require('./websocket-event');
 const { createWebSocketPostback } = require('./websocket-postback');
+const { createRateLimiter } = require('./rate-limiter');
 const threadListStore = require('./thread-list-store');
 const userSessionStore = require('./user-session-store');
 const crypto = require('crypto');
@@ -44,8 +45,12 @@ function createWebSocketHandler({
   sessionStore,
   sqsClient,
   memoryQueueUrl,
+  rateLimiter,
   now = () => Date.now(),
 } = {}) {
+  let cachedRateLimiter = null;
+  const getRateLimiter = () =>
+    rateLimiter || (cachedRateLimiter ||= createRateLimiter());
   // 接続テーブルは $default のたびに読むので、作ったものを使い回す
   let cachedConnectionStore = null;
   const getConnectionStore = () =>
@@ -371,6 +376,19 @@ function createWebSocketHandler({
 
     if (normalized.action === 'thread.history') {
       return handleThreadHistory(sub, normalized);
+    }
+
+    // 人ごとの回数の上限（C-04）。一覧・履歴・削除は DynamoDB を読むだけで
+    // 安いので数えない。料金のかかるチャットだけを数える。
+    const rate = await getRateLimiter().consume(sub);
+    if (!rate.allowed) {
+      console.warn(`[RateLimit] chat rejected: window=${rate.window}, limit=${rate.limit}`);
+      return createHttpResponse(429, {
+        code: 'RATE_LIMITED',
+        message: rate.window === 'day'
+          ? '今日はたくさん話したので、また明日話そう。'
+          : 'たくさん送られたので、少し待ってからもう一度送ってね。',
+      });
     }
 
     // Core Lambdaが必要とする最小イベント形式に変換してRequest Queueへ送る。

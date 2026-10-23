@@ -35,6 +35,7 @@ function setup({ listThreads, getThreadHistory, deleteThread, clearMemoryForDele
   });
 
   const handler = createWebSocketHandler({
+    rateLimiter: { consume: async () => ({ allowed: true }) },
     connectionStore: { getConnection: async () => ({ sub: 'user-1' }) },
     postback,
     threadStore: {
@@ -199,6 +200,7 @@ test('thread.delete succeeds even if the memory refresh request fails', async ()
   });
 
   const handler = createWebSocketHandler({
+    rateLimiter: { consume: async () => ({ allowed: true }) },
     connectionStore: { getConnection: async () => ({ sub: 'user-1' }) },
     postback,
     threadStore: { deleteThread: async () => true },
@@ -244,6 +246,7 @@ test('thread.delete fails when the memory can neither be cleared nor rebuilt', a
   });
 
   const handler = createWebSocketHandler({
+    rateLimiter: { consume: async () => ({ allowed: true }) },
     connectionStore: { getConnection: async () => ({ sub: 'user-1' }) },
     postback,
     threadStore: { deleteThread: async () => true },
@@ -300,6 +303,7 @@ test('入力の誤りで読めなかった要求にも、エラーを返す', as
 test('memory refresh requests get a different deduplication id each time', async () => {
   const ids = [];
   const handler = createWebSocketHandler({
+    rateLimiter: { consume: async () => ({ allowed: true }) },
     connectionStore: { getConnection: async () => ({ sub: 'user-1' }) },
     postback: { postJson: async () => ({ ok: true }) },
     threadStore: { deleteThread: async () => true },
