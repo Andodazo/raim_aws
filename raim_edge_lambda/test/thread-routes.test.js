@@ -35,6 +35,7 @@ function setup({ listThreads, getThreadHistory, deleteThread, clearMemoryForDele
   });
 
   const handler = createWebSocketHandler({
+    rateLimiter: { consume: async () => ({ allowed: true }) },
     connectionStore: { getConnection: async () => ({ sub: 'user-1' }) },
     postback,
     threadStore: {
@@ -118,10 +119,14 @@ test('thread.history posts the history back to the connection', async () => {
 
 test('thread.history without threadId is rejected', async () => {
   const { handler, sent } = setup();
-  const response = await handler(event({ type: 'thread.history' }));
+  const response = await handler(event({ type: 'thread.history', requestId: 'req-h1' }));
 
   assert.equal(response.statusCode, 400);
-  assert.equal(sent.length, 0);
+  // ルートレスポンスが無いので、エラーは WebSocket で requestId を付けて伝える
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].type, 'error');
+  assert.equal(sent[0].code, 'INVALID_INPUT');
+  assert.equal(sent[0].requestId, 'req-h1');
 });
 
 test('a message without type is still treated as a chat request', async () => {
@@ -175,10 +180,12 @@ test('thread.delete removes the thread and asks for a memory refresh', async () 
 
 test('thread.delete without threadId is rejected', async () => {
   const { handler, sent } = setup();
-  const response = await handler(event({ type: 'thread.delete' }));
+  const response = await handler(event({ type: 'thread.delete', requestId: 'req-d1' }));
 
   assert.equal(response.statusCode, 400);
-  assert.equal(sent.length, 0);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].type, 'error');
+  assert.equal(sent[0].requestId, 'req-d1');
 });
 
 test('thread.delete succeeds even if the memory refresh request fails', async () => {
@@ -193,6 +200,7 @@ test('thread.delete succeeds even if the memory refresh request fails', async ()
   });
 
   const handler = createWebSocketHandler({
+    rateLimiter: { consume: async () => ({ allowed: true }) },
     connectionStore: { getConnection: async () => ({ sub: 'user-1' }) },
     postback,
     threadStore: { deleteThread: async () => true },
@@ -238,6 +246,7 @@ test('thread.delete fails when the memory can neither be cleared nor rebuilt', a
   });
 
   const handler = createWebSocketHandler({
+    rateLimiter: { consume: async () => ({ allowed: true }) },
     connectionStore: { getConnection: async () => ({ sub: 'user-1' }) },
     postback,
     threadStore: { deleteThread: async () => true },
@@ -254,12 +263,47 @@ test('thread.delete fails when the memory can neither be cleared nor rebuilt', a
 
   // 消した内容が記憶に残ったままなので、成功とは返さない
   assert.equal(response.statusCode, 500);
-  assert.equal(sent.length, 0);
+  // thread_deleted は送らず、エラーだけを伝える（どのスレッドかも付ける）
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].type, 'error');
+  assert.equal(sent[0].code, 'THREAD_DELETE_FAILED');
+  assert.equal(sent[0].threadId, 't1');
+  assert.equal(sent[0].retriable, true);
+});
+
+test('thread.history で見つからないときも、エラーを requestId と threadId 付きで伝える', async () => {
+  const { handler, sent } = setup({ getThreadHistory: async () => null });
+
+  const response = await handler(event({
+    type: 'thread.history',
+    threadId: 't-gone',
+    requestId: 'req-h2',
+  }));
+
+  assert.equal(response.statusCode, 404);
+  assert.deepEqual(
+    { type: sent[0].type, code: sent[0].code, requestId: sent[0].requestId, threadId: sent[0].threadId },
+    { type: 'error', code: 'THREAD_NOT_FOUND', requestId: 'req-h2', threadId: 't-gone' }
+  );
+});
+
+test('入力の誤りで読めなかった要求にも、エラーを返す', async () => {
+  const { handler, sent } = setup();
+
+  const response = await handler(event({
+    requestId: 'req-bad',
+    text: 'x'.repeat(5000),
+  }));
+
+  assert.equal(response.statusCode, 400);
+  assert.equal(sent[0].type, 'error');
+  assert.equal(sent[0].requestId, 'req-bad');
 });
 
 test('memory refresh requests get a different deduplication id each time', async () => {
   const ids = [];
   const handler = createWebSocketHandler({
+    rateLimiter: { consume: async () => ({ allowed: true }) },
     connectionStore: { getConnection: async () => ({ sub: 'user-1' }) },
     postback: { postJson: async () => ({ ok: true }) },
     threadStore: { deleteThread: async () => true },

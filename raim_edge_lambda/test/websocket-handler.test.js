@@ -8,6 +8,7 @@ const { createWebSocketHandler } = require('../lib/websocket-handler');
 test('$connect stores the WebSocket connection', async () => {
   const stored = [];
   const handler = createWebSocketHandler({
+    rateLimiter: { consume: async () => ({ allowed: true }) },
     connectionStore: {
       putConnection: async (item) => stored.push(item),
       getConnection: async () => null,
@@ -43,6 +44,7 @@ test('$connect stores the WebSocket connection', async () => {
 test('$default publishes a chat request to Core request queue', async () => {
   const published = [];
   const handler = createWebSocketHandler({
+    rateLimiter: { consume: async () => ({ allowed: true }) },
     connectionStore: {
       putConnection: async () => {},
       getConnection: async () => null,
@@ -94,6 +96,7 @@ test('$default publishes a chat request to Core request queue', async () => {
 test('$default forwards features the client supports', async () => {
   const published = [];
   const handler = createWebSocketHandler({
+    rateLimiter: { consume: async () => ({ allowed: true }) },
     connectionStore: {
       putConnection: async () => {},
       getConnection: async () => null,
@@ -126,6 +129,7 @@ test('$default forwards features the client supports', async () => {
 test('$disconnect deletes the WebSocket connection', async () => {
   const deleted = [];
   const handler = createWebSocketHandler({
+    rateLimiter: { consume: async () => ({ allowed: true }) },
     connectionStore: {
       putConnection: async () => {},
       getConnection: async () => null,
@@ -152,6 +156,7 @@ test('$disconnect deletes the WebSocket connection', async () => {
 test('$default fills sub from the stored connection when authorizer context is absent', async () => {
   const published = [];
   const handler = createWebSocketHandler({
+    rateLimiter: { consume: async () => ({ allowed: true }) },
     connectionStore: {
       putConnection: async () => {},
       getConnection: async () => ({ sub: 'user-from-store' }),
@@ -183,6 +188,7 @@ test('$default fills sub from the stored connection when authorizer context is a
 test('$default forwards a rounded location', async () => {
   const published = [];
   const handler = createWebSocketHandler({
+    rateLimiter: { consume: async () => ({ allowed: true }) },
     connectionStore: {
       putConnection: async () => {},
       getConnection: async () => null,
@@ -215,6 +221,7 @@ test('$default forwards a rounded location', async () => {
 test('$default は声を消しているとき speech: false を Core へ渡す', async () => {
   const published = [];
   const handler = createWebSocketHandler({
+    rateLimiter: { consume: async () => ({ allowed: true }) },
     connectionStore: {
       putConnection: async () => {},
       getConnection: async () => null,
@@ -245,6 +252,7 @@ test('$default は声を消しているとき speech: false を Core へ渡す',
 test('$connect stores the access token expiry from the authorizer', async () => {
   const stored = [];
   const handler = createWebSocketHandler({
+    rateLimiter: { consume: async () => ({ allowed: true }) },
     connectionStore: {
       putConnection: async (item) => stored.push(item),
       getConnection: async () => null,
@@ -270,6 +278,7 @@ function expiryHandler({ tokenExpiresAt, nowMs }) {
   const published = [];
 
   const handler = createWebSocketHandler({
+    rateLimiter: { consume: async () => ({ allowed: true }) },
     connectionStore: {
       putConnection: async () => {},
       getConnection: async () => ({ sub: 'user-001', tokenExpiresAt }),
@@ -346,6 +355,7 @@ test('$default accepts old connections that have no stored expiry', async () => 
 test('$default uses the expiry from the authorizer context when it is there', async () => {
   const posted = [];
   const handler = createWebSocketHandler({
+    rateLimiter: { consume: async () => ({ allowed: true }) },
     connectionStore: {
       putConnection: async () => {},
       // 接続テーブルに期限が無くても、context の期限で断る
@@ -382,6 +392,7 @@ test('$default uses the expiry from the authorizer context when it is there', as
 
 test('$default answers with an error instead of crashing when the connection lookup fails', async () => {
   const handler = createWebSocketHandler({
+    rateLimiter: { consume: async () => ({ allowed: true }) },
     connectionStore: {
       putConnection: async () => {},
       getConnection: async () => {

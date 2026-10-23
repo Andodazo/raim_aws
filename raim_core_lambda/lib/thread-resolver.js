@@ -29,6 +29,8 @@ const {
   getThread,
   deriveTitle,
   updateThreadTitle,
+  isDeletedThread,
+  ThreadDeletedError,
 } = require('./conversation-thread-store');
 
 const {
@@ -64,6 +66,13 @@ async function resolveThread(
   if (requestedThreadId) {
     const existing = await fetch(sub, requestedThreadId);
 
+    // 消したスレッドを指定された。以前はこの ID で作り直していたので、
+    // 消した直後に届いた発言で、消したはずのスレッドが復活していた（R-02）。
+    // 作り直さずに断る（ensureThread も墓標があれば作らない）。
+    if (isDeletedThread(existing)) {
+      throw new ThreadDeletedError(requestedThreadId);
+    }
+
     if (existing) {
       // アクティブスレッドを切り替える
       await writeActive(sub, requestedThreadId);
@@ -87,7 +96,8 @@ async function resolveThread(
   if (activeThreadId) {
     const existing = await fetch(sub, activeThreadId);
 
-    if (existing) {
+    // アクティブだったスレッドが消されていたら、新しいスレッドを作る
+    if (existing && !isDeletedThread(existing)) {
       return { threadId: activeThreadId, thread: existing, isNew: false };
     }
     // activeThreadId は残っているが実体が消えている場合は新規作成へ落ちる

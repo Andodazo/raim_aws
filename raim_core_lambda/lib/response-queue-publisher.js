@@ -74,6 +74,8 @@ function createResponseQueuePublisher({
   );
   let sequence = 0;
   let textChunkIndex = 0;
+  // この要求で何番目の client_action か（actionId に使う）
+  let clientActionIndex = 0;
   let textBuffer = '';
   let audioDeliveryChain = Promise.resolve();
   // v14: tool intro を送ったら true。本文の最初のdeltaで bubble_break を発火して false に戻す。
@@ -417,11 +419,19 @@ function createResponseQueuePublisher({
     //
     // 駅アラームのように、実際の動作をアプリが行うツールで使う。
     // Edge で client_action に変換されてアプリへ届く。
+    //
+    // actionId は「この要求の何番目の操作か」で決める。SQS の再試行で同じ要求を
+    // やり直すと、以前は同じ操作がもう一度届き、駅アラームが二重に始まり得た（R-05）。
+    // 試行回数（attempt）を含めないので、やり直しても同じ ID になる。
+    // アプリは同じ actionId を1回だけ実行する。
     async clientAction({ action, params = {} }) {
       // 前置きなどの本文が残っていれば先に出し切り、順番を保つ
       await flushText();
+      const actionId = `${requestId}_action_${clientActionIndex}`;
+      clientActionIndex += 1;
       return send('stream.action', {
         action,
+        actionId,
         params,
       });
     },

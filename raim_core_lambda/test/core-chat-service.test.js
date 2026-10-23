@@ -470,3 +470,36 @@ test('Core chat service feeds the thread summary into the prompt, not the user s
   // スレッドを跨いだ記憶も渡る
   assert.match(captured.userMemory, /タピオカ/);
 });
+
+test('消したスレッドへの発言は、Mantle を呼ばずに THREAD_DELETED で返す', async () => {
+  let mantleCalled = false;
+  const service = createCoreChatService({
+    getOrCreateUserSession: async () => ({ sub: 'user-1' }),
+    resolveThread: async () => {
+      const error = new Error('Conversation thread was deleted');
+      error.code = 'THREAD_DELETED';
+      error.retriable = false;
+      throw error;
+    },
+    createMantleResponse: async () => {
+      mantleCalled = true;
+      return {};
+    },
+  });
+
+  const result = await service({
+    schemaVersion: 1,
+    type: 'chat.request',
+    sub: 'user-1',
+    requestId: 'req-1',
+    source: 'websocket',
+    threadId: 'thread-gone',
+    text: 'まだいる？',
+    images: [],
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'THREAD_DELETED');
+  assert.equal(result.retriable, false);
+  assert.equal(mantleCalled, false);
+});

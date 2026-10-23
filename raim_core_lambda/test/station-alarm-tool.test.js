@@ -292,3 +292,40 @@ test('does not send an action when the station is missing', async () => {
   const output = JSON.parse(stub.calls[1].mantleInput.messages[0].output);
   assert.equal(output.error, true);
 });
+
+// ─────────────────────────────────────────────
+// 頼まれていない操作は送らない（プロンプト注入の予防）
+// ─────────────────────────────────────────────
+
+test('今回の発言で頼まれていなければ、駅アラームを始めずに聞き返してもらう', async () => {
+  const stub = createMantleStub([START_CALL, REPLY]);
+  const { dependencies, actions, executed } = buildDependencies(stub);
+
+  await createCoreChatService(dependencies)({
+    ...eventWith(['station_alarm']),
+    text: '今日のごはん何にしよう',
+  });
+
+  assert.equal(actions.length, 0);
+  assert.equal(executed.length, 0);
+  const output = JSON.parse(stub.calls[1].mantleInput.messages[0].output);
+  assert.equal(output.error, true);
+});
+
+test('頼む言葉か駅名が入っていれば、頼んだとみなす', () => {
+  const { isClientActionRequested } = require('../lib/tools');
+  const start = { action: 'station_alarm.start', params: { station: '新宿', kana: 'しんじゅく' } };
+  const stop = { action: 'station_alarm.stop', params: {} };
+
+  assert.equal(isClientActionRequested(start, '新宿で起こして'), true);
+  assert.equal(isClientActionRequested(start, 'しんじゅくについたらおしえて'), true);
+  assert.equal(isClientActionRequested(start, '新宿駅まで行く'), true);
+  assert.equal(isClientActionRequested(start, '今日のごはん何にしよう'), false);
+  assert.equal(isClientActionRequested(start, ''), false);
+
+  assert.equal(isClientActionRequested(stop, 'アラーム止めて'), true);
+  assert.equal(isClientActionRequested(stop, 'もういいよ'), true);
+  assert.equal(isClientActionRequested(stop, '天気教えて'), false);
+
+  assert.equal(isClientActionRequested({ action: 'unknown', params: {} }, '起こして'), false);
+});

@@ -43,6 +43,7 @@ const {
   STATION_ALARM_TOOL_NAMES,
   toStationAlarmAction,
   runStationAlarmTool,
+  isStationAlarmRequested,
 } = require('./station-alarm');
 
 // ─────────────────────────────────────────────
@@ -162,6 +163,18 @@ function getClientAction(toolName, args = {}) {
   }
 
   return null;
+}
+
+/**
+ * アプリに頼む操作を、今回の発言で利用者が頼んだか。
+ * 頼んでいないなら、操作は送らない（プロンプト注入の予防）。
+ */
+function isClientActionRequested(clientAction, userText) {
+  if (String(clientAction?.action || '').startsWith('station_alarm.')) {
+    return isStationAlarmRequested(clientAction, userText);
+  }
+
+  return false;
 }
 
 // ─────────────────────────────────────────────
@@ -385,6 +398,7 @@ module.exports = {
   TOOL_DEFINITIONS,
   getToolDefinitions,
   getClientAction,
+  isClientActionRequested,
   toChatCompletionsFormat,
   executeTool,
   pickToolIntro,

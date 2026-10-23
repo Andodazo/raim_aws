@@ -309,5 +309,24 @@ test('appendTurn does not recreate a thread deleted while replying', async () =>
   );
 
   assert.equal(result, null);
-  assert.equal(commands[0].ConditionExpression, 'attribute_exists(threadId)');
+  assert.equal(
+    commands[0].ConditionExpression,
+    'attribute_exists(threadId) AND attribute_not_exists(deletedAt)'
+  );
+});
+
+test('ensureThread は墓標のあるスレッドを作り直さず THREAD_DELETED にする', async () => {
+  const client = {
+    send: async (command) => {
+      assert.equal(command.input.ConditionExpression, 'attribute_not_exists(deletedAt)');
+      const error = new Error('conditional');
+      error.name = 'ConditionalCheckFailedException';
+      throw error;
+    },
+  };
+
+  await assert.rejects(
+    ensureThread({ sub: 'u', threadId: 't' }, { docClient: client }),
+    (error) => error.code === 'THREAD_DELETED'
+  );
 });

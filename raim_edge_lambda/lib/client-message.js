@@ -270,6 +270,9 @@ function toClientMessage(coreEvent) {
     type: coreEvent.type,
     requestId: coreEvent.requestId,
     sequence: coreEvent.sequence,
+    // SQS の再試行で Core が同じ要求をやり直すと、1回目の途中までの分と
+    // 2回目の分が両方届き得る。クライアントは最初に見た attempt だけを表示する。
+    ...(Number.isInteger(coreEvent.attempt) ? { attempt: coreEvent.attempt } : {}),
   };
 
   switch (coreEvent.type) {
@@ -322,6 +325,8 @@ function toClientMessage(coreEvent) {
         ...base,
         type: 'client_action',
         action: String(coreEvent.action || ''),
+        // アプリが同じ操作を1回だけ実行するための ID（再試行しても同じ）
+        ...(coreEvent.actionId ? { actionId: String(coreEvent.actionId) } : {}),
         params: (coreEvent.params && typeof coreEvent.params === 'object')
           ? coreEvent.params
           : {},

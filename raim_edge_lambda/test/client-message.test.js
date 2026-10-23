@@ -211,6 +211,21 @@ test('toClientMessage maps stream.action to client client_action', () => {
   });
 });
 
+test('toClientMessage は client_action の actionId と attempt を渡す', () => {
+  const message = toClientMessage({
+    type: 'stream.action',
+    requestId: 'req-001',
+    sequence: 7,
+    attempt: 2,
+    action: 'station_alarm.start',
+    actionId: 'req-001_action_0',
+    params: {},
+  });
+
+  assert.equal(message.actionId, 'req-001_action_0');
+  assert.equal(message.attempt, 2);
+});
+
 test('toClientMessage gives client_action empty params when missing', () => {
   const message = toClientMessage({
     type: 'stream.action',

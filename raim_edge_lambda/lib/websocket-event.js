@@ -287,6 +287,7 @@ module.exports = {
   KNOWN_FEATURES,
   normalizeWebSocketEvent,
   parseJsonBody,
+  REQUEST_ID_PATTERN,
   extractSub,
   extractTokenExpiresAt,
 };
