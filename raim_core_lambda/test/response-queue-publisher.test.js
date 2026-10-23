@@ -291,6 +291,29 @@ test('clientAction sends stream.action without an intro or bubble_break', async 
   assert.deepEqual(action.params, { station: '新宿' });
 });
 
+test('clientAction の actionId は要求ごとの通し番号で、やり直しても変わらない', async () => {
+  async function actionIds(attempt) {
+    const commands = [];
+    const publisher = createResponseQueuePublisher({
+      requestId: 'req-action',
+      connectionId: 'connection-1',
+      sub: 'user-1',
+      attempt,
+    }, {
+      client: { send: async (command) => { commands.push(command.input); } },
+      env: { RESPONSE_QUEUE_URL: 'https://sqs.example/response.fifo' },
+    });
+    await publisher.clientAction({ action: 'station_alarm.start', params: {} });
+    await publisher.clientAction({ action: 'station_alarm.stop', params: {} });
+    return commands.map((command) => JSON.parse(command.MessageBody).actionId);
+  }
+
+  const first = await actionIds(1);
+  assert.deepEqual(first, ['req-action_action_0', 'req-action_action_1']);
+  // SQS の再試行（attempt 2）でも同じ ID になる
+  assert.deepEqual(await actionIds(2), first);
+});
+
 test('記号だけのかたまりは読み上げない（文字は送る）', async () => {
   const commands = [];
   const ttsCalls = [];
