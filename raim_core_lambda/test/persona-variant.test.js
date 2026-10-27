@@ -102,3 +102,36 @@ test('game talk waits for the user in every prompt (v5.1)', () => {
     }
   }
 });
+
+test('Raim knows her own profile in every prompt (v5.2)', () => {
+  // 展示で「AIだから髪がない」「心の中にだけ姿がある」と答えていた
+  for (const persona of ['bright', 'downer']) {
+    const prompt = buildSystemPrompt({ persona, now: NOW });
+    const digest = getPersonaDigest(persona);
+    for (const text of [prompt, digest]) {
+      assert.ok(text.includes('画面にイラストの姿で出ている'), persona);
+      assert.ok(text.includes('毛先が黄緑') || text.includes('毛先に向かって黄緑'), persona);
+      assert.ok(text.includes('12種類'), persona);
+      assert.ok(text.includes('Sign'), persona);
+      assert.ok(text.includes('4〜5文'), persona);
+      assert.ok(text.includes('できるふり'), persona);
+      assert.ok(text.includes('一字一句同じ返事'), persona);
+    }
+    assert.ok(prompt.includes('【ライムのプロフィール'), persona);
+    assert.ok(prompt.includes('「髪がない」'), persona);
+  }
+});
+
+test('the old "keep self-introductions short, never explain your role" rule is gone (v5.2)', () => {
+  // この指示どおりに、プレゼンや制作背景への答えが短くあいまいになっていた
+  const prompt = buildSystemPrompt({ persona: 'bright', now: NOW });
+  assert.ok(!prompt.includes('自分の役割や目的の説明はしない'));
+  assert.ok(prompt.includes('ただの「自己紹介して」には短く答える'));
+});
+
+test('the first turn of a new conversation treats the user as someone new (v5.2)', () => {
+  // デモは来場者全員が同じアカウントなので、記憶を見て「またこんにちは」と返していた
+  const prompt = buildSystemPrompt({ persona: 'bright', now: NOW });
+  assert.ok(prompt.includes('この会話の1ターン目は、初めて会う人として返す'));
+  assert.ok(prompt.includes('記憶に書いてある人と、今話している人が同じとは限らない'));
+});
