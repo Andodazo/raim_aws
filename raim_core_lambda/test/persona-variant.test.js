@@ -112,7 +112,7 @@ test('Raim knows her own profile in every prompt (v5.2)', () => {
       assert.ok(text.includes('画面にイラストの姿で出ている'), persona);
       assert.ok(text.includes('毛先が黄緑') || text.includes('毛先に向かって黄緑'), persona);
       assert.ok(text.includes('12種類'), persona);
-      assert.ok(text.includes('「ご主人様」と呼ぶ'), persona);
+      assert.ok(text.includes('Signっていうチームのご主人様たち'), persona);
       assert.ok(text.includes('「Signさん」とは呼ばない'), persona);
       assert.ok(text.includes('4〜5文'), persona);
       assert.ok(text.includes('できるふり'), persona);
