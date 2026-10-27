@@ -178,7 +178,46 @@ async function runStationAlarmTool(toolName, args = {}) {
   };
 }
 
+// 駅アラームを頼む・止めるときに出てくる言葉。
+// 音声の聞き取りでかなになることもあるので、ひらがなも入れる。
+const START_REQUEST_WORDS = [
+  '起こ', 'おこし', 'おこせ', 'アラーム', 'あらーむ', '着いたら', 'ついたら',
+  '降り', 'おり', '寝過ご', 'ねすご', '乗り過ご', 'のりすご', '知らせ', 'しらせ',
+];
+const STOP_REQUEST_WORDS = [
+  '止め', 'とめ', '止ま', 'やめ', '解除', 'かいじょ', 'キャンセル', 'きゃんせる',
+  'いらない', 'もういい', 'アラーム', 'あらーむ', '起き', 'おき', '着いた', 'ついた',
+];
+
+/**
+ * 今回の発言で、利用者が本当に駅アラームを頼んだ（止めるよう頼んだ）か。
+ *
+ * ライムが自分の判断でツールを呼べるので、以前は userMemory や検索結果に
+ * 紛れ込んだ文（プロンプト注入）でも、頼まれていない駅アラームが始まり得た。
+ * アプリの操作は、今回の発言に頼む言葉か駅名が入っているときだけ送る。
+ * 確かめられないときは始めずに、ライムから聞き返してもらう。
+ */
+function isStationAlarmRequested(clientAction, userText) {
+  const text = String(userText || '');
+  if (!text || !clientAction) return false;
+
+  if (clientAction.action === 'station_alarm.start') {
+    const { station, kana } = clientAction.params || {};
+    const bareStation = String(station || '').replace(/駅$/, '');
+    return START_REQUEST_WORDS.some((word) => text.includes(word)) ||
+      (bareStation && text.includes(bareStation)) ||
+      (kana && text.includes(kana));
+  }
+
+  if (clientAction.action === 'station_alarm.stop') {
+    return STOP_REQUEST_WORDS.some((word) => text.includes(word));
+  }
+
+  return false;
+}
+
 module.exports = {
+  isStationAlarmRequested,
   STATION_ALARM_FEATURE,
   STATION_ALARM_TOOL_DEFINITIONS,
   STATION_ALARM_TOOL_NAMES,

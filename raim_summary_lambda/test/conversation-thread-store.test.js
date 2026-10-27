@@ -138,5 +138,8 @@ test('saveThreadSummary does not recreate a deleted thread', async () => {
     saveThreadSummary('u1', 't1', '要約', {}, { docClient }),
     ThreadDeletedError
   );
-  assert.equal(commands[0].ConditionExpression, 'attribute_exists(threadId)');
+  assert.equal(
+    commands[0].ConditionExpression,
+    'attribute_exists(threadId) AND attribute_not_exists(deletedAt)'
+  );
 });

@@ -25,7 +25,7 @@
 
 const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
 const {
-  DeleteCommand,
+  PutCommand,
   DynamoDBDocumentClient,
   GetCommand,
   QueryCommand,
@@ -38,6 +38,13 @@ const REGION = process.env.AWS_REGION || 'ap-northeast-1';
 
 // 一覧に返す最大件数。プルダウンに数百件出しても使えないため上限を設ける。
 const MAX_THREADS = Number(process.env.THREAD_LIST_LIMIT || 50);
+
+// 消したスレッドの「墓標」を残す日数。
+//
+// 墓標は キー（sub, threadId）と deletedAt だけの項目で、同じ ID でスレッドを
+// 作り直さないために残す。テーブルの TTL（expiresAt）が有効なら、この日数で消える。
+// スレッド ID は乱数なので、これだけ経てば古い ID で送ってくる要求はまず無い。
+const THREAD_TOMBSTONE_DAYS = Number(process.env.THREAD_TOMBSTONE_DAYS || 30);
 
 // 履歴として返す最大件数。
 const MAX_HISTORY_MESSAGES = Number(process.env.THREAD_HISTORY_LIMIT || 400);
@@ -99,6 +106,8 @@ async function listThreads(sub, deps = {}) {
         ExpressionAttributeNames: { '#sub': 'sub' },
         ExpressionAttributeValues: { ':sub': sub },
         ProjectionExpression: 'threadId, title, turnCount, createdAt, updatedAt',
+        // 消したスレッドの墓標は一覧に出さない
+        FilterExpression: 'attribute_not_exists(deletedAt)',
         ExclusiveStartKey: lastEvaluatedKey,
       })
     );
@@ -171,7 +180,8 @@ async function getThreadHistory(sub, threadId, deps = {}) {
     })
   );
 
-  if (!result.Item) {
+  // 消したスレッドの墓標は、会話として返さない
+  if (!result.Item || result.Item.deletedAt) {
     return null;
   }
 
@@ -273,7 +283,12 @@ function normalizeHistoryMessage(raw) {
  * スレッドを削除する。
  *
  * 本文（messages）とスレッド要約（sessionSummary）はこの項目に入っているため、
- * 項目ごと消せば会話の中身は残らない。
+ * 項目ごと置き換えれば会話の中身は残らない。
+ *
+ * 以前は項目ごと消していた。消した直後に同じ threadId で届いた要求
+ * （送信中だった発言、別の端末など）があると、Core がその ID でスレッドを
+ * 作り直してしまった（R-02）。今は キーと削除時刻だけの墓標に置き換え、
+ * Core と Summary は墓標のあるスレッドに書かない・作らない。
  *
  * ただし UserSession の userMemory には、このスレッドの要約が集約された
  * 内容が残る。「消したのにライムが覚えている」状態を避けるため、
@@ -288,10 +303,19 @@ async function deleteThread(sub, threadId, deps = {}) {
 
   const client = deps.docClient || getDocClient();
 
+  const nowMs = deps.now ? deps.now() : Date.now();
+
+  // Put は項目を丸ごと置き換えるので、messages などはこの1回で消える
   await client.send(
-    new DeleteCommand({
+    new PutCommand({
       TableName: deps.tableName || TABLE_NAME,
-      Key: { sub, threadId },
+      Item: {
+        sub,
+        threadId,
+        deletedAt: new Date(nowMs).toISOString(),
+        // テーブルの TTL が有効なら、この時刻に墓標も消える
+        expiresAt: Math.floor(nowMs / 1000) + THREAD_TOMBSTONE_DAYS * 24 * 60 * 60,
+      },
     })
   );
 
@@ -301,6 +325,7 @@ async function deleteThread(sub, threadId, deps = {}) {
 module.exports = {
   TABLE_NAME,
   MAX_THREADS,
+  THREAD_TOMBSTONE_DAYS,
   listThreads,
   getThreadHistory,
   deleteThread,

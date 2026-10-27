@@ -125,3 +125,31 @@ test('ensureThreadTitle never breaks the conversation on failure', async () => {
   );
   assert.ok(true);
 });
+
+// ── 消したスレッド（R-02） ──────────────────
+
+test('消したスレッド（墓標）を指定されたら、作り直さずに断る', async () => {
+  const { calls, deps } = makeDeps({
+    getThread: async (sub, threadId) => ({ sub, threadId, deletedAt: '2026-10-23T00:00:00.000Z' }),
+  });
+
+  await assert.rejects(
+    resolveThread({ sub: 'u', requestedThreadId: 'thread-gone', userText: 'やあ' }, deps),
+    (error) => error.code === 'THREAD_DELETED' && error.retriable === false
+  );
+  assert.equal(calls.ensure.length, 0);
+  assert.equal(calls.active.length, 0);
+});
+
+test('アクティブだったスレッドが消されていたら、新しいスレッドを作る', async () => {
+  const { calls, deps } = makeDeps({
+    getActiveThreadId: async () => 'thread-gone',
+    getThread: async (sub, threadId) => ({ sub, threadId, deletedAt: '2026-10-23T00:00:00.000Z' }),
+  });
+
+  const result = await resolveThread({ sub: 'u', userText: 'やあ' }, deps);
+
+  assert.equal(result.threadId, 'thread-generated');
+  assert.equal(result.isNew, true);
+  assert.equal(calls.ensure[0].threadId, 'thread-generated');
+});
