@@ -236,7 +236,40 @@ function selectFewShots(scene, persona = RAIM_PERSONA) {
   return Array.isArray(scene.few_shots) ? scene.few_shots : [];
 }
 
-function buildFewShotMessages(scene, persona = RAIM_PERSONA) {
+/**
+ * 例と今回の発話が同じかを比べるための形にする（空白・句読点・伸ばし棒を除く）。
+ */
+function normalizeForCompare(text) {
+  return toSafeString(text)
+    .toLowerCase()
+    .replace(/[\s。、．，,.!！?？〜～ー…・「」『』]/g, '');
+}
+
+function isSameUtterance(a, b) {
+  const left = normalizeForCompare(a);
+  return left !== '' && left === normalizeForCompare(b);
+}
+
+/**
+ * few-shot の後ろに置く区切り。
+ *
+ * few-shot は user / assistant のやり取りの形で入れているので、モデルからは
+ * 「この会話で前に話したこと」に見える。default Scene の例に「こんにちは」が
+ * あるため、新しい会話の1ターン目の「こんにちは」に「またこんにちは！
+ * 挨拶が止まらないね」と返していた（2026-10 の展示と、v5.2 のテスト）。
+ * 例はここまでで、会話はここから始まることをはっきり書く。
+ */
+const FEW_SHOT_END_MESSAGE = Object.freeze({
+  role: 'system',
+  content: [
+    'ここまでのやり取りは、ライムの口調と出力形式の例です。実際の会話ではありません。',
+    '例の中の発言は、今のユーザーが言ったことではありません。',
+    '「また」「さっきも」のように、例の発言を前に聞いたこととして扱わないでください。',
+    '実際の会話は、この次のユーザーの発言から始まります。',
+  ].join('\n'),
+});
+
+function buildFewShotMessages(scene, persona = RAIM_PERSONA, { excludeUserText = '' } = {}) {
   const fewShots = selectFewShots(scene, persona);
   if (fewShots.length === 0) {
     return [];
@@ -246,6 +279,12 @@ function buildFewShotMessages(scene, persona = RAIM_PERSONA) {
 
   for (const fs of fewShots) {
     if (!fs || typeof fs !== 'object') {
+      continue;
+    }
+
+    // 今回の発話と同じ例は入れない。同じ発言が2回続いたように見えて、
+    // 「また」と返す原因になる。
+    if (isSameUtterance(fs.user, excludeUserText)) {
       continue;
     }
 
@@ -292,6 +331,14 @@ function buildFewShotMessages(scene, persona = RAIM_PERSONA) {
   }
 
   return messages;
+}
+
+/**
+ * few-shot と、その後ろの区切りをまとめて作る。例が1つも無ければ空。
+ */
+function buildFewShotBlock(scene, userText, persona = RAIM_PERSONA) {
+  const shots = buildFewShotMessages(scene, persona, { excludeUserText: userText });
+  return shots.length > 0 ? [...shots, FEW_SHOT_END_MESSAGE] : [];
 }
 
 // ─────────────────────────────────────────────
@@ -509,7 +556,7 @@ function buildInitialMantleInput({
     content: buildReferenceContext({ userMemory, sessionSummary }),
   });
 
-  messages.push(...buildFewShotMessages(scene));
+  messages.push(...buildFewShotBlock(scene, userText));
 
   messages.push(
     buildUserMessage({
@@ -659,10 +706,13 @@ function buildFollowupMantleInput({
     const limitedScene = {
       ...scene,
       // 人格に合わせて選んでから絞る。選び済みなので few_shots_downer は外す
-      few_shots: selectFewShots(scene).slice(0, fewShotCount),
+      // 今回の発話と同じ例を先に除いてから絞る（除いたせいで0組にならないように）
+      few_shots: selectFewShots(scene)
+        .filter((fs) => !isSameUtterance(fs?.user, userText))
+        .slice(0, fewShotCount),
       few_shots_downer: undefined,
     };
-    messages.push(...buildFewShotMessages(limitedScene));
+    messages.push(...buildFewShotBlock(limitedScene, userText));
   }
 
   messages.push(
@@ -762,6 +812,8 @@ function summarizeMantleInput(input) {
 module.exports = {
   buildSceneContext,
   buildFewShotMessages,
+  buildFewShotBlock,
+  FEW_SHOT_END_MESSAGE,
   selectFewShots,
   buildSessionSummaryContext,
   buildUserMemoryContext,

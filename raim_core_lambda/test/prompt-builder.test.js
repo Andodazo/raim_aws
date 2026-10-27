@@ -182,7 +182,7 @@ test('followup persona mode "full" sends the complete system prompt', () => {
 
 test('followup includes a limited number of few-shot examples', () => {
   const input = buildFollowupMantleInput({
-    userText: 'こんにちは',
+    userText: 'やあ',
     scene: FOLLOWUP_SCENE,
     fewShotCount: 1,
   });
@@ -299,4 +299,44 @@ test('記憶と要約は、固定ルールとは別の system メッセージの
   // 記憶の中に終わりの印を書かれても、囲みから抜け出せない
   assert.equal(reference.content.split('<<<参考情報ここまで>>>').length, 3);
   assert.ok(reference.content.trimEnd().endsWith('<<<参考情報ここまで>>>'));
+});
+
+// few-shot は user / assistant の形で入るので、モデルには「前に話したこと」に見える。
+// default Scene の例に「こんにちは」があり、新しい会話の1ターン目の「こんにちは」に
+// 「またこんにちは！挨拶が止まらないね」と返していた（2026-10）。
+test('few-shot that matches the user text is left out', () => {
+  const input = buildFollowupMantleInput({
+    userText: 'こんにちは！',
+    scene: FOLLOWUP_SCENE,
+    fewShotCount: 1,
+  });
+  const examples = input.messages.filter((m) => m.role === 'assistant');
+  assert.equal(examples.length, 1);
+  assert.ok(!examples[0].content.includes('あ、こんにちは'));
+  assert.ok(examples[0].content.includes('外出たくなる'));
+
+  const shots = buildFewShotMessages(FOLLOWUP_SCENE, 'bright', { excludeUserText: 'こんにちは' });
+  assert.ok(!shots.some((m) => m.content === 'こんにちは'));
+});
+
+test('few-shot is followed by a note that the real conversation starts next', () => {
+  const { FEW_SHOT_END_MESSAGE } = require('../lib/prompt-builder');
+  const input = buildFollowupMantleInput({ userText: 'やあ', scene: FOLLOWUP_SCENE, fewShotCount: 1 });
+  const last = input.messages.length - 1;
+  assert.equal(input.messages[last].role, 'user');
+  assert.equal(input.messages[last - 1], FEW_SHOT_END_MESSAGE);
+  assert.ok(FEW_SHOT_END_MESSAGE.content.includes('実際の会話ではありません'));
+
+  // 例が無いときは区切りも入れない
+  const none = buildFollowupMantleInput({ userText: 'やあ', scene: FOLLOWUP_SCENE, fewShotCount: 0 });
+  assert.ok(!none.messages.includes(FEW_SHOT_END_MESSAGE));
+});
+
+test('first turn: the greeting example is left out and the note comes before the user', () => {
+  const { buildInitialMantleInput, FEW_SHOT_END_MESSAGE } = require('../lib/prompt-builder');
+  const input = buildInitialMantleInput({ userText: 'こんにちは', scene: FOLLOWUP_SCENE });
+  const userTurns = input.messages.filter((m) => m.role === 'user').map((m) => m.content);
+  // 「こんにちは」は本当の発言の1回だけ
+  assert.deepEqual(userTurns, ['今日はいい天気だね', 'こんにちは']);
+  assert.equal(input.messages[input.messages.length - 2], FEW_SHOT_END_MESSAGE);
 });
