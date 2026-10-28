@@ -26,7 +26,11 @@ const path = require('path');
 
 const CONFIG_PATH = path.join(__dirname, '..', 'raim_core_lambda', 'voice-config.json');
 const OUT_DIR = path.join(__dirname, 'voice_preview');
-const KEYS = ['speedScale', 'pitchScale', 'intonationScale', 'volumeScale'];
+const SCALE_KEYS = ['speedScale', 'pitchScale', 'intonationScale', 'volumeScale'];
+// 語尾の高さ・長さと文中の間。本番では TTS Lambda が AudioQuery の音をいじる。
+// ここでも同じことをして、本番と同じ声で聞けるようにする
+const ENDING_DEFAULTS = { endPitch: 0, endLengthScale: 1, pauseScale: 1 };
+const KEYS = [...SCALE_KEYS, ...Object.keys(ENDING_DEFAULTS)];
 
 // 感情ごとの読み上げ文。人格に合わせた言い方にしてある（そのまま会話で使うわけではない）
 const SAMPLE_LINES = {
@@ -100,7 +104,7 @@ function parseArgs(argv) {
 function blend(neutral, target, intensity) {
   const params = {};
   for (const key of KEYS) {
-    const from = Number(neutral[key]);
+    const from = Number(neutral[key] ?? ENDING_DEFAULTS[key]);
     const to = Number(target[key] ?? from);
     params[key] = Math.round((from + (to - from) * intensity) * 1000) / 1000;
   }
@@ -114,6 +118,23 @@ function personaOf(profileName, config) {
   return profileName.includes('twitter') ? 'twitter' : 'bright';
 }
 
+// raim_tts_lambda/src/voicevox_wrapper.rs の apply_ending と同じ。
+// 最後の句の、最後の声のある音の高さと長さを変え、句の間の長さを変える
+function applyEnding(query, params) {
+  const phrases = query.accent_phrases || [];
+  for (const phrase of phrases) {
+    if (phrase.pause_mora) phrase.pause_mora.vowel_length *= params.pauseScale;
+  }
+  const moras = phrases.length ? phrases[phrases.length - 1].moras : [];
+  if (!moras.length) return;
+  let index = -1;
+  for (let i = moras.length - 1; i >= 0; i -= 1) {
+    if (moras[i].pitch > 0) { index = i; break; }
+  }
+  if (index >= 0) moras[index].pitch += params.endPitch;
+  moras[index >= 0 ? index : moras.length - 1].vowel_length *= params.endLengthScale;
+}
+
 async function synthesize(host, speaker, text, params) {
   const queryRes = await fetch(
     `${host}/audio_query?speaker=${speaker}&text=${encodeURIComponent(text)}`,
@@ -121,7 +142,8 @@ async function synthesize(host, speaker, text, params) {
   );
   if (!queryRes.ok) throw new Error(`audio_query ${queryRes.status}: ${await queryRes.text()}`);
   const query = await queryRes.json();
-  Object.assign(query, params);
+  for (const key of SCALE_KEYS) query[key] = params[key];
+  applyEnding(query, params);
 
   const synthRes = await fetch(`${host}/synthesis?speaker=${speaker}`, {
     method: 'POST',

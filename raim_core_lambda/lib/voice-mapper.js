@@ -26,6 +26,12 @@ const DEFAULT_VOICE_PARAMS = Object.freeze({
   pitchScale: 0.0,
   intonationScale: 1.0,
   volumeScale: 1.0,
+  // 語尾の高さ・長さと、文中の間の長さ（TTS Lambda が AudioQuery の音を直接いじる）。
+  // つむぎはスタイルが1つしか無いので、以前は文全体の速さ・高さ・抑揚だけで
+  // 感情を出していた。この3つが既定値なら TTS Lambda は何も変えない。
+  endPitch: 0.0,
+  endLengthScale: 1.0,
+  pauseScale: 1.0,
 });
 
 function loadConfig() {
@@ -122,6 +128,9 @@ function getVoiceParams(emotion = 'neutral', intensity = 0.5) {
     pitchScale: lerp('pitchScale'),
     intonationScale: lerp('intonationScale'),
     volumeScale: lerp('volumeScale'),
+    endPitch: lerp('endPitch'),
+    endLengthScale: lerp('endLengthScale'),
+    pauseScale: lerp('pauseScale'),
   };
 }
 

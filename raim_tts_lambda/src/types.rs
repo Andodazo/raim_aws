@@ -10,6 +10,9 @@ pub const DEFAULT_SPEED_SCALE: f64 = 1.0;
 pub const DEFAULT_PITCH_SCALE: f64 = 0.0;
 pub const DEFAULT_INTONATION_SCALE: f64 = 1.0;
 pub const DEFAULT_VOLUME_SCALE: f64 = 1.0;
+pub const DEFAULT_END_PITCH: f64 = 0.0;
+pub const DEFAULT_END_LENGTH_SCALE: f64 = 1.0;
+pub const DEFAULT_PAUSE_SCALE: f64 = 1.0;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -41,6 +44,22 @@ pub struct VoiceParams {
 
     #[serde(rename = "volumeScale", default = "default_volume_scale")]
     pub volume_scale: f64,
+
+    // 以下の3つは、つむぎにはスタイルが1つしかないので、感情を語尾と間で出すためのもの。
+    // 以前は文全体の速さ・高さ・抑揚しか変えられなかった。
+    // 送られてこなければ何も変えない（古い Core からの要求もそのまま読める）。
+
+    /// 文の最後の音の高さに足す量（pitch と同じ単位）。+ で語尾が上がる、- で下がる。
+    #[serde(rename = "endPitch", default = "default_end_pitch")]
+    pub end_pitch: f64,
+
+    /// 文の最後の音の長さに掛ける倍率。1 より大きいと語尾が伸びる。
+    #[serde(rename = "endLengthScale", default = "default_end_length_scale")]
+    pub end_length_scale: f64,
+
+    /// 句読点などの間（ポーズ）の長さに掛ける倍率。
+    #[serde(rename = "pauseScale", default = "default_pause_scale")]
+    pub pause_scale: f64,
 }
 
 fn default_speed_scale() -> f64 {
@@ -57,6 +76,18 @@ fn default_intonation_scale() -> f64 {
 
 fn default_volume_scale() -> f64 {
     DEFAULT_VOLUME_SCALE
+}
+
+fn default_end_pitch() -> f64 {
+    DEFAULT_END_PITCH
+}
+
+fn default_end_length_scale() -> f64 {
+    DEFAULT_END_LENGTH_SCALE
+}
+
+fn default_pause_scale() -> f64 {
+    DEFAULT_PAUSE_SCALE
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -106,6 +137,9 @@ impl VoiceParams {
             ("pitchScale", self.pitch_scale, -0.15, 0.15),
             ("intonationScale", self.intonation_scale, 0.0, 2.0),
             ("volumeScale", self.volume_scale, 0.0, 2.0),
+            ("endPitch", self.end_pitch, -0.3, 0.3),
+            ("endLengthScale", self.end_length_scale, 0.5, 2.5),
+            ("pauseScale", self.pause_scale, 0.0, 3.0),
         ];
 
         for (name, value, minimum, maximum) in values {
@@ -220,6 +254,31 @@ mod tests {
         assert_eq!(request.voice_params.pitch_scale, 0.0);
         assert_eq!(request.voice_params.intonation_scale, 1.0);
         assert_eq!(request.voice_params.volume_scale, 1.0);
+        assert_eq!(request.voice_params.end_pitch, 0.0);
+        assert_eq!(request.voice_params.end_length_scale, 1.0);
+        assert_eq!(request.voice_params.pause_scale, 1.0);
+    }
+
+    #[test]
+    fn reads_and_validates_ending_parameters() {
+        let request: TtsRequest = serde_json::from_value(json!({
+            "schemaVersion": 1,
+            "type": "tts.synthesize",
+            "requestId": "req-001",
+            "chunkId": "chunk-0",
+            "text": "そっか",
+            "voiceParams": {"speaker_id": 8, "endPitch": -0.04, "endLengthScale": 1.4, "pauseScale": 1.3}
+        }))
+        .expect("ending parameters should deserialize");
+
+        assert_eq!(request.voice_params.end_pitch, -0.04);
+        assert_eq!(request.voice_params.end_length_scale, 1.4);
+        assert_eq!(request.voice_params.pause_scale, 1.3);
+        assert!(request.validate(200).is_ok());
+
+        let mut request = valid_request();
+        request.voice_params.end_length_scale = 3.0;
+        assert_eq!(request.validate(200).unwrap_err().code, "INVALID_VOICE_PARAMS");
     }
 
     #[test]

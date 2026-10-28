@@ -8,18 +8,18 @@
       "speaker_name": "春日部つむぎ",
       "default_speaker_id": 8,
       "emotion_map": {
-        "neutral": { "speaker_id": 8, "speedScale": 1.0, "pitchScale": 0.0, "intonationScale": 1.0, "volumeScale": 1.0 },
-        "happy": { "speaker_id": 8, "speedScale": 1.10, "pitchScale": 0.03, "intonationScale": 1.2, "volumeScale": 1.0 },
-        "sad": { "speaker_id": 8, "speedScale": 0.90, "pitchScale": -0.03, "intonationScale": 0.7, "volumeScale": 0.9 },
-        "caring": { "speaker_id": 8, "speedScale": 0.95, "pitchScale": 0.0, "intonationScale": 0.9, "volumeScale": 1.0 },
-        "angry": { "speaker_id": 8, "speedScale": 1.05, "pitchScale": -0.03, "intonationScale": 1.3, "volumeScale": 1.1 },
-        "surprised": { "speaker_id": 8, "speedScale": 1.15, "pitchScale": 0.05, "intonationScale": 1.3, "volumeScale": 1.0 },
-        "embarrassed": { "speaker_id": 8, "speedScale": 1.05, "pitchScale": 0.02, "intonationScale": 1.1, "volumeScale": 0.95 },
-        "excited": { "speaker_id": 8, "speedScale": 1.20, "pitchScale": 0.05, "intonationScale": 1.4, "volumeScale": 1.05 },
-        "curious": { "speaker_id": 8, "speedScale": 1.05, "pitchScale": 0.02, "intonationScale": 1.15, "volumeScale": 1.0 },
-        "amused": { "speaker_id": 8, "speedScale": 1.08, "pitchScale": 0.02, "intonationScale": 1.15, "volumeScale": 1.0 },
-        "thoughtful": { "speaker_id": 8, "speedScale": 0.92, "pitchScale": -0.01, "intonationScale": 0.85, "volumeScale": 0.95 },
-        "playful": { "speaker_id": 8, "speedScale": 1.12, "pitchScale": 0.04, "intonationScale": 1.3, "volumeScale": 1.0 }
+        "neutral": { "speaker_id": 8, "speedScale": 1.0, "pitchScale": 0.0, "intonationScale": 1.0, "volumeScale": 1.0, "endPitch": 0.000, "endLengthScale": 1.00, "pauseScale": 1.00 },
+        "happy": { "speaker_id": 8, "speedScale": 1.10, "pitchScale": 0.03, "intonationScale": 1.2, "volumeScale": 1.0, "endPitch": 0.120, "endLengthScale": 1.10, "pauseScale": 0.90 },
+        "sad": { "speaker_id": 8, "speedScale": 0.90, "pitchScale": -0.03, "intonationScale": 0.7, "volumeScale": 0.9, "endPitch": -0.150, "endLengthScale": 1.35, "pauseScale": 1.40 },
+        "caring": { "speaker_id": 8, "speedScale": 0.95, "pitchScale": 0.0, "intonationScale": 0.9, "volumeScale": 1.0, "endPitch": -0.040, "endLengthScale": 1.20, "pauseScale": 1.20 },
+        "angry": { "speaker_id": 8, "speedScale": 1.05, "pitchScale": -0.03, "intonationScale": 1.3, "volumeScale": 1.1, "endPitch": -0.080, "endLengthScale": 0.90, "pauseScale": 0.90 },
+        "surprised": { "speaker_id": 8, "speedScale": 1.15, "pitchScale": 0.05, "intonationScale": 1.3, "volumeScale": 1.0, "endPitch": 0.200, "endLengthScale": 1.00, "pauseScale": 0.80 },
+        "embarrassed": { "speaker_id": 8, "speedScale": 1.05, "pitchScale": 0.02, "intonationScale": 1.1, "volumeScale": 0.95, "endPitch": 0.000, "endLengthScale": 1.15, "pauseScale": 1.10 },
+        "excited": { "speaker_id": 8, "speedScale": 1.20, "pitchScale": 0.05, "intonationScale": 1.4, "volumeScale": 1.05, "endPitch": 0.160, "endLengthScale": 1.10, "pauseScale": 0.80 },
+        "curious": { "speaker_id": 8, "speedScale": 1.05, "pitchScale": 0.02, "intonationScale": 1.15, "volumeScale": 1.0, "endPitch": 0.150, "endLengthScale": 1.10, "pauseScale": 1.00 },
+        "amused": { "speaker_id": 8, "speedScale": 1.08, "pitchScale": 0.02, "intonationScale": 1.15, "volumeScale": 1.0, "endPitch": 0.080, "endLengthScale": 1.15, "pauseScale": 1.00 },
+        "thoughtful": { "speaker_id": 8, "speedScale": 0.92, "pitchScale": -0.01, "intonationScale": 0.85, "volumeScale": 0.95, "endPitch": -0.080, "endLengthScale": 1.30, "pauseScale": 1.40 },
+        "playful": { "speaker_id": 8, "speedScale": 1.12, "pitchScale": 0.04, "intonationScale": 1.3, "volumeScale": 1.0, "endPitch": 0.120, "endLengthScale": 1.20, "pauseScale": 0.95 }
       }
     },
     "tsumugi_downer": {
@@ -27,18 +27,18 @@
       "speaker_name": "春日部つむぎ",
       "default_speaker_id": 8,
       "emotion_map": {
-        "neutral": { "speaker_id": 8, "speedScale": 0.93, "pitchScale": -0.02, "intonationScale": 0.85, "volumeScale": 0.95 },
-        "happy": { "speaker_id": 8, "speedScale": 1.00, "pitchScale": 0.00, "intonationScale": 1.00, "volumeScale": 0.95 },
-        "sad": { "speaker_id": 8, "speedScale": 0.88, "pitchScale": -0.04, "intonationScale": 0.70, "volumeScale": 0.90 },
-        "caring": { "speaker_id": 8, "speedScale": 0.92, "pitchScale": -0.01, "intonationScale": 0.85, "volumeScale": 0.95 },
-        "angry": { "speaker_id": 8, "speedScale": 1.00, "pitchScale": -0.04, "intonationScale": 1.05, "volumeScale": 1.00 },
-        "surprised": { "speaker_id": 8, "speedScale": 1.05, "pitchScale": 0.03, "intonationScale": 1.15, "volumeScale": 1.00 },
-        "embarrassed": { "speaker_id": 8, "speedScale": 0.97, "pitchScale": 0.00, "intonationScale": 0.95, "volumeScale": 0.90 },
-        "excited": { "speaker_id": 8, "speedScale": 1.12, "pitchScale": 0.03, "intonationScale": 1.25, "volumeScale": 1.00 },
-        "curious": { "speaker_id": 8, "speedScale": 0.97, "pitchScale": 0.00, "intonationScale": 0.95, "volumeScale": 0.95 },
-        "amused": { "speaker_id": 8, "speedScale": 0.98, "pitchScale": 0.01, "intonationScale": 0.92, "volumeScale": 0.95 },
-        "thoughtful": { "speaker_id": 8, "speedScale": 0.88, "pitchScale": -0.03, "intonationScale": 0.78, "volumeScale": 0.92 },
-        "playful": { "speaker_id": 8, "speedScale": 1.00, "pitchScale": 0.01, "intonationScale": 1.00, "volumeScale": 0.95 }
+        "neutral": { "speaker_id": 8, "speedScale": 0.93, "pitchScale": -0.02, "intonationScale": 0.85, "volumeScale": 0.95, "endPitch": -0.040, "endLengthScale": 1.10, "pauseScale": 1.15 },
+        "happy": { "speaker_id": 8, "speedScale": 1.00, "pitchScale": 0.00, "intonationScale": 1.00, "volumeScale": 0.95, "endPitch": 0.052, "endLengthScale": 1.06, "pauseScale": 0.94 },
+        "sad": { "speaker_id": 8, "speedScale": 0.88, "pitchScale": -0.04, "intonationScale": 0.70, "volumeScale": 0.90, "endPitch": -0.110, "endLengthScale": 1.21, "pauseScale": 1.24 },
+        "caring": { "speaker_id": 8, "speedScale": 0.92, "pitchScale": -0.01, "intonationScale": 0.85, "volumeScale": 0.95, "endPitch": -0.044, "endLengthScale": 1.12, "pauseScale": 1.12 },
+        "angry": { "speaker_id": 8, "speedScale": 1.00, "pitchScale": -0.04, "intonationScale": 1.05, "volumeScale": 1.00, "endPitch": -0.068, "endLengthScale": 0.94, "pauseScale": 0.94 },
+        "surprised": { "speaker_id": 8, "speedScale": 1.05, "pitchScale": 0.03, "intonationScale": 1.15, "volumeScale": 1.00, "endPitch": 0.100, "endLengthScale": 1.00, "pauseScale": 0.88 },
+        "embarrassed": { "speaker_id": 8, "speedScale": 0.97, "pitchScale": 0.00, "intonationScale": 0.95, "volumeScale": 0.90, "endPitch": -0.020, "endLengthScale": 1.09, "pauseScale": 1.06 },
+        "excited": { "speaker_id": 8, "speedScale": 1.12, "pitchScale": 0.03, "intonationScale": 1.25, "volumeScale": 1.00, "endPitch": 0.076, "endLengthScale": 1.06, "pauseScale": 0.88 },
+        "curious": { "speaker_id": 8, "speedScale": 0.97, "pitchScale": 0.00, "intonationScale": 0.95, "volumeScale": 0.95, "endPitch": 0.070, "endLengthScale": 1.06, "pauseScale": 1.00 },
+        "amused": { "speaker_id": 8, "speedScale": 0.98, "pitchScale": 0.01, "intonationScale": 0.92, "volumeScale": 0.95, "endPitch": 0.028, "endLengthScale": 1.09, "pauseScale": 1.00 },
+        "thoughtful": { "speaker_id": 8, "speedScale": 0.88, "pitchScale": -0.03, "intonationScale": 0.78, "volumeScale": 0.92, "endPitch": -0.068, "endLengthScale": 1.18, "pauseScale": 1.24 },
+        "playful": { "speaker_id": 8, "speedScale": 1.00, "pitchScale": 0.01, "intonationScale": 1.00, "volumeScale": 0.95, "endPitch": 0.052, "endLengthScale": 1.12, "pauseScale": 0.97 }
       }
     },
     "tsumugi_twitter": {
@@ -46,18 +46,18 @@
       "speaker_name": "春日部つむぎ",
       "default_speaker_id": 8,
       "emotion_map": {
-        "neutral": { "speaker_id": 8, "speedScale": 1.05, "pitchScale": 0.01, "intonationScale": 1.10, "volumeScale": 1.00 },
-        "happy": { "speaker_id": 8, "speedScale": 1.12, "pitchScale": 0.04, "intonationScale": 1.30, "volumeScale": 1.00 },
-        "sad": { "speaker_id": 8, "speedScale": 0.93, "pitchScale": -0.02, "intonationScale": 0.80, "volumeScale": 0.92 },
-        "caring": { "speaker_id": 8, "speedScale": 0.95, "pitchScale": 0.00, "intonationScale": 0.95, "volumeScale": 0.97 },
-        "angry": { "speaker_id": 8, "speedScale": 1.08, "pitchScale": -0.02, "intonationScale": 1.30, "volumeScale": 1.05 },
-        "surprised": { "speaker_id": 8, "speedScale": 1.18, "pitchScale": 0.06, "intonationScale": 1.35, "volumeScale": 1.00 },
-        "embarrassed": { "speaker_id": 8, "speedScale": 1.10, "pitchScale": 0.03, "intonationScale": 1.15, "volumeScale": 0.95 },
-        "excited": { "speaker_id": 8, "speedScale": 1.22, "pitchScale": 0.05, "intonationScale": 1.45, "volumeScale": 1.05 },
-        "curious": { "speaker_id": 8, "speedScale": 1.08, "pitchScale": 0.03, "intonationScale": 1.20, "volumeScale": 1.00 },
-        "amused": { "speaker_id": 8, "speedScale": 1.12, "pitchScale": 0.03, "intonationScale": 1.25, "volumeScale": 1.00 },
-        "thoughtful": { "speaker_id": 8, "speedScale": 0.95, "pitchScale": -0.01, "intonationScale": 0.90, "volumeScale": 0.95 },
-        "playful": { "speaker_id": 8, "speedScale": 1.15, "pitchScale": 0.05, "intonationScale": 1.35, "volumeScale": 1.00 }
+        "neutral": { "speaker_id": 8, "speedScale": 1.05, "pitchScale": 0.01, "intonationScale": 1.10, "volumeScale": 1.00, "endPitch": 0.000, "endLengthScale": 1.00, "pauseScale": 1.00 },
+        "happy": { "speaker_id": 8, "speedScale": 1.12, "pitchScale": 0.04, "intonationScale": 1.30, "volumeScale": 1.00, "endPitch": 0.156, "endLengthScale": 1.13, "pauseScale": 0.87 },
+        "sad": { "speaker_id": 8, "speedScale": 0.93, "pitchScale": -0.02, "intonationScale": 0.80, "volumeScale": 0.92, "endPitch": -0.195, "endLengthScale": 1.46, "pauseScale": 1.52 },
+        "caring": { "speaker_id": 8, "speedScale": 0.95, "pitchScale": 0.00, "intonationScale": 0.95, "volumeScale": 0.97, "endPitch": -0.052, "endLengthScale": 1.26, "pauseScale": 1.26 },
+        "angry": { "speaker_id": 8, "speedScale": 1.08, "pitchScale": -0.02, "intonationScale": 1.30, "volumeScale": 1.05, "endPitch": -0.104, "endLengthScale": 0.87, "pauseScale": 0.87 },
+        "surprised": { "speaker_id": 8, "speedScale": 1.18, "pitchScale": 0.06, "intonationScale": 1.35, "volumeScale": 1.00, "endPitch": 0.260, "endLengthScale": 1.00, "pauseScale": 0.74 },
+        "embarrassed": { "speaker_id": 8, "speedScale": 1.10, "pitchScale": 0.03, "intonationScale": 1.15, "volumeScale": 0.95, "endPitch": 0.000, "endLengthScale": 1.19, "pauseScale": 1.13 },
+        "excited": { "speaker_id": 8, "speedScale": 1.22, "pitchScale": 0.05, "intonationScale": 1.45, "volumeScale": 1.05, "endPitch": 0.208, "endLengthScale": 1.13, "pauseScale": 0.74 },
+        "curious": { "speaker_id": 8, "speedScale": 1.08, "pitchScale": 0.03, "intonationScale": 1.20, "volumeScale": 1.00, "endPitch": 0.195, "endLengthScale": 1.13, "pauseScale": 1.00 },
+        "amused": { "speaker_id": 8, "speedScale": 1.12, "pitchScale": 0.03, "intonationScale": 1.25, "volumeScale": 1.00, "endPitch": 0.104, "endLengthScale": 1.19, "pauseScale": 1.00 },
+        "thoughtful": { "speaker_id": 8, "speedScale": 0.95, "pitchScale": -0.01, "intonationScale": 0.90, "volumeScale": 0.95, "endPitch": -0.104, "endLengthScale": 1.39, "pauseScale": 1.52 },
+        "playful": { "speaker_id": 8, "speedScale": 1.15, "pitchScale": 0.05, "intonationScale": 1.35, "volumeScale": 1.00, "endPitch": 0.156, "endLengthScale": 1.26, "pauseScale": 0.93 }
       }
     }
   }

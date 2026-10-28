@@ -14,6 +14,9 @@ test('maps neutral and happy using the raim_serverside profile', () => {
     pitchScale: 0,
     intonationScale: 1,
     volumeScale: 1,
+    endPitch: 0,
+    endLengthScale: 1,
+    pauseScale: 1,
   });
   assert.deepEqual(getVoiceParams('happy', 1), {
     speaker_id: 8,
@@ -21,6 +24,9 @@ test('maps neutral and happy using the raim_serverside profile', () => {
     pitchScale: 0.03,
     intonationScale: 1.2,
     volumeScale: 1,
+    endPitch: 0.12,
+    endLengthScale: 1.1,
+    pauseScale: 0.9,
   });
 });
 
@@ -31,6 +37,9 @@ test('uses the dominant Scene emotion for streamed TTS', () => {
     pitchScale: 0.024,
     intonationScale: 1.16,
     volumeScale: 1,
+    endPitch: 0.096,
+    endLengthScale: 1.08,
+    pauseScale: 0.92,
   });
 });
 
@@ -47,7 +56,10 @@ test('every profile has its own setting for all 12 emotions', () => {
     for (const emotion of emotions) {
       const entry = profile.emotion_map[emotion];
       assert.ok(entry, `${name} に ${emotion} が無い`);
-      for (const key of ['speedScale', 'pitchScale', 'intonationScale', 'volumeScale']) {
+      for (const key of [
+        'speedScale', 'pitchScale', 'intonationScale', 'volumeScale',
+        'endPitch', 'endLengthScale', 'pauseScale',
+      ]) {
         assert.ok(Number.isFinite(entry[key]), `${name}.${emotion}.${key}`);
       }
     }
@@ -83,4 +95,23 @@ test('an explicit voice profile wins, an unknown one falls back', () => {
     resolveVoiceProfileName({ RAIM_PERSONA: 'downer', RAIM_VOICE_PROFILE: 'nope' }, voiceConfig),
     'tsumugi_parametric'
   );
+});
+
+test('sad endings fall and stretch, surprised endings rise', () => {
+  // つむぎはスタイルが1つなので、語尾と間で感情を出す
+  const sad = getVoiceParams('sad', 1);
+  assert.ok(sad.endPitch < 0);
+  assert.ok(sad.endLengthScale > 1);
+  assert.ok(sad.pauseScale > 1);
+  assert.ok(getVoiceParams('surprised', 1).endPitch > 0);
+});
+
+test('ending values stay inside what the TTS Lambda accepts', () => {
+  for (const [name, profile] of Object.entries(voiceConfig.profiles)) {
+    for (const [emotion, entry] of Object.entries(profile.emotion_map)) {
+      assert.ok(Math.abs(entry.endPitch) <= 0.3, `${name}.${emotion}.endPitch`);
+      assert.ok(entry.endLengthScale >= 0.5 && entry.endLengthScale <= 2.5, `${name}.${emotion}.endLengthScale`);
+      assert.ok(entry.pauseScale >= 0 && entry.pauseScale <= 3, `${name}.${emotion}.pauseScale`);
+    }
+  }
 });
