@@ -49,6 +49,7 @@ const {
   buildSystemPrompt,
 } = require('./prompts/raim-system-prompt');
 const { FACT_CHECK_INSTRUCTION } = require('./fact-check');
+const { GREETING_USER_TEXT, GREETING_INSTRUCTION } = require('./greeting');
 
 // ─────────────────────────────────────────────
 // 内部ユーティリティ
@@ -582,6 +583,7 @@ function buildInitialMantleInput({
   conversationGap = '',
   factCheck = false,
   repeatNote = '',
+  greeting = false,
 }) {
   const messages = [];
 
@@ -614,6 +616,8 @@ function buildInitialMantleInput({
       ...(conversationGap ? ['', '---', '', conversationGap] : []),
       // 事実の質問なら、先に調べるよう指示する
       ...(factCheck ? ['', '---', '', FACT_CHECK_INSTRUCTION] : []),
+      // アプリを開いたときは、ライムから話しかける
+      ...(greeting ? ['', '---', '', GREETING_INSTRUCTION] : []),
     ].join('\n'),
   });
 
@@ -675,6 +679,7 @@ function buildFollowupMantleInput({
   conversationGap = '',
   factCheck = false,
   repeatNote = '',
+  greeting = false,
   now = new Date(),
 }) {
   const messages = [];
@@ -728,6 +733,10 @@ function buildFollowupMantleInput({
       situational.push(FACT_CHECK_INSTRUCTION);
     }
 
+    if (greeting) {
+      situational.push(GREETING_INSTRUCTION);
+    }
+
     if (withTools) {
       situational.push(TOOLS_DIGEST);
       if (hasStationAlarm(features)) {
@@ -750,11 +759,15 @@ function buildFollowupMantleInput({
       role: 'system',
       content: situational.join('\n\n'),
     });
-  } else if (conversationGap || factCheck) {
-    // full モードでも経過時間と事実確認の指示は別に渡す（全文プロンプトには含まれないため）
+  } else if (conversationGap || factCheck || greeting) {
+    // full モードでも経過時間・事実確認・話しかけの指示は別に渡す（全文プロンプトには含まれないため）
     messages.push({
       role: 'system',
-      content: [conversationGap, factCheck ? FACT_CHECK_INSTRUCTION : '']
+      content: [
+        conversationGap,
+        factCheck ? FACT_CHECK_INSTRUCTION : '',
+        greeting ? GREETING_INSTRUCTION : '',
+      ]
         .filter(Boolean)
         .join('\n\n'),
     });
@@ -838,9 +851,15 @@ function buildMantleInput({
   conversationGap = '',
   factCheck = false,
   history = [],
+  greeting = false,
 }) {
-  // この会話で前にも同じことを言われていたら、そのときの返事を添える
-  const repeatNote = buildRepeatNote(history, userText);
+  // アプリを開いたときは、利用者の発話の代わりに合図の文を置く。
+  // 同じ合図は毎回なので、「前にも同じことを言われた」の添え書きは付けない
+  if (greeting) {
+    userText = GREETING_USER_TEXT;
+    images = [];
+  }
+  const repeatNote = greeting ? '' : buildRepeatNote(history, userText);
 
   if (usePreviousResponseId) {
     // 継続モードでは Mantle 側が文脈を保持しているため、
@@ -854,6 +873,7 @@ function buildMantleInput({
       conversationGap,
       factCheck,
       repeatNote,
+      greeting,
     });
   }
 
@@ -868,6 +888,7 @@ function buildMantleInput({
     conversationGap,
     factCheck,
     repeatNote,
+    greeting,
   });
 }
 

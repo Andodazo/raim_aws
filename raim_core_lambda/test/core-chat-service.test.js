@@ -503,3 +503,50 @@ test('消したスレッドへの発言は、Mantle を呼ばずに THREAD_DELET
   assert.equal(result.retriable, false);
   assert.equal(mantleCalled, false);
 });
+
+test('アプリを開いたときの話しかけは、合図の文を残さずライムの返事だけを残す', async () => {
+  const calls = [];
+  const dependencies = createDependencies(calls);
+  let toolCheck = 0;
+  dependencies.isToolUseEnabled = async () => {
+    toolCheck += 1;
+    return true;
+  };
+  dependencies.selectScene = ({ userText }) => {
+    calls.push(['scene', userText]);
+    return { sceneId: 'default' };
+  };
+  dependencies.buildMantleInput = (input) => {
+    calls.push(['build', input]);
+    return input;
+  };
+  dependencies.appendTurn = async (turn) => {
+    calls.push(['append', turn]);
+    return {};
+  };
+
+  const result = await createCoreChatService(dependencies)({
+    schemaVersion: 1,
+    type: 'chat.request',
+    sub: 'user-1',
+    requestId: 'req-greet',
+    text: '',
+    images: [],
+    greeting: true,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.text, 'やあ');
+  // 本文が無いので、挨拶の Scene が選ばれる文で選ぶ
+  const scene = calls.find(([name]) => name === 'scene');
+  assert.notEqual(scene[1], '');
+  // ツールは見せない（一言話しかけるだけ）
+  assert.equal(toolCheck, 0);
+  const build = calls.find(([name]) => name === 'build');
+  assert.equal(build[1].greeting, true);
+  assert.equal(build[1].withTools, false);
+  const append = calls.find(([name]) => name === 'append');
+  assert.equal(append[1].userMessage, null);
+  assert.equal(append[1].assistantMessage.text, 'やあ');
+  assert.equal(append[1].assistantMessage.meta.greeting, true);
+});

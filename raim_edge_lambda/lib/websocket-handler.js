@@ -393,12 +393,16 @@ function createWebSocketHandler({
 
     // Core Lambdaが必要とする最小イベント形式に変換してRequest Queueへ送る。
     // Core側のcore-event.jsは、このpayloadを `source: websocket` として受け取る。
+    // アプリを開いたときの、ライムからの話しかけ（Core の greeting.js）。
+    // 本文も画像も持たないので、送られてきても渡さない
+    const greeting = normalized.action === 'greeting';
     const request = await getRequestPublisher().publishChatRequest({
       requestId: normalized.requestId,
       connectionId: normalized.connectionId,
       sub,
-      text: normalized.text,
-      images: normalized.images,
+      text: greeting ? '' : normalized.text,
+      images: greeting ? [] : normalized.images,
+      greeting,
       // クライアントが会話スレッドを指定した場合のみ入る。
       // 未指定なら Core が activeThreadId を使うか新規作成する。
       threadId: normalized.threadId,

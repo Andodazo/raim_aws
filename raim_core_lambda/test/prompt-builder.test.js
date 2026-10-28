@@ -426,3 +426,28 @@ test('followup turns on apps without the station alarm say it is not available',
   });
   assert.ok(!phone.messages.some((m) => String(m.content).includes('このアプリでは使えない')));
 });
+
+test('greeting puts the cue in the user slot and the instruction in the system messages', () => {
+  const { buildMantleInput } = require('../lib/prompt-builder');
+  const { GREETING_USER_TEXT, GREETING_INSTRUCTION } = require('../lib/greeting');
+  const scene = { id: 'greeting', description: '挨拶', few_shots: [] };
+
+  for (const usePreviousResponseId of [false, true]) {
+    const input = buildMantleInput({
+      userText: '',
+      scene,
+      usePreviousResponseId,
+      greeting: true,
+      history: [{ role: 'user', text: GREETING_USER_TEXT }],
+    });
+    const last = input.messages[input.messages.length - 1];
+    assert.equal(last.role, 'user');
+    assert.match(JSON.stringify(last.content), /アプリが開かれた合図/);
+    const systems = input.messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n');
+    assert.ok(systems.includes(GREETING_INSTRUCTION), `mode=${input.mode}`);
+  }
+
+  const normal = buildMantleInput({ userText: 'こんにちは', scene });
+  const systems = normal.messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n');
+  assert.ok(!systems.includes(GREETING_INSTRUCTION));
+});

@@ -29,6 +29,7 @@ test('normalizeCoreEvent normalizes a direct Core Lambda event', () => {
     features: [],
     location: null,
     speech: true,
+    greeting: false,
   });
 });
 
@@ -86,7 +87,30 @@ test('normalizeCoreEvent accepts the Edge Lambda Request Queue message shape', (
     features: [],
     location: null,
     speech: true,
+    greeting: false,
   });
+});
+
+test('normalizeCoreEvent accepts a greeting without text', () => {
+  // アプリを開いたときの話しかけは本文を持たない。普段のチャットなら入力不正になる
+  const result = normalizeCoreEvent({
+    schemaVersion: 1,
+    type: 'chat.request',
+    requestId: 'req-g',
+    sub: 'user-1',
+    source: 'websocket',
+    text: '',
+    images: [],
+    greeting: true,
+  });
+  assert.equal(result.greeting, true);
+  assert.equal(result.text, '');
+  assert.deepEqual(result.images, []);
+
+  assert.throws(
+    () => normalizeCoreEvent({ schemaVersion: 1, type: 'chat.request', sub: 'user-1', text: '' }),
+    /text|image|入力/i
+  );
 });
 
 test('normalizeCoreEvent rejects unsupported request schemaVersion', () => {
