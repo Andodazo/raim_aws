@@ -132,3 +132,26 @@ test('misheard sentences are not written down as facts', () => {
     assert.ok(instruction.includes('事実として書かない'));
   }
 });
+
+test('buildSummaryInput tells Mantle not to write the forgotten items', () => {
+  const messages = buildSummaryInput(
+    [{ role: 'user', content: '猫を飼ってるんだ' }],
+    '',
+    'full',
+    ['猫を飼っている']
+  );
+  const systems = messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n');
+  assert.ok(systems.includes('【書かないこと】'));
+  assert.ok(systems.includes('- 猫を飼っている'));
+
+  const plain = buildSummaryInput([{ role: 'user', content: 'やあ' }], '', 'full');
+  assert.ok(!plain.some((m) => String(m.content).includes('【書かないこと】')));
+});
+
+test('formatSummary drops an item that is exactly a forgotten one', () => {
+  const text = formatSummary(
+    '{"facts": ["猫を飼っている", "卒業制作をしている"], "relationship": []}',
+    ['猫を飼っている']
+  );
+  assert.equal(text, '【事実】\n- 卒業制作をしている');
+});

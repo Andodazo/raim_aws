@@ -41,6 +41,7 @@ const {
 const {
   MemoryGenerationChangedError,
   getMemoryGeneration,
+  getForgottenMemories,
   updateUserMemory,
   clearUserMemory,
 } = require('./lib/user-memory-store');
@@ -114,6 +115,19 @@ function shouldResetSession(thread, env) {
 // ─────────────────────────────────────────────
 
 /**
+ * 利用者が「忘れて」と消した項目を読む。読めなくても要約は続ける
+ * （消した項目が戻り得るが、要約が止まるよりよい。次の作り直しで除かれる）。
+ */
+async function readForgotten(sub, deps = {}) {
+  try {
+    return await (deps.getForgottenMemories || getForgottenMemories)(sub);
+  } catch (error) {
+    console.warn(`[Summary] could not read forgotten memories: ${error.message}`);
+    return [];
+  }
+}
+
+/**
  * 指定スレッドを要約して保存する。
  *
  * SQS 経由でも週次バッチでも、最終的にここへ来る。
@@ -135,8 +149,9 @@ async function summarizeThread({ sub, threadId }, deps = {}) {
     return { ok: false, reason: 'no_messages' };
   }
 
+  const forgotten = await readForgotten(sub, deps);
   const { summary } = await (deps.generateSummary || generateSummary)(
-    { history, previousSummary: thread.sessionSummary || '' },
+    { history, previousSummary: thread.sessionSummary || '', forgotten },
     { env }
   );
 
@@ -356,8 +371,9 @@ async function refreshUserMemory(sub, deps = {}) {
   // スレッド要約たちを入力として、さらに1段圧縮する。
   // summarize-service は「既存要約があれば統合」に対応しているため、
   // 入力を会話ログからスレッド要約へ差し替えるだけで流用できる。
+  const forgotten = await readForgotten(sub, deps);
   const { summary } = await (deps.generateSummary || generateSummary)(
-    { history: summaries, previousSummary: '' },
+    { history: summaries, previousSummary: '', forgotten },
     { env }
   );
 

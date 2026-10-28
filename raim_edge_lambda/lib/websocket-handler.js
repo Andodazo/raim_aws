@@ -29,6 +29,10 @@ const { createWebSocketPostback } = require('./websocket-postback');
 const { createRateLimiter } = require('./rate-limiter');
 const threadListStore = require('./thread-list-store');
 const userSessionStore = require('./user-session-store');
+
+// memory.forget で一度に消せる項目の数と、1項目の長さの上限
+const MAX_FORGET_ITEMS = 50;
+const MAX_MEMORY_ITEM_LENGTH = 500;
 const crypto = require('crypto');
 const { SQSClient, SendMessageCommand } = require('@aws-sdk/client-sqs');
 const {
@@ -268,6 +272,59 @@ function createWebSocketHandler({
   }
 
   /**
+   * 覚えていること（userMemory）を返す。memory.forget なら、選んだ項目を消してから返す。
+   *
+   * 以前は覚えていることを見る方法が無く、ライムが何を覚えているか分からなかった。
+   * 消すには会話ごと消すしかなかった。
+   */
+  async function handleMemory(sub, normalized) {
+    const store = getUserSessionStore();
+    const raw = normalized.rawPayload || {};
+
+    try {
+      let memory;
+      if (normalized.action === 'memory.forget') {
+        const items = (Array.isArray(raw.items) ? raw.items : [])
+          .filter((v) => typeof v === 'string')
+          .map((v) => v.trim())
+          .filter((v) => v && v.length <= MAX_MEMORY_ITEM_LENGTH)
+          .slice(0, MAX_FORGET_ITEMS);
+        const all = raw.all === true;
+        if (!all && items.length === 0) {
+          return createHttpResponse(400, {
+            code: 'INVALID_INPUT',
+            message: 'items or all is required for memory.forget',
+          });
+        }
+        memory = await store.forgetMemory(sub, { items, all });
+        console.log(`[Memory] forgot: all=${all} items=${items.length}`);
+      } else {
+        memory = await store.getMemory(sub);
+      }
+
+      await getPostback().postJson(normalized.connectionId, {
+        type: 'memory',
+        requestId: normalized.requestId,
+        facts: memory.facts,
+        relationship: memory.relationship,
+        updatedAt: memory.updatedAt,
+      });
+
+      return createAcceptedResponse({
+        type: 'accepted',
+        requestId: normalized.requestId,
+      });
+    } catch (error) {
+      console.error(`[Memory] ${normalized.action} failed: ${error.message}`);
+
+      return createHttpResponse(500, {
+        code: 'MEMORY_FAILED',
+        message: 'Failed to read or update memory',
+      });
+    }
+  }
+
+  /**
    * Summary Lambda へユーザー記憶の再生成を依頼する。
    *
    * キューが未設定なら何もしない。
@@ -376,6 +433,11 @@ function createWebSocketHandler({
 
     if (normalized.action === 'thread.history') {
       return handleThreadHistory(sub, normalized);
+    }
+
+    // 覚えていることの表示と削除。DynamoDB を読み書きするだけなので Edge で返す
+    if (normalized.action === 'memory.get' || normalized.action === 'memory.forget') {
+      return handleMemory(sub, normalized);
     }
 
     // 人ごとの回数の上限（C-04）。一覧・履歴・削除は DynamoDB を読むだけで

@@ -71,6 +71,33 @@ async function getUserMemory(sub, deps = {}) {
 }
 
 /**
+ * 利用者が「忘れて」と消した項目（アプリの「覚えていること」から消したもの）。
+ *
+ * Edge が userMemory から消すときに足していく。記憶や要約を作り直すときに
+ * 同じことをまた書かないよう、Mantle に渡して除かせる。
+ * 消した直後に作り直すことがあるので、強い整合性で読む。
+ */
+async function getForgottenMemories(sub, deps = {}) {
+  if (!sub) {
+    throw new Error('sub is required');
+  }
+
+  const client = deps.docClient || getDocClient();
+
+  const result = await client.send(
+    new GetCommand({
+      TableName: deps.tableName || TABLE_NAME,
+      Key: { sub },
+      ProjectionExpression: 'forgottenMemories',
+      ConsistentRead: true,
+    })
+  );
+
+  const value = result.Item?.forgottenMemories;
+  return Array.isArray(value) ? value.map(String).filter(Boolean) : [];
+}
+
+/**
  * 記憶の世代番号を読む。まだ無ければ null。
  *
  * スレッドを削除するたびに Edge が1つ進める（同時に記憶を空にする）。
@@ -207,6 +234,7 @@ async function clearUserMemory(sub, deps = {}) {
 }
 
 module.exports = {
+  getForgottenMemories,
   TABLE_NAME,
   MemoryGenerationChangedError,
   getMemoryGeneration,
