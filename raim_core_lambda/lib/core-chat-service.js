@@ -384,6 +384,8 @@ function createCoreChatService(dependencyOverrides = {}) {
       features: input.features,
       conversationGap,
       factCheck,
+      // この会話の履歴。同じ発言が前にもあれば、そのときの返事を添えるのに使う
+      history: threadContext.thread?.messages || [],
     });
     // policyが期限・存在状態を確認済みの時だけprevious_response_idを送る。
     let previousResponseId = sessionState.usePreviousResponseId
@@ -455,6 +457,7 @@ function createCoreChatService(dependencyOverrides = {}) {
           features: input.features,
           conversationGap,
           factCheck,
+          history: threadContext.thread?.messages || [],
         });
 
         mantleInput = rebuiltInput;
@@ -540,15 +543,23 @@ function createCoreChatService(dependencyOverrides = {}) {
         console.warn(`[Tool] 頼まれていない操作なので送りませんでした: ${clientAction.action}`);
       }
 
+      // 検索の言葉が空のまま web_search を呼ぶことがある（「AとBの新作、どっち」の
+      // ような短い発言で、2026-10-28 のテスト）。検索しても失敗するだけなので、
+      // 「調べてくるね」も言わずに、何を調べるか聞き返させる。
+      const emptySearchQuery = toolName === 'web_search' &&
+        String(toolArgs?.query || '').trim() === '';
+
       // ツール呼出中であることをクライアントへ知らせる。
       // Gemmaは本文を返せないため、ここはサーバー側の固定セリフ。
-      await notifyToolCall({
-        toolName,
-        toolArgs,
-        turn: toolTurn,
-        introText: dependencies.pickToolIntro(toolName, toolTurn),
-        description: dependencies.getToolDescription(toolName, toolArgs),
-      });
+      if (!emptySearchQuery) {
+        await notifyToolCall({
+          toolName,
+          toolArgs,
+          turn: toolTurn,
+          introText: dependencies.pickToolIntro(toolName, toolTurn),
+          description: dependencies.getToolDescription(toolName, toolArgs),
+        });
+      }
 
       // アプリに頼むツール（駅アラームなど）は、ライムの返事より先に
       // アプリへ操作を送る。返事の生成を待たずに乗車モードを始められる。
@@ -557,16 +568,26 @@ function createCoreChatService(dependencyOverrides = {}) {
       }
 
       // 天気の場所が指定されないときのために、アプリの現在地（約10kmに丸めたもの）も渡す
-      const toolResult = clientActionAllowed
-        ? await dependencies.executeTool(toolName, toolArgs, {
+      let toolResult;
+      if (emptySearchQuery) {
+        toolResult = {
+          error: true,
+          message: '検索する言葉が空だったので、調べていません。' +
+            '何について調べればいいか、利用者に聞いてください。',
+          tool: toolName,
+        };
+      } else if (clientActionAllowed) {
+        toolResult = await dependencies.executeTool(toolName, toolArgs, {
           location: input.location,
-        })
-        : {
+        });
+      } else {
+        toolResult = {
           error: true,
           message: '利用者が今回そう頼んだと確かめられなかったので、アプリには頼んでいません。' +
             '本当にそうしてほしいか、利用者に聞いてください。',
           tool: toolName,
         };
+      }
 
       toolExecuted = true;
 
@@ -579,6 +600,7 @@ function createCoreChatService(dependencyOverrides = {}) {
         // 何を調べたか（検索語・都市・駅）。分析で「どう調べたか」を見るため
         query: String(toolArgs?.query || toolArgs?.city || toolArgs?.station || ''),
         ok: !(toolResult && toolResult.error),
+        ...(emptySearchQuery ? { skipped: 'empty_query' } : {}),
       });
 
       // ツール結果をResponses APIの形式でMantleへ戻す。

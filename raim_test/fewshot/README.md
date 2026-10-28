@@ -21,7 +21,7 @@
 | advice | thoughtful | 相談・どっちがいいか |
 | play | playful | なぞなぞ・しりとり・「〇〇って言って」 |
 
-各 Scene に3〜4組（question と gaming には「知らない」と答える例を追加）。`bright` は `few_shots`、`downer` は `few_shots_downer` に入る。
+各 Scene に3〜4組（question と gaming には「知らない」と答える例を追加）。`bright` は `few_shots`、`downer` は `few_shots_downer`、`twitter`（生意気で茶目っ気のある人格、v6）は `few_shots_twitter` に入る。
 
 ## 反映手順（CloudShell）
 

@@ -39,7 +39,7 @@ test('the target emotion leads in most examples of its scene', () => {
 test('only known emotion keys are used', () => {
   for (const scene of scenes) {
     for (const shot of scene.shots) {
-      for (const example of [shot.bright, shot.downer]) {
+      for (const example of [shot.bright, shot.downer, shot.twitter]) {
         for (const key of Object.keys(example.emotions)) {
           assert.ok(EMOTIONS.includes(key), `${scene.id}: ${key}`);
         }
@@ -60,7 +60,7 @@ test('downer examples keep the downer tone', () => {
 test('examples are short enough for TTS', () => {
   for (const scene of scenes) {
     for (const shot of scene.shots) {
-      for (const example of [shot.bright, shot.downer]) {
+      for (const example of [shot.bright, shot.downer, shot.twitter]) {
         assert.ok([...example.raim].length <= 45, `${scene.id}: ${example.raim}`);
         assert.ok(!example.raim.includes('\n'));
       }
@@ -68,16 +68,42 @@ test('examples are short enough for TTS', () => {
   }
 });
 
-test('scenes turn into few-shot messages for both personas', () => {
+test('scenes turn into few-shot messages for every persona', () => {
   for (const scene of scenes) {
     const item = {
       id: scene.id,
       few_shots: scene.shots.map((s) => ({ user: s.user, ...s.bright })),
       few_shots_downer: scene.shots.map((s) => ({ user: s.user, ...s.downer })),
+      few_shots_twitter: scene.shots.map((s) => ({ user: s.user, ...s.twitter })),
     };
     assert.equal(buildFewShotMessages(item, 'bright').length, scene.shots.length * 2);
     const downer = buildFewShotMessages(item, 'downer');
     assert.ok(downer[1].content.includes(scene.shots[0].downer.raim));
+    const twitter = buildFewShotMessages(item, 'twitter');
+    assert.ok(twitter[1].content.includes(scene.shots[0].twitter.raim));
+  }
+});
+
+test('twitter examples lead with the scene emotion, skip 「あなた」, and stay out of jokes on sad news (v6.0)', () => {
+  for (const scene of scenes) {
+    const examples = scene.shots.map((shot) => shot.twitter);
+    for (const example of examples) {
+      assert.ok(example && example.raim, `${scene.id}: twitter が空`);
+      // 「あなた」呼びが距離を感じさせていた
+      assert.ok(!example.raim.includes('あなた'), `${scene.id}: ${example.raim}`);
+      // 声で読むので顔文字や w は使わない
+      assert.ok(!/[ｗw（(]笑|[)）]$/.test(example.raim), `${scene.id}: ${example.raim}`);
+    }
+    if (scene.target) {
+      const leads = examples.filter((e) => dominant(e.emotions) === scene.target).length;
+      assert.ok(leads >= examples.length - 1, `${scene.id}: ${scene.target} が中心の例が ${leads}/${examples.length}`);
+    }
+    if (scene.id === 'sad_news' || scene.id === 'tired') {
+      for (const example of examples) {
+        assert.ok(!('playful' in example.emotions) || example.emotions.playful < 0.3, `${scene.id}: ${example.raim}`);
+        assert.ok(!('amused' in example.emotions), `${scene.id}: ${example.raim}`);
+      }
+    }
   }
 });
 
@@ -113,7 +139,7 @@ test('greeting examples do not imply an earlier visit', () => {
   for (const scene of scenes) {
     for (const shot of scene.shots) {
       if (!/こんにちは|おはよう|こんばんは/.test(shot.user)) continue;
-      for (const example of [shot.bright, shot.downer]) {
+      for (const example of [shot.bright, shot.downer, shot.twitter]) {
         assert.ok(!/また|今日も|さっき/.test(example.raim), `${scene.id}: ${example.raim}`);
       }
     }
