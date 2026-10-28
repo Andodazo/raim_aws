@@ -340,3 +340,89 @@ test('first turn: the greeting example is left out and the note comes before the
   assert.deepEqual(userTurns, ['今日はいい天気だね', 'こんにちは']);
   assert.equal(input.messages[input.messages.length - 2], FEW_SHOT_END_MESSAGE);
 });
+
+// ─────────────────────────────────────────────
+// v6.0（2026-10-28 のテストの直し）
+// ─────────────────────────────────────────────
+
+const {
+  buildRepeatNote,
+  buildMantleInput,
+  buildUserMemoryContext,
+  selectFewShots,
+} = require('../lib/prompt-builder');
+
+const REPEAT_HISTORY = [
+  { role: 'user', text: 'はじめまして' },
+  { role: 'assistant', text: 'はじめまして！' },
+  { role: 'user', text: '君と話したいことがある' },
+  { role: 'assistant', text: 'うん、聞くよ！どんなことかな？' },
+];
+
+test('a repeated message brings back the earlier reply so Raim answers differently', () => {
+  // 1回目と2回目に一字一句同じ返事をしていた
+  const note = buildRepeatNote(REPEAT_HISTORY, '君と話したいことがある！');
+  assert.ok(note.includes('前にも言われている'));
+  assert.ok(note.includes('「うん、聞くよ！どんなことかな？」'));
+  assert.ok(note.includes('同じ言い方は使わない'));
+
+  assert.equal(buildRepeatNote(REPEAT_HISTORY, 'ラーメン好き？'), '');
+  assert.equal(buildRepeatNote([], '君と話したいことがある'), '');
+  assert.equal(buildRepeatNote(undefined, '君と話したいことがある'), '');
+});
+
+test('the repeat note reaches both initial and followup inputs, right before the message', () => {
+  for (const usePreviousResponseId of [false, true]) {
+    const input = buildMantleInput({
+      userText: '君と話したいことがある',
+      usePreviousResponseId,
+      history: REPEAT_HISTORY,
+    });
+    const last = input.messages[input.messages.length - 1];
+    const beforeLast = input.messages[input.messages.length - 2];
+    assert.equal(last.role, 'user');
+    assert.equal(beforeLast.role, 'system');
+    assert.ok(beforeLast.content.includes('【同じ発言】'), input.mode);
+  }
+
+  const fresh = buildMantleInput({ userText: '君と話したいことがある', history: [] });
+  assert.ok(!fresh.messages.some((m) => String(m.content).includes('【同じ発言】')));
+});
+
+test('an empty memory says Raim remembers nothing yet', () => {
+  // 新しい会話で「僕のこと覚えてる？」に「もちろん覚えてるよ」と返していた
+  const context = buildUserMemoryContext('');
+  assert.ok(context.includes('まだ何もない'));
+  assert.ok(context.includes('覚えているふりをしない'));
+
+  const input = buildMantleInput({ userText: '僕のこと覚えてる？', userMemory: '' });
+  assert.ok(input.messages.some((m) => String(m.content).includes('まだ何もない')));
+});
+
+test('each persona picks its own few-shot examples', () => {
+  const scene = {
+    few_shots: [{ user: 'こんにちは', raim: 'こんにちは！話しかけてくれて嬉しいな' }],
+    few_shots_downer: [{ user: 'こんにちは', raim: 'ん、こんにちは' }],
+    few_shots_twitter: [{ user: 'こんにちは', raim: 'やっほー。ちょうど暇してたとこだよ' }],
+  };
+  assert.equal(selectFewShots(scene, 'bright')[0].raim, 'こんにちは！話しかけてくれて嬉しいな');
+  assert.equal(selectFewShots(scene, 'downer')[0].raim, 'ん、こんにちは');
+  assert.equal(selectFewShots(scene, 'twitter')[0].raim, 'やっほー。ちょうど暇してたとこだよ');
+  // 人格用の例がまだ無い Scene では few_shots を使う
+  assert.equal(
+    selectFewShots({ few_shots: scene.few_shots }, 'twitter')[0].raim,
+    'こんにちは！話しかけてくれて嬉しいな'
+  );
+});
+
+test('followup turns on apps without the station alarm say it is not available', () => {
+  const windows = buildFollowupMantleInput({ userText: '新宿で起こして', withTools: true, features: [] });
+  assert.ok(windows.messages.some((m) => String(m.content).includes('このアプリでは使えない')));
+
+  const phone = buildFollowupMantleInput({
+    userText: '新宿で起こして',
+    withTools: true,
+    features: ['station_alarm'],
+  });
+  assert.ok(!phone.messages.some((m) => String(m.content).includes('このアプリでは使えない')));
+});

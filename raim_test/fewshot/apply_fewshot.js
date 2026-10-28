@@ -12,7 +12,8 @@
  *
  * 書き換える属性
  *   description / embedding_text / embedding_examples / default_emotions /
- *   target_emotion / few_shots（bright 用）/ few_shots_downer（downer 用）
+ *   target_emotion / few_shots（bright 用）/ few_shots_downer（downer 用）/
+ *   few_shots_twitter（twitter 用）
  *
  * textCentroid には触れない（UpdateItem の SET なので残る）。
  * 新しい Scene と、embedding_text / embedding_examples を変えた Scene は、
@@ -26,6 +27,9 @@ const path = require('path');
 
 const TABLE = process.env.SCENE_TABLE_NAME || 'RAiM-FewShot-dev';
 const REGION = process.env.AWS_REGION || 'ap-northeast-1';
+
+// 例文を持つ人格。bright は few_shots、ほかは few_shots_<人格> に入る
+const PERSONAS = ['bright', 'downer', 'twitter'];
 
 const EMOTIONS = new Set([
   'neutral', 'happy', 'sad', 'angry', 'surprised', 'caring',
@@ -56,7 +60,7 @@ function validate(scenes) {
     }
 
     for (const shot of scene.shots || []) {
-      for (const persona of ['bright', 'downer']) {
+      for (const persona of PERSONAS) {
         const example = shot[persona];
         if (!example || !example.raim) {
           errors.push(`${scene.id}: 「${shot.user}」の ${persona} が空`);
@@ -93,6 +97,11 @@ function toItemFields(scene) {
         ? { overall_intensity: shot.downer.overall_intensity }
         : {}),
     })),
+    few_shots_twitter: shots.map((shot) => ({
+      user: shot.user,
+      raim: shot.twitter.raim,
+      emotions: shot.twitter.emotions,
+    })),
   };
 }
 
@@ -127,7 +136,7 @@ async function main() {
   do {
     const page = await client.send(new ScanCommand({
       TableName: TABLE,
-      ProjectionExpression: 'id, description, embedding_text, embedding_examples, default_emotions, few_shots, few_shots_downer',
+      ProjectionExpression: 'id, description, embedding_text, embedding_examples, default_emotions, few_shots, few_shots_downer, few_shots_twitter',
       ExclusiveStartKey: startKey,
     }));
     backup.push(...(page.Items || []));

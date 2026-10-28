@@ -122,3 +122,13 @@ test('facts mode has the same guard', () => {
 
   assert.match(instruction, /「ライムはこうすべき」という形では書かない/);
 });
+
+test('misheard sentences are not written down as facts', () => {
+  // 声の聞き間違い「子供を認知しました。何で彼に」が、
+  // 「ユーザーは子供を認知したと述べた」として要約に残っていた（2026-10-28 のテスト）
+  const { SUMMARY_INSTRUCTION_FULL, SUMMARY_INSTRUCTION_FACTS } = require('../lib/summarize-service');
+  for (const instruction of [SUMMARY_INSTRUCTION_FULL, SUMMARY_INSTRUCTION_FACTS]) {
+    assert.ok(instruction.includes('音声の聞き間違いと思われる文'));
+    assert.ok(instruction.includes('事実として書かない'));
+  }
+});

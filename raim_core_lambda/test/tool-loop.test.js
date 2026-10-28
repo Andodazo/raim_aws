@@ -306,6 +306,54 @@ test('passes tool failures to Mantle instead of throwing', async () => {
   assert.ok(toolOutput.includes('都市が見つかりません'));
 });
 
+test('an empty web_search query is not run and no intro is spoken', async () => {
+  // 「エースコンバットとサイレントヒルの新作、どっち」で、検索の言葉が空のまま
+  // web_search を呼んでいた（2026-10-28 のテスト）。
+  const mantleStub = createMantleStub([
+    {
+      responseId: 'resp-1',
+      rawText: '',
+      createdAt: '2026-10-28T00:00:00Z',
+      toolCalls: [
+        { callId: 'call-1', name: 'web_search', arguments: '{"query":"  "}' },
+      ],
+    },
+    {
+      responseId: 'resp-2',
+      rawText: JSON.stringify({
+        text: 'どっちのことか教えて？',
+        emotions: { curious: 0.6 },
+      }),
+      createdAt: '2026-10-28T00:00:01Z',
+      toolCalls: [],
+    },
+  ]);
+
+  const appended = [];
+  const { dependencies, executedTools, toolNotifications } = buildDependencies({
+    mantleStub,
+    overrides: {
+      appendTurn: async (turn) => {
+        appended.push(turn);
+        return {};
+      },
+    },
+  });
+
+  const handleCoreChat = createCoreChatService(dependencies);
+  const result = await handleCoreChat(BASE_EVENT);
+
+  assert.equal(result.ok, true);
+  // 検索はせず、「調べてくるね」も言わない
+  assert.equal(executedTools.length, 0);
+  assert.equal(toolNotifications.length, 0);
+  // 何を調べるか聞くよう、結果として伝える
+  const toolOutput = mantleStub.calls[1].mantleInput.messages[0].output;
+  assert.ok(toolOutput.includes('利用者に聞いて'));
+  // 分析用の記録に、検索しなかったことが残る
+  assert.equal(appended[0].assistantMessage.meta.tools[0].skipped, 'empty_query');
+});
+
 test('tool intro lines avoid kanji that VOICEVOX misreads and keep the persona tone', () => {
   // 「今チェック」が「こんチェック」と読まれたため、「今」は使わない
   for (const persona of ['bright', 'downer']) {

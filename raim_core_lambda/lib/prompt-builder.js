@@ -41,6 +41,7 @@ const {
   PERSONA_DIGEST,
   TOOLS_DIGEST,
   STATION_ALARM_DIGEST,
+  STATION_ALARM_UNAVAILABLE_DIGEST,
   hasStationAlarm,
   SAFETY_RULE,
   MULTIMODAL_APPENDIX,
@@ -218,7 +219,7 @@ function buildSceneContext(scene) {
 /**
  * 人格に合ったfew-shotを選ぶ。
  *
- * downer 人格のときは Scene の few_shots_downer を使う。
+ * bright 以外の人格では Scene の few_shots_<人格>（few_shots_downer、few_shots_twitter）を使う。
  * 未登録（空）なら few_shots に戻す。bright は従来どおり few_shots。
  * few-shot は口調のアンカーとして強いので、人格と食い違う例を見せないため。
  */
@@ -226,14 +227,27 @@ function selectFewShots(scene, persona = RAIM_PERSONA) {
   if (!scene) {
     return [];
   }
-  if (
-    persona === 'downer' &&
-    Array.isArray(scene.few_shots_downer) &&
-    scene.few_shots_downer.length > 0
-  ) {
-    return scene.few_shots_downer;
+  const personaShots = persona && persona !== 'bright'
+    ? scene[`few_shots_${persona}`]
+    : null;
+  if (Array.isArray(personaShots) && personaShots.length > 0) {
+    return personaShots;
   }
   return Array.isArray(scene.few_shots) ? scene.few_shots : [];
+}
+
+/**
+ * Scene から人格別の few-shot（few_shots_downer など）を外す。
+ * 選び済みの例を few_shots に入れ直したあと、もう一度選び直されないようにする。
+ */
+function withoutPersonaShots(scene) {
+  const copy = { ...scene };
+  for (const key of Object.keys(copy)) {
+    if (key.startsWith('few_shots_')) {
+      delete copy[key];
+    }
+  }
+  return copy;
 }
 
 /**
@@ -342,6 +356,50 @@ function buildFewShotBlock(scene, userText, persona = RAIM_PERSONA) {
 }
 
 // ─────────────────────────────────────────────
+// 同じ発言の繰り返し
+// ─────────────────────────────────────────────
+
+// さかのぼって見るメッセージ数（user と assistant を合わせて）
+const REPEAT_LOOKBACK_MESSAGES = 20;
+
+/**
+ * 今回の発言が、この会話で前にも言われていたら、そのときの返事を添える。
+ *
+ * 「君と話したいことがある」を続けて送られて、1回目と2回目に一字一句
+ * 同じ返事をしていた（2026-10-28 のテスト）。プロンプトで禁止するだけでは
+ * 守られなかったので、前の返事を見せて、違う返し方をするよう指示する。
+ *
+ * @param {Array} history スレッドの messages（今回の発言はまだ入っていない）
+ * @param {string} userText 今回の発言
+ * @returns {string} 指示文。前に無ければ空
+ */
+function buildRepeatNote(history, userText) {
+  if (!Array.isArray(history) || !hasText(userText)) {
+    return '';
+  }
+
+  const recent = history.slice(-REPEAT_LOOKBACK_MESSAGES);
+
+  for (let i = recent.length - 1; i >= 0; i -= 1) {
+    const message = recent[i];
+    if (message?.role !== 'user' || !isSameUtterance(message.text, userText)) {
+      continue;
+    }
+    const reply = recent.slice(i + 1).find((m) => m?.role === 'assistant');
+    if (!reply || !hasText(reply.text)) {
+      return '';
+    }
+    return [
+      '【同じ発言】',
+      `今の発言は、この会話で前にも言われている。そのときは「${String(reply.text).trim()}」と返した。`,
+      '同じ言い方は使わない。繰り返されたことに軽く触れるか、違う返し方にする。',
+    ].join('\n');
+  }
+
+  return '';
+}
+
+// ─────────────────────────────────────────────
 // SessionSummary 整形
 // ─────────────────────────────────────────────
 
@@ -366,8 +424,15 @@ function buildFewShotBlock(scene, userText, persona = RAIM_PERSONA) {
  * 持ち込むためのもので、週次バッチが各スレッドの要約から作る。
  */
 function buildUserMemoryContext(userMemory) {
+  // 空のときも「まだ何も覚えていない」と書く。
+  // 以前は何も入れておらず、新しい会話で「僕のこと覚えてる？」に
+  // 「もちろん覚えてるよ」と話を合わせていた（2026-10-28 のテスト）。
   if (!hasText(userMemory)) {
-    return '';
+    return [
+      '【ユーザーについて覚えていること】',
+      'まだ何もない。今話している人のことは、この会話で聞いたことしか知らない。',
+      '「覚えてる？」と聞かれても、覚えているふりをしない。',
+    ].join('\n');
   }
 
   return [
@@ -516,6 +581,7 @@ function buildInitialMantleInput({
   features = [],
   conversationGap = '',
   factCheck = false,
+  repeatNote = '',
 }) {
   const messages = [];
 
@@ -557,6 +623,11 @@ function buildInitialMantleInput({
   });
 
   messages.push(...buildFewShotBlock(scene, userText));
+
+  // few-shot の後ろに置く（例の区切りより後ろなので、本当の会話の話として読まれる）
+  if (repeatNote) {
+    messages.push({ role: 'system', content: repeatNote });
+  }
 
   messages.push(
     buildUserMessage({
@@ -603,6 +674,7 @@ function buildFollowupMantleInput({
   features = [],
   conversationGap = '',
   factCheck = false,
+  repeatNote = '',
   now = new Date(),
 }) {
   const messages = [];
@@ -663,6 +735,11 @@ function buildFollowupMantleInput({
       }
     }
 
+    // 駅アラームが無いアプリでは、頼まれてもできたふりをしないよう毎回伝える
+    if (!hasStationAlarm(features)) {
+      situational.push(STATION_ALARM_UNAVAILABLE_DIGEST);
+    }
+
     if (hasImages(images)) {
       situational.push(MULTIMODAL_APPENDIX.trim());
     }
@@ -704,15 +781,18 @@ function buildFollowupMantleInput({
   // FOLLOWUP_FEW_SHOT_COUNT=0 で無効にできる。
   if (fewShotCount > 0 && scene) {
     const limitedScene = {
-      ...scene,
-      // 人格に合わせて選んでから絞る。選び済みなので few_shots_downer は外す
+      // 人格に合わせて選んでから絞る。選び済みなので few_shots_downer などは外す
+      ...withoutPersonaShots(scene),
       // 今回の発話と同じ例を先に除いてから絞る（除いたせいで0組にならないように）
       few_shots: selectFewShots(scene)
         .filter((fs) => !isSameUtterance(fs?.user, userText))
         .slice(0, fewShotCount),
-      few_shots_downer: undefined,
     };
     messages.push(...buildFewShotBlock(limitedScene, userText));
+  }
+
+  if (repeatNote) {
+    messages.push({ role: 'system', content: repeatNote });
   }
 
   messages.push(
@@ -757,7 +837,11 @@ function buildMantleInput({
   features = [],
   conversationGap = '',
   factCheck = false,
+  history = [],
 }) {
+  // この会話で前にも同じことを言われていたら、そのときの返事を添える
+  const repeatNote = buildRepeatNote(history, userText);
+
   if (usePreviousResponseId) {
     // 継続モードでは Mantle 側が文脈を保持しているため、
     // 要約や記憶を毎回送り直す必要はない。
@@ -769,6 +853,7 @@ function buildMantleInput({
       features,
       conversationGap,
       factCheck,
+      repeatNote,
     });
   }
 
@@ -782,6 +867,7 @@ function buildMantleInput({
     features,
     conversationGap,
     factCheck,
+    repeatNote,
   });
 }
 
@@ -815,6 +901,7 @@ module.exports = {
   buildFewShotBlock,
   FEW_SHOT_END_MESSAGE,
   selectFewShots,
+  buildRepeatNote,
   buildSessionSummaryContext,
   buildUserMemoryContext,
   buildReferenceContext,

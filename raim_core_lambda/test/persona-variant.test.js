@@ -1,6 +1,6 @@
 'use strict';
 
-// 人格の切り替え（RAIM_PERSONA = bright / downer）
+// 人格の切り替え（RAIM_PERSONA = bright / downer / twitter）
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -18,6 +18,7 @@ test('unknown or empty persona falls back to bright', () => {
   assert.equal(resolvePersonaName(''), 'bright');
   assert.equal(resolvePersonaName('cool'), 'bright');
   assert.equal(resolvePersonaName(' Downer '), 'downer');
+  assert.equal(resolvePersonaName('twitter'), 'twitter');
 });
 
 test('bright and downer prompts differ only in the persona parts', () => {
@@ -46,8 +47,8 @@ test('emotion hints follow the persona', () => {
   assert.ok(bright.includes('happy / caring / amused / excited / curious が中心'));
 });
 
-test('persona digest keeps the shared rules for both personas', () => {
-  for (const persona of ['bright', 'downer']) {
+test('persona digest keeps the shared rules for every persona', () => {
+  for (const persona of ['bright', 'downer', 'twitter']) {
     const digest = getPersonaDigest(persona);
     assert.ok(digest.includes('ライムとして返答する'));
     assert.ok(digest.includes('AI自己紹介'));
@@ -93,7 +94,7 @@ test('few-shot messages carry the persona example text', () => {
 
 test('game talk waits for the user in every prompt (v5.1)', () => {
   // 好きなものがゲームだけだと、何の話でもゲームに結びつけていた
-  for (const persona of ['bright', 'downer']) {
+  for (const persona of ['bright', 'downer', 'twitter']) {
     const prompt = buildSystemPrompt({ persona, now: NOW });
     const digest = getPersonaDigest(persona);
     for (const text of [prompt, digest]) {
@@ -105,7 +106,7 @@ test('game talk waits for the user in every prompt (v5.1)', () => {
 
 test('Raim knows her own profile in every prompt (v5.2)', () => {
   // 展示で「AIだから髪がない」「心の中にだけ姿がある」と答えていた
-  for (const persona of ['bright', 'downer']) {
+  for (const persona of ['bright', 'downer', 'twitter']) {
     const prompt = buildSystemPrompt({ persona, now: NOW });
     const digest = getPersonaDigest(persona);
     for (const text of [prompt, digest]) {
@@ -135,4 +136,77 @@ test('the first turn of a new conversation treats the user as someone new (v5.2)
   const prompt = buildSystemPrompt({ persona: 'bright', now: NOW });
   assert.ok(prompt.includes('この会話の1ターン目は、初めて会う人として返す'));
   assert.ok(prompt.includes('記憶に書いてある人と、今話している人が同じとは限らない'));
+});
+
+test('the twitter persona is playful but never looks down on the user (v6.0)', () => {
+  // 2026-10-28「距離を感じる。茶目っ気や生意気さ、ミームがほしい」
+  const prompt = buildSystemPrompt({ persona: 'twitter', now: NOW });
+  const digest = getPersonaDigest('twitter');
+
+  assert.ok(prompt.includes('ちょっと生意気'));
+  assert.ok(prompt.includes('ミーム'));
+  assert.ok(prompt.includes('playful / amused / happy / excited が中心'));
+  assert.ok(!prompt.includes('明るくて素直'));
+  for (const text of [prompt, digest]) {
+    // 「あなた」呼びが距離を感じさせていた
+    assert.ok(text.includes('「あなた」は使わない'));
+    // v4 の「普段はクール」は冷笑的になった
+    assert.ok(text.includes('見下さない') || text.includes('見下したり'));
+    assert.ok(text.includes('冷笑'));
+    // 重い話ではふざけない
+    assert.ok(text.includes('まっすぐ寄り添う'));
+  }
+  // 声で読むので顔文字や w は使わない
+  assert.ok(prompt.includes('顔文字'));
+
+  // bright と downer は今のまま
+  assert.ok(buildSystemPrompt({ persona: 'bright', now: NOW }).includes('二人称「あなた」'));
+});
+
+test('heavy talk gets warmth first, and a hotline only when life is at risk (v6.0)', () => {
+  // 以前は「キャラを保ったまま安全を優先する」の1行だけだった。
+  // 窓口の名前を並べるのは「距離を感じすぎる」（安藤さん）ので、寄り添うのが基本
+  for (const persona of ['bright', 'downer', 'twitter']) {
+    const prompt = buildSystemPrompt({ persona, now: NOW });
+    assert.ok(prompt.includes('「消えたい」「死にたい」'), persona);
+    assert.ok(prompt.includes('まず受け止める'), persona);
+    assert.ok(prompt.includes('今すぐ命が危ない話'), persona);
+    assert.ok(prompt.includes('いのちの電話'), persona);
+    assert.ok(prompt.includes('相談窓口の名前を並べたり'), persona);
+    assert.ok(prompt.includes('電話番号は読み上げない'), persona);
+  }
+});
+
+test('apps without the station alarm say so instead of pretending (v6.0)', () => {
+  // Windows で「新宿で起こして」に「近づいたら知らせるね」と返していた
+  const windows = buildSystemPrompt({ persona: 'twitter', withTools: true, features: [], now: NOW });
+  assert.ok(windows.includes('このアプリでは使えない'));
+  assert.ok(windows.includes('スマホのライムでできるよ'));
+  assert.ok(!windows.includes('start_station_alarm'));
+
+  const phone = buildSystemPrompt({
+    persona: 'twitter',
+    withTools: true,
+    features: ['station_alarm'],
+    now: NOW,
+  });
+  assert.ok(!phone.includes('このアプリでは使えない'));
+  assert.ok(phone.includes('start_station_alarm'));
+
+  // ツールが使えない設定でも、できたふりはさせない
+  assert.ok(buildSystemPrompt({ persona: 'bright', now: NOW }).includes('このアプリでは使えない'));
+});
+
+test('no pretending to remember, no invented favorites, and misheard speech gets a question back (v6.0)', () => {
+  for (const persona of ['bright', 'downer', 'twitter']) {
+    const prompt = buildSystemPrompt({ persona, now: NOW });
+    const digest = getPersonaDigest(persona);
+    for (const text of [prompt, digest]) {
+      assert.ok(text.includes('覚えているふり'), persona);
+      assert.ok(text.includes('うまく聞き取れなかったかも'), persona);
+      assert.ok(text.includes('お菓子'), persona);
+    }
+    assert.ok(prompt.includes('【聞き取りが崩れた発言】'), persona);
+    assert.ok(prompt.includes('子供を認知しました'), persona);
+  }
 });
