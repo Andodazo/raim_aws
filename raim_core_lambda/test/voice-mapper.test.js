@@ -66,6 +66,14 @@ test('voice profile follows the persona when set to auto or unset', () => {
   assert.equal(resolveVoiceProfileName({}, voiceConfig), 'tsumugi_parametric');
 });
 
+test('twitter persona gets its own voice profile', () => {
+  // 以前は downer 以外が全部 bright 扱いで、twitter でも bright の声だった
+  assert.equal(resolveVoiceProfileName({ RAIM_PERSONA: 'twitter' }, voiceConfig), 'tsumugi_twitter');
+  assert.equal(resolveVoiceProfileName({ RAIM_PERSONA: 'Twitter', RAIM_VOICE_PROFILE: 'auto' }, voiceConfig), 'tsumugi_twitter');
+  // persona_profiles に無い人格名は bright の声にする
+  assert.equal(resolveVoiceProfileName({ RAIM_PERSONA: 'unknown' }, voiceConfig), 'tsumugi_parametric');
+});
+
 test('an explicit voice profile wins, an unknown one falls back', () => {
   assert.equal(
     resolveVoiceProfileName({ RAIM_PERSONA: 'downer', RAIM_VOICE_PROFILE: 'tsumugi_parametric' }, voiceConfig),

@@ -7,7 +7,7 @@
  * raim_core_lambda/voice-config.json の数値を直す → もう一度実行、をくり返す。
  *
  * 使い方（raim_test フォルダで。Node 18 以上）
- *   node voice_preview.js                              全部作る（2プロファイル × 12感情）
+ *   node voice_preview.js                              全部作る（3プロファイル × 12感情）
  *   node voice_preview.js --profile tsumugi_downer     1つのプロファイルだけ
  *   node voice_preview.js --emotion thoughtful         1つの感情だけ
  *   node voice_preview.js --text "今日はいい天気だね"   全部同じ文で読む（違いを比べやすい）
@@ -58,6 +58,20 @@ const SAMPLE_LINES = {
     thoughtful: 'んー、どっちだろうね。ちょっと考える。',
     playful: 'じゃあ、当ててみて。…ヒントは、青いもの。',
   },
+  twitter: {
+    neutral: 'へえ、今日は学校だったんだ。おつかれー。',
+    happy: 'え、まじ？それは普通にうれしいやつじゃん！',
+    sad: 'そっか…それはちょっと、しんどかったね。',
+    angry: 'は？それはさすがにひどくない？怒っていいやつだよ。',
+    surprised: 'え、うそでしょ！もう終わったの？',
+    caring: '無理しなくていいよ。今日はもう休も、ね。',
+    embarrassed: 'ちょ、急にほめるのやめて？バグるから。',
+    excited: 'きたー！それずっと待ってたやつ！',
+    curious: 'それってどういうこと？くわしく。',
+    amused: 'ふふ、それはちょっと草。',
+    thoughtful: 'んー、どっちがいいかな。ちょっと考えさせて。',
+    playful: 'じゃあ当ててみて？ヒントは、青いもの。',
+  },
 };
 
 function parseArgs(argv) {
@@ -95,7 +109,9 @@ function blend(neutral, target, intensity) {
 
 function personaOf(profileName, config) {
   const entry = Object.entries(config.persona_profiles || {}).find(([, name]) => name === profileName);
-  return entry ? entry[0] : (profileName.includes('downer') ? 'downer' : 'bright');
+  if (entry) return entry[0];
+  if (profileName.includes('downer')) return 'downer';
+  return profileName.includes('twitter') ? 'twitter' : 'bright';
 }
 
 async function synthesize(host, speaker, text, params) {

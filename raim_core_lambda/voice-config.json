@@ -1,7 +1,7 @@
 {
   "_comment": "RAiMのTTS音声プロファイル。raim_serversideのvoice-config.jsonに準拠。RAIM_VOICE_PROFILE が auto（または未設定）のときは persona_profiles で人格に合わせて選ぶ。値は raim_test/voice_preview.js で耳で確認して調整する。",
   "active_profile": "tsumugi_parametric",
-  "persona_profiles": { "bright": "tsumugi_parametric", "downer": "tsumugi_downer" },
+  "persona_profiles": { "bright": "tsumugi_parametric", "downer": "tsumugi_downer", "twitter": "tsumugi_twitter" },
   "profiles": {
     "tsumugi_parametric": {
       "description": "春日部つむぎ + パラメータ調整（明るい人格向け）。curious / amused / thoughtful / playful は耳で確認する前の初期値",
@@ -39,6 +39,25 @@
         "amused": { "speaker_id": 8, "speedScale": 0.98, "pitchScale": 0.01, "intonationScale": 0.92, "volumeScale": 0.95 },
         "thoughtful": { "speaker_id": 8, "speedScale": 0.88, "pitchScale": -0.03, "intonationScale": 0.78, "volumeScale": 0.92 },
         "playful": { "speaker_id": 8, "speedScale": 1.00, "pitchScale": 0.01, "intonationScale": 1.00, "volumeScale": 0.95 }
+      }
+    },
+    "tsumugi_twitter": {
+      "description": "春日部つむぎ + twitter 人格向け（全体に少し速め・抑揚強め。生意気でテンポよく。caring / sad / thoughtful は重い話のときに落ち着くよう遅め）。耳で確認して調整する前提の初期値",
+      "speaker_name": "春日部つむぎ",
+      "default_speaker_id": 8,
+      "emotion_map": {
+        "neutral": { "speaker_id": 8, "speedScale": 1.05, "pitchScale": 0.01, "intonationScale": 1.10, "volumeScale": 1.00 },
+        "happy": { "speaker_id": 8, "speedScale": 1.12, "pitchScale": 0.04, "intonationScale": 1.30, "volumeScale": 1.00 },
+        "sad": { "speaker_id": 8, "speedScale": 0.93, "pitchScale": -0.02, "intonationScale": 0.80, "volumeScale": 0.92 },
+        "caring": { "speaker_id": 8, "speedScale": 0.95, "pitchScale": 0.00, "intonationScale": 0.95, "volumeScale": 0.97 },
+        "angry": { "speaker_id": 8, "speedScale": 1.08, "pitchScale": -0.02, "intonationScale": 1.30, "volumeScale": 1.05 },
+        "surprised": { "speaker_id": 8, "speedScale": 1.18, "pitchScale": 0.06, "intonationScale": 1.35, "volumeScale": 1.00 },
+        "embarrassed": { "speaker_id": 8, "speedScale": 1.10, "pitchScale": 0.03, "intonationScale": 1.15, "volumeScale": 0.95 },
+        "excited": { "speaker_id": 8, "speedScale": 1.22, "pitchScale": 0.05, "intonationScale": 1.45, "volumeScale": 1.05 },
+        "curious": { "speaker_id": 8, "speedScale": 1.08, "pitchScale": 0.03, "intonationScale": 1.20, "volumeScale": 1.00 },
+        "amused": { "speaker_id": 8, "speedScale": 1.12, "pitchScale": 0.03, "intonationScale": 1.25, "volumeScale": 1.00 },
+        "thoughtful": { "speaker_id": 8, "speedScale": 0.95, "pitchScale": -0.01, "intonationScale": 0.90, "volumeScale": 0.95 },
+        "playful": { "speaker_id": 8, "speedScale": 1.15, "pitchScale": 0.05, "intonationScale": 1.35, "volumeScale": 1.00 }
       }
     }
   }

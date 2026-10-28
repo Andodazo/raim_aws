@@ -45,7 +45,8 @@ function loadConfig() {
  * RAIM_VOICE_PROFILE
  *   プロファイル名  … それを使う（例: tsumugi_downer）
  *   auto / 未設定   … RAIM_PERSONA に合わせて persona_profiles から選ぶ
- *                     （bright → tsumugi_parametric、downer → tsumugi_downer）
+ *                     （bright → tsumugi_parametric、downer → tsumugi_downer、
+ *                       twitter → tsumugi_twitter）
  *
  * 以前は人格（RAIM_PERSONA）と声（RAIM_VOICE_PROFILE）を別々に変える必要があり、
  * ダウナーにしても声は明るいままになりやすかった。
@@ -64,10 +65,10 @@ function resolveVoiceProfileName(env = process.env, config = VOICE_CONFIG) {
     return fallback;
   }
 
-  const persona = String(env.RAIM_PERSONA || '').trim().toLowerCase() === 'downer'
-    ? 'downer'
-    : 'bright';
-  const linked = config?.persona_profiles?.[persona];
+  // 以前は downer 以外をすべて bright とみなしていたので、twitter 人格でも
+  // bright 用の声になっていた。今は persona_profiles に書いた人格名をそのまま引く。
+  const persona = String(env.RAIM_PERSONA || '').trim().toLowerCase() || 'bright';
+  const linked = config?.persona_profiles?.[persona] || config?.persona_profiles?.bright;
   return linked && profiles[linked] ? linked : fallback;
 }
 
