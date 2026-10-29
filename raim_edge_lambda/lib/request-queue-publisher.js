@@ -34,6 +34,7 @@ function createRequestQueuePublisher({ client, env = process.env } = {}) {
     features = [],
     location = null,
     speech = true,
+    greeting = false,
   }) {
     const message = {
       schemaVersion: REQUEST_SCHEMA_VERSION,
@@ -52,6 +53,8 @@ function createRequestQueuePublisher({ client, env = process.env } = {}) {
       ...(location ? { location } : {}),
       // 声を消しているときだけ入れる（読み上げを作らない）
       ...(speech === false ? { speech: false } : {}),
+      // アプリを開いたときの話しかけのときだけ入れる（text は空）
+      ...(greeting ? { greeting: true } : {}),
       createdAt: new Date().toISOString(),
     };
 

@@ -28,6 +28,7 @@
 //   images: [],
 //   threadId: "thread-xxxx", // 任意
 //   features: ["station_alarm"] // 任意。アプリが使える機能
+//   greeting: true // 任意。アプリを開いたときの話しかけ（text は空）
 // }
 //
 // JSON解釈や入力検証に失敗した場合はCoreEventErrorを投げる。
@@ -218,11 +219,16 @@ function normalizeCoreEvent(event, { fallbackRequestId } = {}) {
     createRequestId(fallbackRequestId);
   const connectionId = optionalString(payload.connectionId, 'connectionId');
   const normalizedSource = optionalString(payload.source, 'source') || source;
+  // アプリを開いたときの、ライムからの話しかけ（greeting.js）。本文も画像も持たない
+  const greeting = payload.greeting === true;
   // types.jsへ入力制約を集約し、Edge/SQS経路で検証内容がずれないようにする。
-  const validation = validateUpstream({
-    text: payload.text === undefined ? '' : payload.text,
-    images: payload.images,
-  });
+  // 話しかけは本文が無いのが正しいので、本文の検証をしない
+  const validation = greeting
+    ? { valid: true, message: { text: '', images: [] } }
+    : validateUpstream({
+      text: payload.text === undefined ? '' : payload.text,
+      images: payload.images,
+    });
 
   if (!validation.valid) {
     throw new CoreEventError(validation.error);
@@ -248,6 +254,8 @@ function normalizeCoreEvent(event, { fallbackRequestId } = {}) {
     location: normalizeLocation(payload.location),
     // 任意。アプリで声を消しているとき false。読み上げ（TTS）を作らない。
     speech: payload.speech !== false,
+    // true ならアプリを開いたときの話しかけ。text は空
+    greeting,
   };
 }
 

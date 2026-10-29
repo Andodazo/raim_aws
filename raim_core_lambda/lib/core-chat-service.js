@@ -72,6 +72,7 @@ const {
 const { createCoreChat, createCoreError } = require('./core-response');
 const { resolveThread, ensureThreadTitle } = require('./thread-resolver');
 const { appendTurn } = require('./conversation-thread-store');
+const { GREETING_SCENE_TEXT } = require('./greeting');
 const { shouldSummarize } = require('./summary-trigger');
 const { dispatchSummarization } = require('./summary-dispatcher');
 const {
@@ -322,7 +323,8 @@ function createCoreChatService(dependencyOverrides = {}) {
     // few_shotsなどの詳細を全Scene分読むと、Scene数が増えたときに無駄が大きいため。
     const sceneCandidates = await dependencies.listSceneCandidates();
     const sceneSelection = await dependencies.selectScene({
-      userText: input.text,
+      // アプリを開いたときの話しかけは本文が無いので、挨拶の Scene が選ばれる文を使う
+      userText: input.greeting ? GREETING_SCENE_TEXT : input.text,
       scenes: sceneCandidates,
     });
 
@@ -337,7 +339,8 @@ function createCoreChatService(dependencyOverrides = {}) {
     }
     // ツールを使えるか先に判定する。
     // systemプロンプトにツールの説明を入れるかどうかがここで決まる。
-    const toolsEnabled = await dependencies.isToolUseEnabled();
+    // アプリを開いたときの話しかけでは使わない（一言話しかけるだけなので）
+    const toolsEnabled = !input.greeting && await dependencies.isToolUseEnabled();
 
     // 3-c. 事実を聞いている発話なら、先に調べるよう指示を足す（知ったかぶり防止）。
     // ツールが使えないときは調べようがないので足さない。
@@ -386,6 +389,8 @@ function createCoreChatService(dependencyOverrides = {}) {
       factCheck,
       // この会話の履歴。同じ発言が前にもあれば、そのときの返事を添えるのに使う
       history: threadContext.thread?.messages || [],
+      // アプリを開いたときは、ライムから話しかける
+      greeting: input.greeting,
     });
     // policyが期限・存在状態を確認済みの時だけprevious_response_idを送る。
     let previousResponseId = sessionState.usePreviousResponseId
@@ -458,6 +463,7 @@ function createCoreChatService(dependencyOverrides = {}) {
           conversationGap,
           factCheck,
           history: threadContext.thread?.messages || [],
+          greeting: input.greeting,
         });
 
         mantleInput = rebuiltInput;
@@ -723,7 +729,8 @@ function createCoreChatService(dependencyOverrides = {}) {
       const updatedThread = await dependencies.appendTurn({
         sub: input.sub,
         threadId: threadContext.threadId,
-        userMessage: {
+        // アプリを開いたときの話しかけは、合図の文を残さずライムの返事だけを残す
+        userMessage: input.greeting ? null : {
           text: input.text,
           imageDescription: output.image_description || '',
         },
@@ -744,6 +751,7 @@ function createCoreChatService(dependencyOverrides = {}) {
             mode: mantleInput?.mode || '',
             reasoningEffort: reasoningEffort ||
               String((dependencies.env || process.env).MANTLE_REASONING_EFFORT || 'none'),
+            ...(input.greeting ? { greeting: true } : {}),
           },
         },
         inputTokens: mantleResponse.usage

@@ -90,7 +90,42 @@ test('$default publishes a chat request to Core request queue', async () => {
     features: [],
     location: null,
     speech: true,
+    greeting: false,
   });
+});
+
+test('$default は greeting を本文なしの話しかけとして Core へ渡す', async () => {
+  const published = [];
+  const handler = createWebSocketHandler({
+    rateLimiter: { consume: async () => ({ allowed: true }) },
+    connectionStore: {
+      putConnection: async () => {},
+      getConnection: async () => null,
+      deleteConnection: async () => {},
+    },
+    requestPublisher: {
+      publishChatRequest: async (message) => {
+        published.push(message);
+        return message;
+      },
+    },
+  });
+
+  const response = await handler({
+    requestContext: {
+      routeKey: '$default',
+      connectionId: 'conn-001',
+      authorizer: { claims: { sub: 'user-001' } },
+    },
+    // 本文が付いていても渡さない（ライムから話しかける要求なので）
+    body: JSON.stringify({ requestId: 'req-g', type: 'greeting', text: 'なにか' }),
+  });
+
+  assert.equal(response.statusCode, 202);
+  assert.equal(published.length, 1);
+  assert.equal(published[0].greeting, true);
+  assert.equal(published[0].text, '');
+  assert.deepEqual(published[0].images, []);
 });
 
 test('$default forwards features the client supports', async () => {

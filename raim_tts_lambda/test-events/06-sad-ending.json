@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "type": "tts.synthesize",
+  "requestId": "local-006",
+  "chunkId": "local-006_chunk_0",
+  "text": "そっか、それはしんどかったね。",
+  "voiceParams": {
+    "speaker_id": 8,
+    "speedScale": 0.9,
+    "pitchScale": -0.03,
+    "intonationScale": 0.7,
+    "volumeScale": 0.9,
+    "endPitch": -0.15,
+    "endLengthScale": 1.35,
+    "pauseScale": 1.4
+  }
+}

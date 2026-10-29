@@ -109,12 +109,25 @@ const SUMMARY_INSTRUCTION_FACTS = `
  * @param {Array} history [{ role, content }]
  * @param {string} previousSummary 既存の要約（あれば統合させる）
  * @param {string} mode 'full' | 'facts'
+ * @param {string[]} [forgotten] 利用者が消した項目（書かせない）
  */
-function buildSummaryInput(history, previousSummary, mode) {
+function buildSummaryInput(history, previousSummary, mode, forgotten = []) {
   const instruction =
     mode === 'facts' ? SUMMARY_INSTRUCTION_FACTS : SUMMARY_INSTRUCTION_FULL;
 
   const messages = [{ role: 'system', content: instruction }];
+
+  // 利用者がアプリで「忘れて」と消した項目。作り直すたびに戻ってこないよう除かせる
+  if (forgotten.length > 0) {
+    messages.push({
+      role: 'system',
+      content: [
+        '【書かないこと】',
+        'ユーザーが「忘れてほしい」と消した内容。同じ意味のことも、言い換えても書かない。',
+        ...forgotten.map((f) => `- ${f}`),
+      ].join('\n'),
+    });
+  }
 
   if (previousSummary && String(previousSummary).trim()) {
     messages.push({
@@ -252,16 +265,20 @@ function closeBrackets(value) {
  * DynamoDB には文字列で保存し、prompt-builder がそのまま初回プロンプトへ
  * 埋め込む。JSON のままだと読みにくいため整形する。
  */
-function formatSummary(rawText) {
+function formatSummary(rawText, forgotten = []) {
   const parsed = parseSummaryJson(rawText);
+  // Mantle が除き損ねても、消した項目とまったく同じ文は残さない
+  const dropped = new Set(forgotten.map((f) => String(f).trim()));
+  const keep = (v) => !dropped.has(String(v).trim());
   // JSON として解釈できなければ生テキストをそのまま返す（保存はする）。
   if (!parsed) {
     return String(rawText || '').trim();
   }
 
   const lines = [];
-  const facts = Array.isArray(parsed.facts) ? parsed.facts : [];
-  const relationship = Array.isArray(parsed.relationship) ? parsed.relationship : [];
+  const facts = (Array.isArray(parsed.facts) ? parsed.facts : []).filter(keep);
+  const relationship = (Array.isArray(parsed.relationship) ? parsed.relationship : [])
+    .filter(keep);
 
   if (facts.length > 0) {
     lines.push('【事実】');
@@ -290,7 +307,7 @@ function formatSummary(rawText) {
  * @param {Object} [deps]
  * @returns {Promise<{ summary: string, usage: Object|null }>}
  */
-async function generateSummary({ history, previousSummary = '' }, deps = {}) {
+async function generateSummary({ history, previousSummary = '', forgotten = [] }, deps = {}) {
   const env = deps.env || process.env;
 
   if (!Array.isArray(history) || history.length === 0) {
@@ -305,7 +322,7 @@ async function generateSummary({ history, previousSummary = '' }, deps = {}) {
   const createSummary =
     deps.createSummary || createSummaryMantleClient({ env });
 
-  const messages = buildSummaryInput(history, previousSummary, summaryMode(env));
+  const messages = buildSummaryInput(history, previousSummary, summaryMode(env), forgotten);
 
   const response = await createSummary({
     messages,
@@ -315,7 +332,7 @@ async function generateSummary({ history, previousSummary = '' }, deps = {}) {
   });
 
   return {
-    summary: formatSummary(response.text || ''),
+    summary: formatSummary(response.text || '', forgotten),
     usage: response.usage || null,
   };
 }
