@@ -161,8 +161,11 @@ test('the twitter persona is playful but never looks down on the user (v6.0)', (
 
   // v6.1: ユーザーは3人格とも「きみ」と呼ぶ（「ご主人様」は作ったチームの呼び方）
   for (const persona of ['bright', 'downer', 'twitter']) {
-    assert.ok(buildSystemPrompt({ persona, now: NOW }).includes('二人称「きみ」'), persona);
+    assert.match(buildSystemPrompt({ persona, now: NOW }), /二人称は?「きみ」/, persona);
   }
+  // twitter だけ、たまにその場のノリで呼び方を変えてよい
+  assert.ok(buildSystemPrompt({ persona: 'twitter', now: NOW }).includes('その場のノリで呼び方を変えて'));
+  assert.ok(!buildSystemPrompt({ persona: 'bright', now: NOW }).includes('呼び方を変えて'));
 });
 
 test('heavy talk gets warmth first, and a hotline only when life is at risk (v6.0)', () => {
