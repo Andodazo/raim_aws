@@ -20,26 +20,26 @@ test('maps neutral and happy using the raim_serverside profile', () => {
   });
   assert.deepEqual(getVoiceParams('happy', 1), {
     speaker_id: 8,
-    speedScale: 1.1,
-    pitchScale: 0.03,
-    intonationScale: 1.2,
+    speedScale: 1.2,
+    pitchScale: 0.06,
+    intonationScale: 1.4,
     volumeScale: 1,
-    endPitch: 0.12,
-    endLengthScale: 1.1,
-    pauseScale: 0.9,
+    endPitch: 0.24,
+    endLengthScale: 1.2,
+    pauseScale: 0.8,
   });
 });
 
 test('uses the dominant Scene emotion for streamed TTS', () => {
   assert.deepEqual(getVoiceParamsFromEmotions({ happy: 0.8, caring: 0.2 }, 1), {
     speaker_id: 8,
-    speedScale: 1.08,
-    pitchScale: 0.024,
-    intonationScale: 1.16,
+    speedScale: 1.16,
+    pitchScale: 0.048,
+    intonationScale: 1.32,
     volumeScale: 1,
-    endPitch: 0.096,
-    endLengthScale: 1.08,
-    pauseScale: 0.92,
+    endPitch: 0.192,
+    endLengthScale: 1.16,
+    pauseScale: 0.84,
   });
 });
 
