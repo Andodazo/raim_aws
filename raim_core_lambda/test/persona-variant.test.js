@@ -159,8 +159,10 @@ test('the twitter persona is playful but never looks down on the user (v6.0)', (
   // 声で読むので顔文字や w は使わない
   assert.ok(prompt.includes('顔文字'));
 
-  // bright と downer は今のまま
-  assert.ok(buildSystemPrompt({ persona: 'bright', now: NOW }).includes('二人称「あなた」'));
+  // v6.1: ユーザーは3人格とも「きみ」と呼ぶ（「ご主人様」は作ったチームの呼び方）
+  for (const persona of ['bright', 'downer', 'twitter']) {
+    assert.ok(buildSystemPrompt({ persona, now: NOW }).includes('二人称「きみ」'), persona);
+  }
 });
 
 test('heavy talk gets warmth first, and a hotline only when life is at risk (v6.0)', () => {
