@@ -451,3 +451,32 @@ test('greeting puts the cue in the user slot and the instruction in the system m
   const systems = normal.messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n');
   assert.ok(!systems.includes(GREETING_INSTRUCTION));
 });
+
+test('greeting leaves out the scene examples and uses the angle instruction (2026-10-30)', () => {
+  // 以前は挨拶の会話例をそのまま写していた（twitter の「やっほー。ちょうど暇してたとこだよ」）
+  const { buildMantleInput } = require('../lib/prompt-builder');
+  const { buildGreetingInstruction, GREETING_ANGLES } = require('../lib/greeting');
+  const scene = {
+    id: 'default',
+    description: '汎用',
+    few_shots: [{ user: 'こんにちは', raim: 'やっほー。ちょうど暇してたとこだよ（会話例）' }],
+  };
+  const instruction = buildGreetingInstruction(GREETING_ANGLES[0]);
+
+  for (const usePreviousResponseId of [false, true]) {
+    const input = buildMantleInput({
+      userText: '',
+      scene,
+      usePreviousResponseId,
+      greeting: true,
+      greetingInstruction: instruction,
+    });
+    const all = JSON.stringify(input.messages);
+    assert.ok(!all.includes('（会話例）'), `mode=${input.mode}`);
+    assert.ok(all.includes('今回の切り口'), `mode=${input.mode}`);
+  }
+
+  // ふつうの会話は会話例を入れたまま
+  const normal = buildMantleInput({ userText: 'おはよう', scene });
+  assert.ok(JSON.stringify(normal.messages).includes('（会話例）'));
+});
