@@ -265,7 +265,7 @@ const TOOL_INTROS = {
  * @param {string} toolName
  * @param {number} turn 何回目のツール呼出か（1〜3）
  * @param {Function} random テスト時に固定できるよう注入可能
- * @param {string} persona 'bright' | 'downer'（既定は RAIM_PERSONA）
+ * @param {string} persona 'bright' | 'downer' | 'twitter'（既定は RAIM_PERSONA）
  */
 function pickToolIntro(toolName, turn, random = Math.random, persona = RAIM_PERSONA) {
   // アプリに頼むツールは待ち時間が無いので、前置きは言わない。
@@ -274,7 +274,9 @@ function pickToolIntro(toolName, turn, random = Math.random, persona = RAIM_PERS
     return '';
   }
 
-  const lines = TOOL_INTROS[resolvePersonaName(persona)];
+  // 前置きが無い人格（twitter）は bright のものを使う。
+  // 以前は TOOL_INTROS に twitter が無く、天気や検索のたびに TypeError で返事ごと落ちていた。
+  const lines = TOOL_INTROS[resolvePersonaName(persona)] || TOOL_INTROS.bright;
   const intros = lines[toolName];
 
   if (!intros) {
