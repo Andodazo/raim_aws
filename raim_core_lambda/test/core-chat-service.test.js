@@ -545,6 +545,8 @@ test('アプリを開いたときの話しかけは、合図の文を残さず�
   const build = calls.find(([name]) => name === 'build');
   assert.equal(build[1].greeting, true);
   assert.equal(build[1].withTools, false);
+  // 毎回同じ文にならないよう、切り口つきの指示を渡す
+  assert.match(build[1].greetingInstruction, /今回の切り口|久しぶり/);
   const append = calls.find(([name]) => name === 'append');
   assert.equal(append[1].userMessage, null);
   assert.equal(append[1].assistantMessage.text, 'やあ');

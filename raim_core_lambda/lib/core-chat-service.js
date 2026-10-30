@@ -72,7 +72,11 @@ const {
 const { createCoreChat, createCoreError } = require('./core-response');
 const { resolveThread, ensureThreadTitle } = require('./thread-resolver');
 const { appendTurn } = require('./conversation-thread-store');
-const { GREETING_SCENE_TEXT } = require('./greeting');
+const {
+  GREETING_SCENE_TEXT,
+  pickGreetingAngle,
+  buildGreetingInstruction,
+} = require('./greeting');
 const { shouldSummarize } = require('./summary-trigger');
 const { dispatchSummarization } = require('./summary-dispatcher');
 const {
@@ -360,14 +364,29 @@ function createCoreChatService(dependencyOverrides = {}) {
     // 3-b. 前回の発話からどれくらい経ったか。
     // 「3日ぶりなのに『さっき』と言う」のを防ぎ、「久しぶり」と言えるようにする。
     // スレッドは appendTurn の前の状態なので、最後のメッセージ＝前回の発話。
-    const conversationGap = buildConversationGapContext({
-      ...findLastTalkedAt({
-        thread: threadContext.thread,
-        isNew: threadContext.isNew,
-        session,
-      }),
-      now: dependencies.now ? dependencies.now() : new Date(),
+    const lastTalked = findLastTalkedAt({
+      thread: threadContext.thread,
+      isNew: threadContext.isNew,
+      session,
     });
+    const now = dependencies.now ? dependencies.now() : new Date();
+    const conversationGap = buildConversationGapContext({ ...lastTalked, now });
+
+    // 3-d. アプリを開いたときの話しかけは、切り口を毎回ランダムに選ぶ（同じ文にならないように）。
+    // 何日も空いていたら切り口は使わず「久しぶり」を優先する
+    let greetingInstruction = '';
+    if (input.greeting) {
+      const gapMinutes = lastTalked.lastTalkedAt
+        ? Math.max(0, (now.getTime() - Date.parse(lastTalked.lastTalkedAt)) / 60000)
+        : null;
+      const angle = pickGreetingAngle({
+        hasMemory: Boolean(session.userMemory || threadContext.thread?.sessionSummary),
+        gapMinutes,
+        random: dependencies.random || Math.random,
+      });
+      greetingInstruction = buildGreetingInstruction(angle);
+      console.log(`[Greeting] angle=${angle ? angle.id : 'long_gap'}`);
+    }
 
     // 4. 初回ならsystem prompt・要約・Few-shotを含める。
     // 継続時はprevious_response_idを使うため、今回の発話を中心に組み立てる。
@@ -391,6 +410,7 @@ function createCoreChatService(dependencyOverrides = {}) {
       history: threadContext.thread?.messages || [],
       // アプリを開いたときは、ライムから話しかける
       greeting: input.greeting,
+      greetingInstruction,
     });
     // policyが期限・存在状態を確認済みの時だけprevious_response_idを送る。
     let previousResponseId = sessionState.usePreviousResponseId
@@ -464,6 +484,7 @@ function createCoreChatService(dependencyOverrides = {}) {
           factCheck,
           history: threadContext.thread?.messages || [],
           greeting: input.greeting,
+          greetingInstruction,
         });
 
         mantleInput = rebuiltInput;

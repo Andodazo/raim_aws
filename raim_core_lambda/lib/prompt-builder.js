@@ -584,6 +584,7 @@ function buildInitialMantleInput({
   factCheck = false,
   repeatNote = '',
   greeting = false,
+  greetingInstruction = '',
 }) {
   const messages = [];
 
@@ -617,7 +618,7 @@ function buildInitialMantleInput({
       // 事実の質問なら、先に調べるよう指示する
       ...(factCheck ? ['', '---', '', FACT_CHECK_INSTRUCTION] : []),
       // アプリを開いたときは、ライムから話しかける
-      ...(greeting ? ['', '---', '', GREETING_INSTRUCTION] : []),
+      ...(greeting ? ['', '---', '', greetingInstruction || GREETING_INSTRUCTION] : []),
     ].join('\n'),
   });
 
@@ -626,7 +627,11 @@ function buildInitialMantleInput({
     content: buildReferenceContext({ userMemory, sessionSummary }),
   });
 
-  messages.push(...buildFewShotBlock(scene, userText));
+  // 話しかけのときは会話例を入れない。合図は発話ではないので、挨拶の会話例
+  // （「こんにちは」への返事）をそのまま写していた（2026-10-30）。口調は人格プロンプトで保てる
+  if (!greeting) {
+    messages.push(...buildFewShotBlock(scene, userText));
+  }
 
   // few-shot の後ろに置く（例の区切りより後ろなので、本当の会話の話として読まれる）
   if (repeatNote) {
@@ -680,6 +685,7 @@ function buildFollowupMantleInput({
   factCheck = false,
   repeatNote = '',
   greeting = false,
+  greetingInstruction = '',
   now = new Date(),
 }) {
   const messages = [];
@@ -734,7 +740,7 @@ function buildFollowupMantleInput({
     }
 
     if (greeting) {
-      situational.push(GREETING_INSTRUCTION);
+      situational.push(greetingInstruction || GREETING_INSTRUCTION);
     }
 
     if (withTools) {
@@ -766,7 +772,7 @@ function buildFollowupMantleInput({
       content: [
         conversationGap,
         factCheck ? FACT_CHECK_INSTRUCTION : '',
-        greeting ? GREETING_INSTRUCTION : '',
+        greeting ? (greetingInstruction || GREETING_INSTRUCTION) : '',
       ]
         .filter(Boolean)
         .join('\n\n'),
@@ -792,7 +798,8 @@ function buildFollowupMantleInput({
   // few-shotは口調のアンカーとして強力なので、継続会話でも少しだけ入れる。
   // 全部入れると文脈が膨らむため、既定は1組だけ。
   // FOLLOWUP_FEW_SHOT_COUNT=0 で無効にできる。
-  if (fewShotCount > 0 && scene) {
+  // 話しかけのときは会話例を入れない（初回と同じ理由）
+  if (fewShotCount > 0 && scene && !greeting) {
     const limitedScene = {
       // 人格に合わせて選んでから絞る。選び済みなので few_shots_downer などは外す
       ...withoutPersonaShots(scene),
@@ -852,6 +859,7 @@ function buildMantleInput({
   factCheck = false,
   history = [],
   greeting = false,
+  greetingInstruction = '',
 }) {
   // アプリを開いたときは、利用者の発話の代わりに合図の文を置く。
   // 同じ合図は毎回なので、「前にも同じことを言われた」の添え書きは付けない
@@ -874,6 +882,7 @@ function buildMantleInput({
       factCheck,
       repeatNote,
       greeting,
+      greetingInstruction,
     });
   }
 
@@ -889,6 +898,7 @@ function buildMantleInput({
     factCheck,
     repeatNote,
     greeting,
+    greetingInstruction,
   });
 }
 
