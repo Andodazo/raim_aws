@@ -132,6 +132,16 @@ test('pickToolIntro returns a character-appropriate line per turn', () => {
   assert.equal(pickToolIntro('unknown_tool', 1, () => 0, 'downer'), 'ん、ちょっと待って');
 });
 
+test('pickToolIntro does not throw for every persona (twitter falls back to bright)', () => {
+  // 以前は twitter の前置きが無く、天気や検索で TypeError になり返事ごと落ちていた
+  for (const persona of ['bright', 'downer', 'twitter']) {
+    for (const tool of ['get_weather', 'web_search', 'unknown_tool']) {
+      assert.ok(pickToolIntro(tool, 1, () => 0, persona).length > 0, `${persona} ${tool}`);
+    }
+  }
+  assert.equal(pickToolIntro('get_weather', 1, () => 0, 'twitter'), '天気見てくるね、ちょっと待ってて');
+});
+
 test('TOOL_DEFINITIONS use the flat Responses API schema', () => {
   for (const tool of TOOL_DEFINITIONS) {
     assert.equal(tool.type, 'function');
