@@ -246,6 +246,8 @@ test('twitter has the "nori" patterns and asks about unknown memes, in full and 
     assert.ok(text.includes('ミーム）の量は相手に合わせる'));
     assert.ok(text.includes('茶目っ気とひとひねりは'));
     assert.ok(text.includes('何それ、新しいやつ？教えて'));
+    // 元ネタは自信満々に間違えるので、調べていないときは言い切らない（meme-test2）
+    assert.ok(text.includes('調べていないときは言い切らない') || text.includes('調べていないときは言い切らず'));
   }
   // 「こんにちは」への丸写しの元だった参考の文は外した
   assert.ok(!buildSystemPrompt({ persona: 'twitter', now: NOW }).includes('ちょうど暇してたとこだよ'));
@@ -254,4 +256,12 @@ test('twitter has the "nori" patterns and asks about unknown memes, in full and 
     assert.ok(!buildSystemPrompt({ persona, now: NOW }).includes('【ノリの型】'), persona);
     assert.ok(!getPersonaDigest(persona).includes('ノリの型'), persona);
   }
+});
+
+test('meme meanings and origins are looked up, in full and digest tool rules (v6.4)', () => {
+  const { TOOLS_DIGEST } = require('../lib/prompts/raim-system-prompt');
+  const full = buildSystemPrompt({ persona: 'twitter', withTools: true, now: NOW });
+  assert.ok(full.includes('ネットの言葉（ミーム）の意味や元ネタを聞かれたら'));
+  assert.ok(full.includes('ふつうの言葉の意味のような一般的な知識は'));
+  assert.ok(TOOLS_DIGEST.includes('ネットの言葉（ミーム）の意味・元ネタ'));
 });

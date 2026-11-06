@@ -24,6 +24,10 @@ test('fact questions from the 2026-10 samples trigger a search', () => {
     '米津玄師ってどんな人？',
     'この曲って誰が歌ってるの？',
     'ヒカキンって誰？',
+    '微レ存ってどういう意味？',
+    '蛙化現象の意味は？',
+    'だが断るの元ネタって何？',
+    '草の由来は？',
   ]) {
     assert.ok(isFactQuestion(text), text);
   }
@@ -38,6 +42,10 @@ test('questions about the user, Lime, or the weather do not', () => {
     '明日の天気知ってる？',
     'こんにちは',
     'マグロって何',
+    '意味わからんw',
+    'それってどういう意味？',
+    'さっきのどういう意味？',
+    'ライムの名前の由来は？',
   ]) {
     assert.ok(!isFactQuestion(text), text);
   }
