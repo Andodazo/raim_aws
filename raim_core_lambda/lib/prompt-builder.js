@@ -408,6 +408,34 @@ function buildRepeatNote(history, userText) {
   return '';
 }
 
+/**
+ * 今回の発言が会話例（few-shot）にもあるなら、例の返事をそのまま使わないよう添える。
+ *
+ * 会話例は口調のお手本だが、継続会話では前のターンで入れた例が Mantle 側の文脈に
+ * 残る。そのため「こんにちは」に、default Scene の例の返事「やっほー。ちょうど暇してた
+ * とこだよ」を一字一句そのまま返していた（2026-11-04・11-06 のテスト）。
+ * 今回のターンで同じ例を外すだけでは、前のターンに残った例は消せないので、
+ * 例の返事を見せて、自分の言葉で返すよう伝える。
+ *
+ * @returns {string} 指示文。同じ例が無ければ空
+ */
+function buildFewShotCopyNote(scene, userText, persona = RAIM_PERSONA) {
+  if (!scene || !hasText(userText)) {
+    return '';
+  }
+
+  const shot = selectFewShots(scene, persona)
+    .find((fs) => fs && isSameUtterance(fs.user, userText) && hasText(fs.raim));
+  if (!shot) {
+    return '';
+  }
+
+  return [
+    '【会話例と同じ発言】',
+    `今の発言は口調の例にも出てくる。例の返事「${String(shot.raim).trim()}」をそのまま使わず、自分の言葉で返す。`,
+  ].join('\n');
+}
+
 // ─────────────────────────────────────────────
 // SessionSummary 整形
 // ─────────────────────────────────────────────
@@ -905,7 +933,12 @@ function buildMantleInput({
     userText = GREETING_USER_TEXT;
     images = [];
   }
-  const repeatNote = greeting ? '' : buildRepeatNote(history, userText);
+  // 同じ発言の繰り返しと、会話例の返事の丸写しを防ぐ添え書き（話しかけには付けない）
+  const repeatNote = greeting
+    ? ''
+    : [buildRepeatNote(history, userText), buildFewShotCopyNote(scene, userText)]
+      .filter(Boolean)
+      .join('\n\n');
 
   if (usePreviousResponseId) {
     // 継続モードでは Mantle 側が文脈を保持しているため、
@@ -973,6 +1006,7 @@ module.exports = {
   FEW_SHOT_END_MESSAGE,
   selectFewShots,
   buildRepeatNote,
+  buildFewShotCopyNote,
   buildSessionSummaryContext,
   buildUserMemoryContext,
   buildReferenceContext,
