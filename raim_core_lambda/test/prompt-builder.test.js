@@ -184,19 +184,32 @@ test('followup persona mode "full" sends the complete system prompt', () => {
   assert.ok(followupSystemText(full).length > followupSystemText(digest).length);
 });
 
-test('followup includes a limited number of few-shot examples', () => {
+function fewShotBlockOf(input) {
+  return input.messages.find((m) => m.role === 'system' && m.content.startsWith('【口調の例】'));
+}
+
+test('followup includes a limited number of few-shot examples when asked', () => {
   const input = buildFollowupMantleInput({
     userText: 'やあ',
     scene: FOLLOWUP_SCENE,
     fewShotCount: 1,
   });
 
-  // few-shot 1組 = user + assistant の2メッセージ
-  const assistantExamples = input.messages.filter((m) => m.role === 'assistant');
-  assert.equal(assistantExamples.length, 1);
+  // 会話例はやり取りの形ではなく、説明文1つの中に入る
+  assert.equal(input.messages.filter((m) => m.role === 'assistant').length, 0);
+  const block = fewShotBlockOf(input);
+  assert.ok(block.content.includes('あ、こんにちは'));
+  assert.ok(!block.content.includes('外出たくなる'));
+});
 
-  // 口調のお手本がそのまま入っている
-  assert.ok(assistantExamples[0].content.includes('あ、こんにちは'));
+test('followup has no few-shot by default', () => {
+  const input = buildFollowupMantleInput({
+    userText: 'こんにちは',
+    scene: FOLLOWUP_SCENE,
+  });
+
+  assert.equal(fewShotBlockOf(input), undefined);
+  assert.equal(input.messages.filter((m) => m.role === 'assistant').length, 0);
 });
 
 test('followup few-shot can be disabled', () => {
@@ -206,7 +219,7 @@ test('followup few-shot can be disabled', () => {
     fewShotCount: 0,
   });
 
-  assert.equal(input.messages.filter((m) => m.role === 'assistant').length, 0);
+  assert.equal(fewShotBlockOf(input), undefined);
 });
 
 // 継続会話では初回の system プロンプトが届かない。
@@ -305,7 +318,6 @@ test('記憶と要約は、固定ルールとは別の system メッセージの
   assert.ok(reference.content.trimEnd().endsWith('<<<参考情報ここまで>>>'));
 });
 
-// few-shot は user / assistant の形で入るので、モデルには「前に話したこと」に見える。
 // default Scene の例に「こんにちは」があり、新しい会話の1ターン目の「こんにちは」に
 // 「またこんにちは！挨拶が止まらないね」と返していた（2026-10）。
 test('few-shot that matches the user text is left out', () => {
@@ -314,35 +326,36 @@ test('few-shot that matches the user text is left out', () => {
     scene: FOLLOWUP_SCENE,
     fewShotCount: 1,
   });
-  const examples = input.messages.filter((m) => m.role === 'assistant');
-  assert.equal(examples.length, 1);
-  assert.ok(!examples[0].content.includes('あ、こんにちは'));
-  assert.ok(examples[0].content.includes('外出たくなる'));
+  const block = fewShotBlockOf(input);
+  assert.ok(!block.content.includes('あ、こんにちは'));
+  assert.ok(block.content.includes('外出たくなる'));
 
   const shots = buildFewShotMessages(FOLLOWUP_SCENE, 'bright', { excludeUserText: 'こんにちは' });
   assert.ok(!shots.some((m) => m.content === 'こんにちは'));
 });
 
-test('few-shot is followed by a note that the real conversation starts next', () => {
-  const { FEW_SHOT_END_MESSAGE } = require('../lib/prompt-builder');
-  const input = buildFollowupMantleInput({ userText: 'やあ', scene: FOLLOWUP_SCENE, fewShotCount: 1 });
-  const last = input.messages.length - 1;
-  assert.equal(input.messages[last].role, 'user');
-  assert.equal(input.messages[last - 1], FEW_SHOT_END_MESSAGE);
-  assert.ok(FEW_SHOT_END_MESSAGE.content.includes('実際の会話ではありません'));
-
-  // 例が無いときは区切りも入れない
-  const none = buildFollowupMantleInput({ userText: 'やあ', scene: FOLLOWUP_SCENE, fewShotCount: 0 });
-  assert.ok(!none.messages.includes(FEW_SHOT_END_MESSAGE));
-});
-
-test('first turn: the greeting example is left out and the note comes before the user', () => {
-  const { buildInitialMantleInput, FEW_SHOT_END_MESSAGE } = require('../lib/prompt-builder');
+// 会話例をやり取りの形で入れると、例の中身（「今日バナナの皮で滑った」）を
+// ユーザーが言ったことにしていた（2026-11-06）。説明文1つにまとめて、例だと書く。
+test('few-shot is one system note, not user / assistant turns', () => {
+  const { buildInitialMantleInput, FEW_SHOT_INTRO } = require('../lib/prompt-builder');
   const input = buildInitialMantleInput({ userText: 'こんにちは', scene: FOLLOWUP_SCENE });
   const userTurns = input.messages.filter((m) => m.role === 'user').map((m) => m.content);
-  // 「こんにちは」は本当の発言の1回だけ
-  assert.deepEqual(userTurns, ['今日はいい天気だね', 'こんにちは']);
-  assert.equal(input.messages[input.messages.length - 2], FEW_SHOT_END_MESSAGE);
+  // ユーザーの発言は本当の発言の1回だけ。ライムの発言は1つも入らない
+  assert.deepEqual(userTurns, ['こんにちは']);
+  assert.equal(input.messages.filter((m) => m.role === 'assistant').length, 0);
+
+  const block = fewShotBlockOf(input);
+  assert.ok(block.content.startsWith(FEW_SHOT_INTRO));
+  assert.ok(FEW_SHOT_INTRO.includes('実際の会話ではなく'));
+  assert.ok(FEW_SHOT_INTRO.includes('話に出さない'));
+  // 例の書き方: ユーザーの発言と、返事の形（感情つき JSON）
+  assert.ok(block.content.includes('例1 ユーザー「今日はいい天気だね」'));
+  const reply = block.content.split('\n').find((line) => line.startsWith('→ '));
+  const json = JSON.parse(reply.slice(2));
+  assert.equal(json.text, 'うん、外出たくなる感じだね。');
+  assert.ok(json.emotions.happy > 0);
+  // 例の説明文は、ユーザーの発言のすぐ前（間に挟まるのは添え書きだけ）
+  assert.equal(input.messages[input.messages.length - 2], block);
 });
 
 // ─────────────────────────────────────────────

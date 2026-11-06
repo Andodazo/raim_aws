@@ -68,7 +68,9 @@ function hasText(value) {
 // ─────────────────────────────────────────────
 //
 // FOLLOWUP_PERSONA_MODE : 'digest'（既定）| 'full' | 'none'
-// FOLLOWUP_FEW_SHOT_COUNT : 継続会話へ入れるfew-shot組数（既定1、0で無効）
+// FOLLOWUP_FEW_SHOT_COUNT : 継続会話へ入れるfew-shot組数（既定0。1以上で入れる）
+//   続きの会話で毎回足した例が Mantle 側に残り、例の中身を本当の会話と
+//   取り違えていたので、既定では入れない（2026-11-06 のテスト）
 //
 // どちらも環境変数なので、デプロイし直さずに口調を実測比較できる。
 
@@ -77,7 +79,7 @@ const FOLLOWUP_PERSONA_MODE =
 
 const FOLLOWUP_FEW_SHOT_COUNT = Math.max(
   0,
-  Number(process.env.FOLLOWUP_FEW_SHOT_COUNT ?? 1)
+  Number(process.env.FOLLOWUP_FEW_SHOT_COUNT ?? 0)
 );
 
 function hasImages(images) {
@@ -274,23 +276,21 @@ function isSameUtterance(a, b) {
 }
 
 /**
- * few-shot の後ろに置く区切り。
+ * 会話例（few-shot）の前置き。
  *
- * few-shot は user / assistant のやり取りの形で入れているので、モデルからは
- * 「この会話で前に話したこと」に見える。default Scene の例に「こんにちは」が
- * あるため、新しい会話の1ターン目の「こんにちは」に「またこんにちは！
- * 挨拶が止まらないね」と返していた（2026-10 の展示と、v5.2 のテスト）。
- * 例はここまでで、会話はここから始まることをはっきり書く。
+ * 以前は会話例を user / assistant のやり取りの形で入れ、後ろに「ここまでは例」と
+ * 区切りを置いていた。それでも Gemma は例の中身を本当の会話として扱い、
+ * joke の例「今日バナナの皮でほんとに滑った」をユーザーが言ったことにして
+ * 何往復も引きずった。advice の例「進学か就職か迷ってる」も同じように混ざった
+ * （2026-11-06 のテスト）。
+ * そのため、会話例は1つの説明文（system）の中に並べ、やり取りの形では入れない。
+ * 返事の形（感情つき JSON）のお手本も、この中の例で見せる。
  */
-const FEW_SHOT_END_MESSAGE = Object.freeze({
-  role: 'system',
-  content: [
-    'ここまでのやり取りは、ライムの口調と出力形式の例です。実際の会話ではありません。',
-    '例の中の発言は、今のユーザーが言ったことではありません。',
-    '「また」「さっきも」のように、例の発言を前に聞いたこととして扱わないでください。',
-    '実際の会話は、この次のユーザーの発言から始まります。',
-  ].join('\n'),
-});
+const FEW_SHOT_INTRO = [
+  '【口調の例】ライムの話し方と、返事の形の例。実際の会話ではなく、今のユーザーが言ったことでもない。',
+  '例に出てくる出来事（滑った、迷っている、など）は今のユーザーのことではないので、話に出さない。',
+  '「また」「さっきも」のように、例の発言を前に聞いたこととして扱わない。',
+].join('\n');
 
 function buildFewShotMessages(scene, persona = RAIM_PERSONA, { excludeUserText = '' } = {}) {
   const fewShots = selectFewShots(scene, persona);
@@ -357,11 +357,20 @@ function buildFewShotMessages(scene, persona = RAIM_PERSONA, { excludeUserText =
 }
 
 /**
- * few-shot と、その後ろの区切りをまとめて作る。例が1つも無ければ空。
+ * 会話例を1つの説明文（system）にまとめる。例が1つも無ければ空。
+ * 例は「ユーザー「…」→ 返事の JSON」の形で並べる（FEW_SHOT_INTRO 参照）。
  */
 function buildFewShotBlock(scene, userText, persona = RAIM_PERSONA) {
   const shots = buildFewShotMessages(scene, persona, { excludeUserText: userText });
-  return shots.length > 0 ? [...shots, FEW_SHOT_END_MESSAGE] : [];
+  const lines = [];
+  for (let i = 0; i + 1 < shots.length; i += 2) {
+    lines.push(`例${lines.length + 1} ユーザー「${shots[i].content}」`);
+    lines.push(`→ ${shots[i + 1].content}`);
+  }
+  if (lines.length === 0) {
+    return [];
+  }
+  return [{ role: 'system', content: [FEW_SHOT_INTRO, '', ...lines].join('\n') }];
 }
 
 // ─────────────────────────────────────────────
@@ -688,7 +697,7 @@ function buildInitialMantleInput({
     messages.push(...buildFewShotBlock(scene, userText));
   }
 
-  // few-shot の後ろに置く（例の区切りより後ろなので、本当の会話の話として読まれる）
+  // 会話例の後ろに置く（例の説明文より後ろなので、本当の会話の話として読まれる）
   if (repeatNote) {
     messages.push({ role: 'system', content: repeatNote });
   }
@@ -859,9 +868,8 @@ function buildFollowupMantleInput({
     });
   }
 
-  // few-shotは口調のアンカーとして強力なので、継続会話でも少しだけ入れる。
-  // 全部入れると文脈が膨らむため、既定は1組だけ。
-  // FOLLOWUP_FEW_SHOT_COUNT=0 で無効にできる。
+  // 継続会話の会話例は既定では入れない（FOLLOWUP_FEW_SHOT_COUNT 参照）。
+  // FOLLOWUP_FEW_SHOT_COUNT=1 などで、指定した組数だけ入れられる。
   // 話しかけのときは会話例を入れない（初回と同じ理由）
   if (fewShotCount > 0 && scene && !greeting) {
     const limitedScene = {
@@ -1003,7 +1011,7 @@ module.exports = {
   buildSceneContext,
   buildFewShotMessages,
   buildFewShotBlock,
-  FEW_SHOT_END_MESSAGE,
+  FEW_SHOT_INTRO,
   selectFewShots,
   buildRepeatNote,
   buildFewShotCopyNote,
