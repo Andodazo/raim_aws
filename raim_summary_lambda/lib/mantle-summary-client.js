@@ -20,6 +20,17 @@ const { getMantleApiKey } = require('./mantle-secret-provider');
 
 const DEFAULT_TIMEOUT_MS = 30000;
 
+// 時間切れ・通信エラー・5xx のときに、その場でやり直す回数（最初の1回を含まない）。
+//
+// 要約のキューはユーザーごとに順番を守る（FIFO、グループ＝ユーザー）。
+// 1回失敗するとキューに戻り、取り出し直されるまでその人の要約・記憶の作り直しが
+// 全部止まる。2026-11-06 のテストでは Mantle の時間切れ1回で15分止まった。
+// たまの時間切れはやり直せば通ることが多いので、キューに戻す前に1回だけやり直す。
+const RETRY_COUNT = 1;
+const RETRY_DELAY_MS = 1000;
+
+const defaultSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 // ─────────────────────────────────────────────
 // 設定
 // ─────────────────────────────────────────────
@@ -58,11 +69,13 @@ function requiredSetting(env, name) {
  * @param {Function} [deps.fetchImpl] テスト用の fetch 差し替え
  * @param {Object} [deps.env]
  * @param {Function} [deps.apiKeyProvider]
+ * @param {Function} [deps.sleep] テスト用の待ち時間差し替え
  */
 function createSummaryMantleClient(deps = {}) {
   const fetchImpl = deps.fetchImpl || globalThis.fetch;
   const env = deps.env || process.env;
   const apiKeyProvider = deps.apiKeyProvider || getMantleApiKey;
+  const sleep = deps.sleep || defaultSleep;
 
   if (typeof fetchImpl !== 'function') {
     throw new Error('fetch implementation is required');
@@ -106,38 +119,61 @@ function createSummaryMantleClient(deps = {}) {
       body.reasoning = { effort: reasoningEffort };
     }
 
-    const timeoutMs = Number(env.SUMMARY_TIMEOUT_MS || DEFAULT_TIMEOUT_MS);
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    // 1回分の呼び出し。本文（JSON 文字列）を返す
+    const requestOnce = async () => {
+      const timeoutMs = Number(env.SUMMARY_TIMEOUT_MS || DEFAULT_TIMEOUT_MS);
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
 
-    let response;
-    try {
-      response = await fetchImpl(url, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      });
-    } catch (error) {
-      const wrapped = new Error(`Mantle request failed: ${error.message}`);
-      wrapped.coreErrorCode = 'MANTLE_ERROR';
-      throw wrapped;
-    } finally {
-      clearTimeout(timer);
-    }
+      let response;
+      try {
+        response = await fetchImpl(url, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
+      } catch (error) {
+        const wrapped = new Error(`Mantle request failed: ${error.message}`);
+        wrapped.coreErrorCode = 'MANTLE_ERROR';
+        // 時間切れ（abort）や通信エラー。やり直せば通ることがある
+        wrapped.retriable = true;
+        throw wrapped;
+      } finally {
+        clearTimeout(timer);
+      }
 
-    const rawBody = await response.text();
+      const text = await response.text();
 
-    if (!response.ok) {
-      const error = new Error(
-        `Mantle returned ${response.status}: ${rawBody.slice(0, 500)}`
-      );
-      error.coreErrorCode = 'MANTLE_ERROR';
-      error.status = response.status;
-      throw error;
+      if (!response.ok) {
+        const error = new Error(
+          `Mantle returned ${response.status}: ${text.slice(0, 500)}`
+        );
+        error.coreErrorCode = 'MANTLE_ERROR';
+        error.status = response.status;
+        // 5xx と 429 は向こうの一時的な都合なので、やり直せば通ることがある
+        error.retriable = response.status >= 500 || response.status === 429;
+        throw error;
+      }
+
+      return text;
+    };
+
+    let rawBody;
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        rawBody = await requestOnce();
+        break;
+      } catch (error) {
+        if (!error.retriable || attempt >= RETRY_COUNT) {
+          throw error;
+        }
+        console.warn(`[Summary] Mantle failed, retrying once: ${error.message.slice(0, 200)}`);
+        await sleep(RETRY_DELAY_MS);
+      }
     }
 
     let payload;
@@ -187,4 +223,5 @@ module.exports = {
   extractOutputText,
   resolveBaseUrl,
   buildUrl,
+  RETRY_COUNT,
 };
