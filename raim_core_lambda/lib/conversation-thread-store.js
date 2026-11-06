@@ -103,6 +103,27 @@ async function getThread(sub, threadId, deps = {}) {
 }
 
 /**
+ * 前回の要約より後に、利用者の発言があるか。
+ *
+ * 会話を切り替えたときに前のスレッドを要約するかの判定に使う。
+ * 話しかけ（アプリを開いたとき）は assistant の発言しか残さないので、
+ * 話しかけだけのスレッドや、要約のあと話しかけしか増えていないスレッドは要約しない。
+ */
+function hasUnsummarizedUserTurn(thread) {
+  if (!thread || isDeletedThread(thread) || !Array.isArray(thread.messages)) {
+    return false;
+  }
+
+  const summarizedAt = String(thread.summarizedAt || '');
+
+  return thread.messages.some((m) => {
+    if (!m || m.role !== 'user') return false;
+    if (!summarizedAt) return true;
+    return String(m.createdAt || '') > summarizedAt;
+  });
+}
+
+/**
  * 消したスレッドの墓標か（Edge の deleteThread が残す。キーと deletedAt だけの項目）。
  */
 function isDeletedThread(item) {
@@ -297,6 +318,8 @@ async function appendTurn(
     inputTokens = 0,
     responseId = '',
     responseCreatedAt = '',
+    // 今回ライムに渡した記憶の版（UserSession.userMemoryUpdatedAt）。渡していなければ空
+    memoryInjectedAt = '',
   },
   deps = {}
 ) {
@@ -351,6 +374,13 @@ async function appendTurn(
     values[':responseExpiresAt'] = calculateResponseExpiresAt(
       responseCreatedAt || now
     );
+  }
+
+  // このスレッドでライムに最後に渡した記憶の版。続きの会話で、記憶がこれより
+  // 新しくなっていたら渡し直す（core-chat-service.js の resendUserMemory）。
+  if (memoryInjectedAt) {
+    setParts.push('memoryInjectedAt = :memoryInjectedAt');
+    values[':memoryInjectedAt'] = String(memoryInjectedAt);
   }
 
   // sessionInputTokens は「今の文脈サイズ」。加算ではなく代入する。
@@ -534,6 +564,7 @@ function deriveTitle(text) {
 module.exports = {
   ThreadDeletedError,
   isDeletedThread,
+  hasUnsummarizedUserTurn,
   TABLE_NAME,
   MAX_MESSAGES,
   MAX_MESSAGE_BYTES,

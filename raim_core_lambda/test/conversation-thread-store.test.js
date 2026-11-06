@@ -330,3 +330,48 @@ test('ensureThread は墓標のあるスレッドを作り直さず THREAD_DELET
     (error) => error.code === 'THREAD_DELETED'
   );
 });
+
+// ── 前回の要約より後の発言 ───────────────────────
+
+test('hasUnsummarizedUserTurn looks only at user messages after the last summary', () => {
+  const { hasUnsummarizedUserTurn } = require('../lib/conversation-thread-store');
+  const user = (createdAt) => ({ role: 'user', text: 'x', createdAt });
+  const assistant = (createdAt) => ({ role: 'assistant', text: 'y', createdAt });
+
+  assert.equal(hasUnsummarizedUserTurn(null), false);
+  assert.equal(hasUnsummarizedUserTurn({ messages: [] }), false);
+  // 話しかけだけのスレッド
+  assert.equal(hasUnsummarizedUserTurn({ messages: [assistant('2026-11-06T01:00:00Z')] }), false);
+  // まだ一度も要約していない
+  assert.equal(hasUnsummarizedUserTurn({ messages: [user('2026-11-06T01:00:00Z')] }), true);
+  assert.equal(hasUnsummarizedUserTurn({
+    summarizedAt: '2026-11-06T02:00:00Z',
+    messages: [user('2026-11-06T01:00:00Z'), assistant('2026-11-06T03:00:00Z')],
+  }), false);
+  assert.equal(hasUnsummarizedUserTurn({
+    summarizedAt: '2026-11-06T02:00:00Z',
+    messages: [user('2026-11-06T01:00:00Z'), user('2026-11-06T03:00:00Z')],
+  }), true);
+  // 消したスレッドの墓標
+  assert.equal(hasUnsummarizedUserTurn({ deletedAt: 'x', messages: [user('2026-11-06T03:00:00Z')] }), false);
+});
+
+test('appendTurn saves the memory version sent in this turn', async () => {
+  const { appendTurn } = require('../lib/conversation-thread-store');
+  const sent = [];
+  const docClient = { send: async (cmd) => { sent.push(cmd.input); return { Attributes: {} }; } };
+
+  await appendTurn({
+    sub: 's', threadId: 't',
+    userMessage: { text: 'a' }, assistantMessage: { text: 'b' },
+    memoryInjectedAt: '2026-11-06T03:00:00.000Z',
+  }, { docClient });
+  assert.ok(sent[0].UpdateExpression.includes('memoryInjectedAt = :memoryInjectedAt'));
+  assert.equal(sent[0].ExpressionAttributeValues[':memoryInjectedAt'], '2026-11-06T03:00:00.000Z');
+
+  await appendTurn({
+    sub: 's', threadId: 't',
+    userMessage: { text: 'a' }, assistantMessage: { text: 'b' },
+  }, { docClient });
+  assert.ok(!sent[1].UpdateExpression.includes('memoryInjectedAt'));
+});
