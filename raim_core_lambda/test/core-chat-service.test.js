@@ -554,6 +554,39 @@ test('アプリを開いたときの話しかけは、合図の文を残さず�
   assert.equal(append[1].assistantMessage.meta.greeting, true);
 });
 
+// 2026-11-06: 「もう消えたい」の3分後に、同じ会話で季節の話しかけをしていた
+test('greeting right after a hard talk gently checks in instead of using an angle', async () => {
+  const calls = [];
+  const dependencies = createDependencies(calls);
+  dependencies.now = () => new Date('2026-11-06T05:18:42.000Z');
+  dependencies.resolveThread = async () => ({
+    threadId: 'thread-hard',
+    isNew: false,
+    thread: {
+      messages: [
+        { role: 'user', text: 'もう消えたい', createdAt: '2026-11-06T05:15:32.000Z' },
+        { role: 'assistant', text: '話してくれてありがとう', createdAt: '2026-11-06T05:15:32.000Z' },
+      ],
+    },
+  });
+  dependencies.buildMantleInput = (input) => {
+    calls.push(['build', input]);
+    return input;
+  };
+
+  await createCoreChatService(dependencies)({
+    sub: 'user-1',
+    requestId: 'req-greet-care',
+    text: '',
+    images: [],
+    greeting: true,
+  });
+
+  const build = calls.find(([name]) => name === 'build');
+  assert.match(build[1].greetingInstruction, /そっと様子を聞く/);
+  assert.doesNotMatch(build[1].greetingInstruction, /今回の切り口/);
+});
+
 // ── 会話の切り替えと記憶 ─────────────────────────
 
 function runChat(overrides = {}, event = {}) {

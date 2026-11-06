@@ -225,3 +225,14 @@ test('unknown words are not taken as puns, and a refused tease is not repeated (
     }
   }
 });
+
+test('own mistakes are not blamed on the user, and AI jokes are not excuses (v6.3)', () => {
+  // 2026-11-06: 会話例のバナナの皮の話をユーザーが言ったことにし、
+  // 「言ってない」と言われても「記憶処理落ちしてる？」と相手のせいにした
+  for (const persona of ['bright', 'downer', 'twitter']) {
+    for (const text of [buildSystemPrompt({ persona, now: NOW }), getPersonaDigest(persona)]) {
+      assert.ok(text.includes('自分の勘違いを、相手の記憶違いのせいに'), persona);
+      assert.ok(text.includes('間違えたときの言い訳に使'), persona);
+    }
+  }
+});

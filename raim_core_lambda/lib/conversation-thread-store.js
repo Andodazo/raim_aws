@@ -546,6 +546,12 @@ async function updateThreadTitle(sub, threadId, title, source = 'user', deps = {
   }
 }
 
+// 会話一覧の題名に出したくない言葉。要約から付けた題名が「消えたいと感じている」に
+// なっていた（2026-11-06 のテスト）。要約前の題名（最初の発言）も同じにする。
+// Summary Lambda の conversation-thread-store.js と同じ言葉にそろえる。
+const SENSITIVE_TITLE_WORDS = Object.freeze(['消えたい', '死にたい', '傷つけたい', 'いなくなりたい']);
+const SENSITIVE_TITLE = '気持ちを話した';
+
 /**
  * 最初のユーザー発話からスレッドのタイトル候補を作る。
  *
@@ -556,6 +562,10 @@ function deriveTitle(text) {
 
   if (!normalized) {
     return '新しい会話';
+  }
+
+  if (SENSITIVE_TITLE_WORDS.some((word) => normalized.includes(word))) {
+    return SENSITIVE_TITLE;
   }
 
   return normalized.length <= 20 ? normalized : `${normalized.slice(0, 20)}…`;

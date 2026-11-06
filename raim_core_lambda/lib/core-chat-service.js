@@ -58,6 +58,8 @@ const {
   parseToolArguments,
   makeToolCallKey,
   isKnownTool,
+  normalizeSearchQuery,
+  searchQueryFromUserText,
 } = require('./tools');
 const { getToolSecrets } = require('./tool-secret-provider');
 const {
@@ -80,6 +82,8 @@ const {
   GREETING_SCENE_TEXT,
   pickGreetingAngle,
   buildGreetingInstruction,
+  isAfterHardTalk,
+  buildCareGreetingInstruction,
 } = require('./greeting');
 const { shouldSummarize } = require('./summary-trigger');
 const { dispatchSummarization } = require('./summary-dispatcher');
@@ -406,8 +410,12 @@ function createCoreChatService(dependencyOverrides = {}) {
 
     // 3-d. アプリを開いたときの話しかけは、切り口を毎回ランダムに選ぶ（同じ文にならないように）。
     // 何日も空いていたら切り口は使わず「久しぶり」を優先する
+    // 少し前につらい話をしていたら、切り口は使わず、そっと様子を聞く（greeting.js 参照）
     let greetingInstruction = '';
-    if (input.greeting) {
+    if (input.greeting && isAfterHardTalk(threadContext.thread, now)) {
+      greetingInstruction = buildCareGreetingInstruction();
+      console.log('[Greeting] angle=care');
+    } else if (input.greeting) {
       const gapMinutes = lastTalked.lastTalkedAt
         ? Math.max(0, (now.getTime() - Date.parse(lastTalked.lastTalkedAt)) / 60000)
         : null;
@@ -584,7 +592,21 @@ function createCoreChatService(dependencyOverrides = {}) {
       // Gemmaは並列ツール呼出に非対応なので、先頭の1件だけを処理する。
       const toolCall = mantleResponse.toolCalls[0];
       const toolName = toolCall.name;
-      const toolArgs = dependencies.parseToolArguments(toolCall.arguments);
+      let toolArgs = dependencies.parseToolArguments(toolCall.arguments);
+
+      // 検索語が空のまま web_search を呼んだら、ユーザーの発言から検索語を作る
+      // （searchQueryFromUserText 参照）。発言に中身が無ければ空のまま（聞き返す）。
+      // なぜ空になるのかを調べるため、引数の名前だけログに出す（中身は出さない）
+      if (toolName === 'web_search' && !normalizeSearchQuery(toolArgs?.query)) {
+        const fallback = searchQueryFromUserText(input.text);
+        const argKeys = Object.keys(toolArgs || {}).join(',') || '(none)';
+        console.warn(
+          `[Tool] web_search query empty: argKeys=${argKeys} fallback=${fallback ? 'user_text' : 'none'}`
+        );
+        if (fallback) {
+          toolArgs = { ...toolArgs, query: fallback };
+        }
+      }
       const callKey = dependencies.makeToolCallKey(toolName, toolArgs);
 
       // 同じツールを同じ引数で呼び直すループを検知して打ち切る。
@@ -630,7 +652,7 @@ function createCoreChatService(dependencyOverrides = {}) {
       // ような短い発言で、2026-10-28 のテスト）。検索しても失敗するだけなので、
       // 「調べてくるね」も言わずに、何を調べるか聞き返させる。
       const emptySearchQuery = toolName === 'web_search' &&
-        String(toolArgs?.query || '').trim() === '';
+        !normalizeSearchQuery(toolArgs?.query);
 
       // ツール呼出中であることをクライアントへ知らせる。
       // Gemmaは本文を返せないため、ここはサーバー側の固定セリフ。

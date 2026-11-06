@@ -102,11 +102,21 @@ const SUMMARY_INSTRUCTION_FACTS = `
 // 「最近のニュースを調べさせた」のような、その場限りの頼みごとが事実として並んでいた
 // （2026-11-06 のテスト）。スレッドの要約はその会話の流れを残すために今のままにし、
 // 記憶はこの人がどんな人かだけにする（安藤さんと決めた文言）。
+//
+// 2026-11-06 の2回目のテストで足した（安藤さんと決めた）:
+// - 「今日を暑いと感じている」のような、その日だけの気分が記憶に入っていた
+// - 「ユーザーは消えたいと感じている」が記憶に残り、「ライムが覚えていること」に出ていた。
+//   その会話の要約には残るので、その会話の中では覚えている
+// - 【関係性】が「状況に応じて振れ幅のある…」のように、テストのやり取りから
+//   無理に読み取った文になっていた。記憶では1行までにする（formatSummary でも切る）
 const MEMORY_INSTRUCTION = `
 【記憶にするときのルール】
 この要約は、ライムがこの人のことを覚えておくための記憶になる。
 - この人がどんな人かだけを残す。名前や呼び方、好きなもの・苦手なもの、学校や仕事、家族やペット、大きな出来事、これからの予定
 - 天気を聞いた・ニュースを調べさせた・自己紹介させた、のようなその場限りの頼みごとは書かない
+- 今日暑い、眠いのような、その日だけの気分や感想も書かない
+- 消えたい・死にたいのような、そのときのつらい気持ちは書かない
+- relationship は1つまで。はっきり分かることだけ書き、分からなければ空にする
 `.trim();
 
 // ─────────────────────────────────────────────
@@ -284,7 +294,7 @@ function closeBrackets(value) {
  * DynamoDB には文字列で保存し、prompt-builder がそのまま初回プロンプトへ
  * 埋め込む。JSON のままだと読みにくいため整形する。
  */
-function formatSummary(rawText, forgotten = []) {
+function formatSummary(rawText, forgotten = [], { maxRelationship = Infinity } = {}) {
   const parsed = parseSummaryJson(rawText);
   // Mantle が除き損ねても、消した項目とまったく同じ文は残さない
   const dropped = new Set(forgotten.map((f) => String(f).trim()));
@@ -297,7 +307,8 @@ function formatSummary(rawText, forgotten = []) {
   const lines = [];
   const facts = (Array.isArray(parsed.facts) ? parsed.facts : []).filter(keep);
   const relationship = (Array.isArray(parsed.relationship) ? parsed.relationship : [])
-    .filter(keep);
+    .filter(keep)
+    .slice(0, maxRelationship);
 
   if (facts.length > 0) {
     lines.push('【事実】');
@@ -351,7 +362,10 @@ async function generateSummary({ history, previousSummary = '', forgotten = [], 
   });
 
   return {
-    summary: formatSummary(response.text || '', forgotten),
+    // 記憶では【関係性】を1行までにする（MEMORY_INSTRUCTION 参照）
+    summary: formatSummary(response.text || '', forgotten, {
+      maxRelationship: purpose === 'memory' ? 1 : Infinity,
+    }),
     usage: response.usage || null,
   };
 }

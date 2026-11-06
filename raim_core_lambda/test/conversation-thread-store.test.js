@@ -375,3 +375,9 @@ test('appendTurn saves the memory version sent in this turn', async () => {
   }, { docClient });
   assert.ok(!sent[1].UpdateExpression.includes('memoryInjectedAt'));
 });
+
+// 2026-11-06: 会話一覧の題名に「消えたい」がそのまま出ていた
+test('deriveTitle softens a first message about wanting to disappear', () => {
+  assert.equal(deriveTitle('もう消えたい'), '気持ちを話した');
+  assert.equal(deriveTitle('新宿で起こして'), '新宿で起こして');
+});
