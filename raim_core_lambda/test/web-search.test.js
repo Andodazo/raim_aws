@@ -40,3 +40,19 @@ test('returns up to five results', async () => {
   const result = await searchWeb('q', undefined, 'key', { fetch: fakeTavily(captured, results) });
   assert.equal(result.summary.length, 5);
 });
+
+// ── 検索する言葉が空・短いとき ───────────────────
+
+test('web_search does not call the API when the query is empty or one character', async () => {
+  const { executeTool, getToolDescription, normalizeSearchQuery } = require('../lib/tools');
+  // 以前は1文字で Tavily が 400、言葉が無いと例外になっていた
+  for (const query of [undefined, '', '  ', 'あ']) {
+    const result = await executeTool('web_search', { query }, { tavilyApiKey: 'dummy' });
+    assert.equal(result.error, true);
+    assert.match(result.message, /聞き返す/);
+  }
+  assert.equal(normalizeSearchQuery('  天気  '), '天気');
+  // 「「undefined」を検索しています」と出さない
+  assert.equal(getToolDescription('web_search', {}), 'ネットで調べています');
+  assert.equal(getToolDescription('web_search', { query: '新宿 天気' }), '「新宿 天気」を検索しています');
+});
