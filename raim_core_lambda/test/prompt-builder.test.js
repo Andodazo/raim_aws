@@ -40,8 +40,11 @@ test('buildSceneContext includes new FewShot scene metadata', () => {
     },
   });
 
-  assert.match(context, /embedding_text: 冗談 ジョーク 笑える/);
+  // 検索語は渡さない。joke の検索語の「ダジャレ」を読んで、選手名をダジャレと決めつけていた
+  assert.doesNotMatch(context, /embedding_text|冗談 ジョーク 笑える/);
+  assert.match(context, /description: 冗談・からかい・ユーモアの会話/);
   assert.match(context, /default_emotions: happy:0.5, excited:0.3/);
+  assert.match(context, /決めつけず/);
 });
 
 test('buildFewShotMessages converts emotions map into Mantle output example', () => {
@@ -95,10 +98,11 @@ test('buildFollowupMantleInput includes scene hint without exposing it as user t
   const userMessages = input.messages.filter((m) => m.role === 'user');
 
   assert.ok(systemMessages.length >= 1);
-  assert.match(
-    systemMessages.map((m) => m.content).join('\n'),
-    /embedding_text: 冗談 ジョーク/
-  );
+  const systemText = systemMessages.map((m) => m.content).join('\n');
+  assert.match(systemText, /Sceneヒント/);
+  assert.match(systemText, /description: 冗談・からかい・ユーモアの会話/);
+  // 検索語は渡さない（ダジャレの決めつけを防ぐ）
+  assert.doesNotMatch(systemText, /embedding_text|冗談 ジョーク/);
 
   // 実際のユーザー発話は最後のuserメッセージ。
   // few-shotのuser例と混同しないよう末尾を見る。
