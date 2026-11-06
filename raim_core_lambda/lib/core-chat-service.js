@@ -80,6 +80,8 @@ const {
   GREETING_SCENE_TEXT,
   pickGreetingAngle,
   buildGreetingInstruction,
+  isAfterHardTalk,
+  buildCareGreetingInstruction,
 } = require('./greeting');
 const { shouldSummarize } = require('./summary-trigger');
 const { dispatchSummarization } = require('./summary-dispatcher');
@@ -406,8 +408,12 @@ function createCoreChatService(dependencyOverrides = {}) {
 
     // 3-d. アプリを開いたときの話しかけは、切り口を毎回ランダムに選ぶ（同じ文にならないように）。
     // 何日も空いていたら切り口は使わず「久しぶり」を優先する
+    // 少し前につらい話をしていたら、切り口は使わず、そっと様子を聞く（greeting.js 参照）
     let greetingInstruction = '';
-    if (input.greeting) {
+    if (input.greeting && isAfterHardTalk(threadContext.thread, now)) {
+      greetingInstruction = buildCareGreetingInstruction();
+      console.log('[Greeting] angle=care');
+    } else if (input.greeting) {
       const gapMinutes = lastTalked.lastTalkedAt
         ? Math.max(0, (now.getTime() - Date.parse(lastTalked.lastTalkedAt)) / 60000)
         : null;

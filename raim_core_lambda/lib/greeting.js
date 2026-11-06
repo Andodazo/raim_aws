@@ -38,6 +38,7 @@ const GREETING_INSTRUCTION = [
   '- 覚えていることには、切り口で言われたときだけ触れる',
   '- 「何か用？」「何でも聞いてね」のような受付っぽい言い方はしない',
   '- 「アプリが開かれた」「合図」には触れない',
+  '- 直前の会話がつらい話だったら、明るいノリやボケはしない',
 ].join('\n');
 
 // ------------------------------------------------------------------------------
@@ -65,6 +66,60 @@ const GREETING_ANGLES = Object.freeze([
   { id: 'season', text: '曜日や季節に触れる（週末だね、寒くなってきたね、など）' },
   { id: 'playful', text: 'ちょっとしたボケや、いたずらっぽい一言' },
 ]);
+
+// ------------------------------------------------------------------------------
+// つらい話のあと
+// ------------------------------------------------------------------------------
+//
+// 「もう消えたい」の3分後に、同じ会話で「やっほー。だんだん寒くなってきたけど、
+// 風邪とか引いてない？」と話しかけていた（季節の切り口、2026-11-06 のテスト）。
+// 今の会話の最後のユーザーの発言が少し前のつらい話なら、切り口は使わず、
+// そっと様子を聞く一言にする（安藤さんと決めた）。
+
+/** これより前の発言は「直前」とみなさない */
+const HARD_TALK_WINDOW_MINUTES = 3 * 60;
+
+/** つらい話とみなす言葉（最後のユーザーの発言に含まれるか見る） */
+const HARD_TALK_WORDS = Object.freeze([
+  '消えたい',
+  '死にたい',
+  'つらい',
+  '辛い',
+  'しんどい',
+  'もう無理',
+  '傷つけたい',
+]);
+
+const CARE_GREETING_LINES = Object.freeze([
+  '- 前回、つらい気持ちの話をしていた。明るいノリ、季節の話、ボケはしない',
+  '- そっと様子を聞く一言だけにする（「さっきの話、少しは落ち着いた？」のように）。無理に話させない',
+]);
+
+/**
+ * 今の会話の最後のユーザーの発言が、少し前のつらい話か。
+ *
+ * @param {Object|null} thread 今の会話（appendTurn の前の状態）
+ * @param {Date} now
+ */
+function isAfterHardTalk(thread, now = new Date()) {
+  const messages = Array.isArray(thread?.messages) ? thread.messages : [];
+  const lastUser = [...messages].reverse().find((m) => m?.role === 'user');
+  if (!lastUser || typeof lastUser.text !== 'string') {
+    return false;
+  }
+  const at = Date.parse(lastUser.createdAt || '');
+  if (!Number.isFinite(at) || now.getTime() - at > HARD_TALK_WINDOW_MINUTES * 60000) {
+    return false;
+  }
+  return HARD_TALK_WORDS.some((word) => lastUser.text.includes(word));
+}
+
+/**
+ * つらい話のあとの話しかけの指示（切り口は使わない）。
+ */
+function buildCareGreetingInstruction() {
+  return [GREETING_INSTRUCTION, ...CARE_GREETING_LINES].join('\n');
+}
 
 /**
  * 今回の切り口を選ぶ。何日も空いていたときは null（「久しぶり」を優先する）。
@@ -104,4 +159,8 @@ module.exports = {
   LONG_GAP_MINUTES,
   pickGreetingAngle,
   buildGreetingInstruction,
+  HARD_TALK_WINDOW_MINUTES,
+  HARD_TALK_WORDS,
+  isAfterHardTalk,
+  buildCareGreetingInstruction,
 };
