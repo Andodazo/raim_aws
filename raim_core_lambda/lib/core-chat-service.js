@@ -71,7 +71,11 @@ const {
 } = require('./s3-image-service');
 const { createCoreChat, createCoreError } = require('./core-response');
 const { resolveThread, ensureThreadTitle } = require('./thread-resolver');
-const { appendTurn } = require('./conversation-thread-store');
+const {
+  appendTurn,
+  getThread,
+  hasUnsummarizedUserTurn,
+} = require('./conversation-thread-store');
 const {
   GREETING_SCENE_TEXT,
   pickGreetingAngle,
@@ -181,6 +185,7 @@ const defaultDependencies = Object.freeze({
   resolveThread,
   ensureThreadTitle,
   appendTurn,
+  getThread,
   shouldSummarize,
   dispatchSummarization,
   getMantleSessionState,
@@ -210,6 +215,29 @@ const defaultDependencies = Object.freeze({
   onToolCallStart,
   onClientAction,
 });
+
+/**
+ * 前に使っていたスレッドに、まだ要約していない利用者の発言があれば要約を頼む。
+ *
+ * 失敗しても会話は壊さない（返事は既にできている）。取りこぼしは週次バッチが拾う。
+ */
+async function requestSummaryOfPreviousThread(sub, threadId, dependencies) {
+  try {
+    const previous = await dependencies.getThread(sub, threadId);
+    if (!hasUnsummarizedUserTurn(previous)) {
+      return false;
+    }
+
+    return await dependencies.dispatchSummarization({
+      sub,
+      threadId,
+      reason: 'thread_switch',
+    });
+  } catch (error) {
+    console.error(`[Summary] previous thread summary request failed (non-fatal): ${error.message}`);
+    return false;
+  }
+}
 
 /**
  * Core Chat Serviceを生成する。
@@ -288,6 +316,10 @@ function createCoreChatService(dependencyOverrides = {}) {
     // 1. ユーザー単位の会話状態をDynamoDBから取得する。
     // lastResponseIdが有効ならMantle側の会話コンテキストを継続できる。
     const session = await dependencies.getOrCreateUserSession(input.sub);
+
+    // 切り替える前に使っていたスレッド。resolveThread が activeThreadId を
+    // 書き換える前に控えておき、会話を切り替えたら前のスレッドの要約を頼む（§ 8-b）。
+    const previousThreadId = String(session.activeThreadId || '');
 
     // 1-b. 今回の往復が属する会話スレッドを決める（案A: 履歴を自前保存）。
     // クライアント指定 > UserSession の activeThreadId > 新規作成、の優先順位。
@@ -388,6 +420,26 @@ function createCoreChatService(dependencyOverrides = {}) {
       console.log(`[Greeting] angle=${angle ? angle.id : 'long_gap'}`);
     }
 
+    // 3-e. 記憶を渡し直すか。
+    //
+    // 記憶（userMemory）はスレッドの最初の1回（初回モード）でしか渡していなかった。
+    // 会話を切り替えると前のスレッドの要約と記憶の作り直しが走るが、新しい会話の
+    // 最初の発言には間に合わず、そのスレッドではずっと記憶が無いままだった。
+    // 記憶の版（userMemoryUpdatedAt）がこのスレッドで前に渡したものと違えば、
+    // 続きの会話でも渡し直す。
+    const userMemory = session.userMemory || '';
+    const memoryVersion = String(session.userMemoryUpdatedAt || '');
+    const resendUserMemory = Boolean(
+      sessionState.usePreviousResponseId &&
+      userMemory.trim() &&
+      memoryVersion &&
+      memoryVersion !== String(threadContext.thread?.memoryInjectedAt || '')
+    );
+    // 今回ライムに記憶を渡すか（初回モードは中身があれば必ず渡す）
+    let memorySent = sessionState.usePreviousResponseId
+      ? resendUserMemory
+      : Boolean(userMemory.trim());
+
     // 4. 初回ならsystem prompt・要約・Few-shotを含める。
     // 継続時はprevious_response_idを使うため、今回の発話を中心に組み立てる。
     let mantleInput = dependencies.buildMantleInput({
@@ -398,7 +450,9 @@ function createCoreChatService(dependencyOverrides = {}) {
       // 常に空になり、圧縮でセッションをリセットした直後に文脈が失われる。
       sessionSummary: threadContext.thread?.sessionSummary || '',
       // スレッドを跨いだ記憶。別スレッドで話した内容をライムが覚えている状態にする。
-      userMemory: session.userMemory || '',
+      userMemory,
+      // 続きの会話でも、記憶が新しくなっていたら渡し直す（§ 3-e）
+      resendUserMemory,
       scene: selectedScene,
       usePreviousResponseId: sessionState.usePreviousResponseId,
       withTools: toolsEnabled,
@@ -475,7 +529,7 @@ function createCoreChatService(dependencyOverrides = {}) {
           images: resolvedImages,
           // 要約はスレッド単位に保存される（§ 上のコメント参照）
           sessionSummary: threadContext.thread?.sessionSummary || '',
-          userMemory: session.userMemory || '',
+          userMemory,
           scene: selectedScene,
           usePreviousResponseId: false,
           withTools: toolsEnabled,
@@ -488,6 +542,8 @@ function createCoreChatService(dependencyOverrides = {}) {
         });
 
         mantleInput = rebuiltInput;
+        // 初回用に作り直したので、記憶は中身があれば渡している
+        memorySent = Boolean(userMemory.trim());
 
         return callMantle({ input: rebuiltInput, previousId: '', tools });
       }
@@ -780,6 +836,8 @@ function createCoreChatService(dependencyOverrides = {}) {
           : 0,
         responseId: mantleResponse.responseId,
         responseCreatedAt: mantleResponse.createdAt,
+        // 今回記憶を渡したら、その版を残す（次から同じ版は渡し直さない）
+        memoryInjectedAt: memorySent ? memoryVersion : '',
       });
 
       // 返事を作っている間にスレッドが消されていたら（appendTurn が null）、
@@ -815,6 +873,16 @@ function createCoreChatService(dependencyOverrides = {}) {
       }
     } catch (error) {
       console.error(`[Thread] append failed (non-fatal): ${error.message}`);
+    }
+
+    // 8-b. 会話を切り替えたら、前のスレッドの要約を頼む。
+    //
+    // 以前は、長くなったスレッド（トークン数か往復数が閾値を超えたもの）しか
+    // すぐには要約せず、短い会話は週次バッチ（7日放置したもの）まで要約も記憶にも
+    // 入らなかった。新しい会話を始めたときや一覧から別の会話を開いたときに、
+    // それまでのスレッドを要約する。Summary Lambda は要約のあと記憶も作り直す。
+    if (previousThreadId && previousThreadId !== threadContext.threadId) {
+      await requestSummaryOfPreviousThread(input.sub, previousThreadId, dependencies);
     }
 
     return createCoreChat({

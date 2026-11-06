@@ -204,6 +204,7 @@ test('handleSqsEvent processes records', async () => {
       generateSummary: async () => { processed.push(1); return { summary: 'ok' }; },
       saveThreadSummary: async () => {},
       resetThreadSession: async () => {},
+      refreshUserMemory: async () => true,
     }
   );
   assert.equal(processed.length, 1);
@@ -228,6 +229,7 @@ test('handleSqsEvent returns only failed records for retry', async () => {
       generateSummary: async () => ({ summary: 'ok' }),
       saveThreadSummary: async () => {},
       resetThreadSession: async () => {},
+      refreshUserMemory: async () => true,
     }
   );
   assert.deepEqual(result.batchItemFailures, [{ itemIdentifier: 'ng' }]);
@@ -240,6 +242,78 @@ test('handleSqsEvent discards malformed bodies without retry', async () => {
   );
   // 再試行しても直らないので failure に入れない（DLQ 行き）
   assert.deepEqual(result.batchItemFailures, []);
+});
+
+// ── 要約のあとの記憶の作り直し ───────────────
+
+function sqsRecord(body, messageId = 'm1') {
+  return { messageId, eventSource: 'aws:sqs', body: JSON.stringify(body) };
+}
+
+test('handleSqsEvent rebuilds user memory after a thread summary is saved', async () => {
+  // 以前は SQS の要約ではスレッドの要約だけを保存し、記憶は週次と削除のときしか
+  // 作り直さなかったので、テスト中はずっと記憶が空だった
+  const memories = [];
+  const result = await handleSqsEvent(
+    { Records: [sqsRecord({ sub: 'u1', threadId: 't1', reason: 'thread_switch' })] },
+    {
+      env: ENV,
+      getThread: async () => makeThread(),
+      getForgottenMemories: async () => [],
+      generateSummary: async () => ({ summary: '【事実】\n- 猫を飼っている' }),
+      saveThreadSummary: async () => {},
+      updateTitleFromSummary: async () => {},
+      resetThreadSession: async () => {},
+      getMemoryGeneration: async () => 3,
+      listThreads: async () => [
+        { threadId: 't1', title: '猫の話', sessionSummary: '【事実】\n- 猫を飼っている' },
+      ],
+      updateUserMemory: async (sub, memory, opts) => { memories.push({ sub, memory, opts }); },
+    }
+  );
+
+  assert.deepEqual(result.batchItemFailures, []);
+  assert.equal(memories.length, 1);
+  assert.equal(memories[0].sub, 'u1');
+  assert.ok(memories[0].memory.includes('猫'));
+  // 作り直している間にスレッドが消されたら書き戻さない
+  assert.equal(memories[0].opts.expectedGeneration, 3);
+});
+
+test('handleSqsEvent does not rebuild user memory when nothing was summarized', async () => {
+  let refreshed = false;
+  const result = await handleSqsEvent(
+    { Records: [sqsRecord({ sub: 'u1', threadId: 't1' })] },
+    {
+      env: ENV,
+      getThread: async () => null,
+      refreshUserMemory: async () => { refreshed = true; return true; },
+    }
+  );
+
+  assert.deepEqual(result.batchItemFailures, []);
+  assert.equal(refreshed, false);
+});
+
+test('a failed memory rebuild after a summary is not retried', async () => {
+  // 再試行すると保存済みの要約をもう一度作ることになる。次の要約か週次で作り直す
+  let summaries = 0;
+  const result = await handleSqsEvent(
+    { Records: [sqsRecord({ sub: 'u1', threadId: 't1' })] },
+    {
+      env: ENV,
+      getThread: async () => makeThread(),
+      getForgottenMemories: async () => [],
+      generateSummary: async () => { summaries += 1; return { summary: 'ok' }; },
+      saveThreadSummary: async () => {},
+      updateTitleFromSummary: async () => {},
+      resetThreadSession: async () => {},
+      refreshUserMemory: async () => { throw new Error('DynamoDB down'); },
+    }
+  );
+
+  assert.deepEqual(result.batchItemFailures, []);
+  assert.equal(summaries, 1);
 });
 
 // ── 週次ハンドラ ─────────────────────────────

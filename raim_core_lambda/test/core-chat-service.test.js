@@ -46,6 +46,7 @@ function createDependencies(calls) {
     appendTurn: async () => ({}),
     shouldSummarize: () => ({ shouldSummarize: false, reason: null }),
     dispatchSummarization: async () => true,
+    getThread: async () => null,
     updateMantleResponseState: async (sub, state) => {
       calls.push(['save', sub, state]);
     },
@@ -551,4 +552,135 @@ test('アプリを開いたときの話しかけは、合図の文を残さず�
   assert.equal(append[1].userMessage, null);
   assert.equal(append[1].assistantMessage.text, 'やあ');
   assert.equal(append[1].assistantMessage.meta.greeting, true);
+});
+
+// ── 会話の切り替えと記憶 ─────────────────────────
+
+function runChat(overrides = {}, event = {}) {
+  const calls = [];
+  const dependencies = { ...createDependencies(calls), ...overrides };
+  return createCoreChatService(dependencies)({
+    sub: 'user-1',
+    requestId: 'req-1',
+    text: 'こんにちは',
+    images: [],
+    ...event,
+  });
+}
+
+test('switching threads asks for a summary of the previous thread', async () => {
+  // 以前は短い会話は週次バッチまで要約されず、記憶にも入らなかった
+  const dispatched = [];
+  await runChat({
+    getOrCreateUserSession: async () => ({ activeThreadId: 'thread-old', lastResponseId: '' }),
+    getThread: async (sub, threadId) => ({
+      sub,
+      threadId,
+      messages: [
+        { role: 'user', text: '猫を飼ってるんだ', createdAt: '2026-11-06T01:00:00.000Z' },
+        { role: 'assistant', text: 'へえ', createdAt: '2026-11-06T01:00:00.000Z' },
+      ],
+    }),
+    dispatchSummarization: async (params) => { dispatched.push(params); return true; },
+  });
+
+  assert.deepEqual(dispatched, [
+    { sub: 'user-1', threadId: 'thread-old', reason: 'thread_switch' },
+  ]);
+});
+
+test('staying in the same thread does not ask for a summary', async () => {
+  const dispatched = [];
+  await runChat({
+    getOrCreateUserSession: async () => ({ activeThreadId: 'thread-test' }),
+    getThread: async () => { throw new Error('should not read'); },
+    dispatchSummarization: async (params) => { dispatched.push(params); return true; },
+  });
+
+  assert.deepEqual(dispatched, []);
+});
+
+test('a previous thread with nothing new since its summary is not summarized again', async () => {
+  const dispatched = [];
+  await runChat({
+    getOrCreateUserSession: async () => ({ activeThreadId: 'thread-old' }),
+    getThread: async () => ({
+      summarizedAt: '2026-11-06T02:00:00.000Z',
+      messages: [
+        { role: 'user', text: '猫を飼ってるんだ', createdAt: '2026-11-06T01:00:00.000Z' },
+        // 要約のあとに増えたのは話しかけ（assistant だけ）
+        { role: 'assistant', text: 'おかえり', createdAt: '2026-11-06T03:00:00.000Z' },
+      ],
+    }),
+    dispatchSummarization: async (params) => { dispatched.push(params); return true; },
+  });
+
+  assert.deepEqual(dispatched, []);
+});
+
+test('a failed summary request for the previous thread does not break the reply', async () => {
+  const result = await runChat({
+    getOrCreateUserSession: async () => ({ activeThreadId: 'thread-old' }),
+    getThread: async () => { throw new Error('DynamoDB down'); },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.text, 'やあ');
+});
+
+test('a newer memory is sent again in a continued conversation', async () => {
+  // 以前は記憶をスレッドの最初の1回しか渡さず、切り替えのあと作り直した記憶が届かなかった
+  const built = [];
+  const appended = [];
+  await runChat({
+    getOrCreateUserSession: async () => ({
+      userMemory: '【事実】\n- 猫を飼っている',
+      userMemoryUpdatedAt: '2026-11-06T03:00:00.000Z',
+    }),
+    resolveThread: async () => ({
+      threadId: 'thread-test',
+      thread: { memoryInjectedAt: '2026-11-01T00:00:00.000Z' },
+      isNew: false,
+    }),
+    buildMantleInput: (input) => { built.push(input); return input; },
+    appendTurn: async (params) => { appended.push(params); return {}; },
+  });
+
+  assert.equal(built[0].resendUserMemory, true);
+  assert.equal(appended[0].memoryInjectedAt, '2026-11-06T03:00:00.000Z');
+});
+
+test('the same memory is not sent twice in a continued conversation', async () => {
+  const built = [];
+  const appended = [];
+  await runChat({
+    getOrCreateUserSession: async () => ({
+      userMemory: '【事実】\n- 猫を飼っている',
+      userMemoryUpdatedAt: '2026-11-06T03:00:00.000Z',
+    }),
+    resolveThread: async () => ({
+      threadId: 'thread-test',
+      thread: { memoryInjectedAt: '2026-11-06T03:00:00.000Z' },
+      isNew: false,
+    }),
+    buildMantleInput: (input) => { built.push(input); return input; },
+    appendTurn: async (params) => { appended.push(params); return {}; },
+  });
+
+  assert.equal(built[0].resendUserMemory, false);
+  assert.equal(appended[0].memoryInjectedAt, '');
+});
+
+test('the first turn of a thread records the memory version it sent', async () => {
+  const appended = [];
+  await runChat({
+    getOrCreateUserSession: async () => ({
+      userMemory: '【事実】\n- 猫を飼っている',
+      userMemoryUpdatedAt: '2026-11-06T03:00:00.000Z',
+    }),
+    getMantleSessionState: () => ({ usePreviousResponseId: false, previousResponseId: '' }),
+    appendTurn: async (params) => { appended.push(params); return {}; },
+  });
+
+  assert.equal(appended[0].memoryInjectedAt, '2026-11-06T03:00:00.000Z');
 });

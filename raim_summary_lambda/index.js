@@ -10,8 +10,8 @@
 // 【2つのトリガー】
 //
 //   1. SQS（Summary Request Queue）… Core Lambda からの即時依頼
-//      トークン数が閾値を超えた時点で Core が投げる。
-//      担当するのは「長くなったスレッドの圧縮」。
+//      トークン数が閾値を超えた時点と、会話を切り替えた時点で Core が投げる。
+//      担当するのは「長くなったスレッドの圧縮」と、そのあとの userMemory の作り直し。
 //
 //   2. EventBridge（週次）… 取りこぼしの回収
 //      a. 放置スレッドの要約
@@ -193,6 +193,31 @@ async function summarizeThread({ sub, threadId }, deps = {}) {
   return { ok: true, summary };
 }
 
+/**
+ * スレッドの要約を保存したあとに、スレッドを跨いだ記憶（userMemory）を作り直す。
+ *
+ * 以前は SQS 経由の要約ではスレッドの要約だけを保存し、userMemory は
+ * 週次バッチ（7日以上放置したスレッドだけ）とスレッド削除のときにしか
+ * 作り直していなかった。そのため毎日のように話していると記憶がいつまでも
+ * 空のままで、「ライムが覚えていること」も空だった（2026-11 のテストで発覚）。
+ *
+ * 失敗しても例外は投げない。投げるとメッセージごと再試行になり、
+ * 保存済みの要約をもう一度作ることになる（LLM の呼び出しが二重になる）。
+ * 次の要約か週次バッチで作り直されるので、ここではログだけ残す。
+ */
+async function refreshMemoryAfterSummary(sub, deps = {}) {
+  try {
+    const updated = await (deps.refreshUserMemory || refreshUserMemory)(sub, deps);
+    console.log(`[Summary] memory refreshed after summary: sub=${sub} updated=${updated}`);
+    return updated;
+  } catch (error) {
+    console.error(
+      `[Summary] memory refresh after summary failed (not retried): sub=${sub} ${error.message}`
+    );
+    return false;
+  }
+}
+
 // ─────────────────────────────────────────────
 // SQS ハンドラ
 // ─────────────────────────────────────────────
@@ -249,6 +274,10 @@ async function handleSqsEvent(event, deps = {}) {
           `[Summary] sqs processed: sub=${sub} threadId=${threadId} ` +
           `reason=${reason || '-'} ok=${result.ok} ${result.reason || ''}`
         );
+
+        if (result.ok) {
+          await refreshMemoryAfterSummary(sub, { ...deps, env });
+        }
       }
     } catch (error) {
       // 一時的な障害の可能性があるので再試行させる。
