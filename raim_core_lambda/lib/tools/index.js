@@ -149,6 +149,29 @@ function normalizeSearchQuery(query) {
   return Array.from(text).length >= MIN_SEARCH_QUERY_LENGTH ? text : '';
 }
 
+// 発言から検索語を作るときに除く言葉（頼み方の部分）
+const SEARCH_REQUEST_WORDS = Object.freeze([
+  'について', 'のことを', 'のこと', 'を調べて', '調べて', 'しらべて', '検索して', 'ググって',
+  'って何', 'ってなに', '教えて', 'もっと', '詳しく', 'くわしく', 'ちょっと', 'ネットで',
+]);
+
+/**
+ * ライムが検索語を空のまま web_search を呼んだときに、ユーザーの発言から検索語を作る。
+ *
+ * 「明日の東京の天気はどう？」で検索語が空になり、「うまく調べられなかった。
+ * もう一回詳しく教えて」と聞き返していた（2026-11-06 のテスト）。発言に中身があるなら
+ * それで調べる方が自然なので、頼み方の言葉（調べて・について など）を除いた残りを使う。
+ * 「調べて」だけのように中身が無ければ空を返す（今までどおり聞き返す）。
+ */
+function searchQueryFromUserText(text) {
+  let query = String(text || '');
+  for (const word of SEARCH_REQUEST_WORDS) {
+    query = query.split(word).join(' ');
+  }
+  query = query.replace(/[？?！!。、,.・「」\s]+/g, ' ').trim();
+  return normalizeSearchQuery(query);
+}
+
 const TOOL_FUNCTIONS = {
   web_search: async (args, secrets = {}) => {
     const query = normalizeSearchQuery(args.query);
@@ -430,6 +453,7 @@ module.exports = {
   isClientActionRequested,
   toChatCompletionsFormat,
   executeTool,
+  searchQueryFromUserText,
   normalizeSearchQuery,
   pickToolIntro,
   getToolDescription,

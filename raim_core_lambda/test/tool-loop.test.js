@@ -351,7 +351,8 @@ test('an empty web_search query is not run and no intro is spoken', async () => 
   });
 
   const handleCoreChat = createCoreChatService(dependencies);
-  const result = await handleCoreChat(BASE_EVENT);
+  // 発言にも中身が無い（「調べて」だけ）ので、発言から検索語も作れない
+  const result = await handleCoreChat({ ...BASE_EVENT, text: '調べて' });
 
   assert.equal(result.ok, true);
   // 検索はせず、「調べてくるね」も言わない
@@ -362,6 +363,45 @@ test('an empty web_search query is not run and no intro is spoken', async () => 
   assert.ok(toolOutput.includes('利用者に聞いて'));
   // 分析用の記録に、検索しなかったことが残る
   assert.equal(appended[0].assistantMessage.meta.tools[0].skipped, 'empty_query');
+});
+
+// 2026-11-06: 「明日の東京の天気はどう？」で検索語が空になり、
+// 「うまく調べられなかった。もう一回詳しく教えて」と聞き返していた
+test('an empty web_search query falls back to the user text when it has content', async () => {
+  const mantleStub = createMantleStub([
+    {
+      responseId: 'resp-1',
+      rawText: '',
+      createdAt: '2026-11-06T00:00:00Z',
+      toolCalls: [{ callId: 'call-1', name: 'web_search', arguments: '{}' }],
+    },
+    {
+      responseId: 'resp-2',
+      rawText: JSON.stringify({ text: '明日は晴れだって', emotions: { happy: 0.5 } }),
+      createdAt: '2026-11-06T00:00:01Z',
+      toolCalls: [],
+    },
+  ]);
+  const { dependencies, executedTools, toolNotifications } = buildDependencies({ mantleStub });
+
+  const result = await createCoreChatService(dependencies)({
+    ...BASE_EVENT,
+    text: '明日の東京の天気はどう？',
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(executedTools.length, 1);
+  assert.equal(executedTools[0].args.query, '明日の東京の天気はどう');
+  assert.equal(toolNotifications.length, 1);
+});
+
+test('searchQueryFromUserText drops the asking words and keeps the subject', () => {
+  const { searchQueryFromUserText } = require('../lib/tools');
+  assert.equal(searchQueryFromUserText('大学生のはんじょうについてもっと詳しく調べて'), '大学生のはんじょう');
+  assert.equal(searchQueryFromUserText('ポモドーロって何？'), 'ポモドーロ');
+  assert.equal(searchQueryFromUserText('調べて'), '');
+  assert.equal(searchQueryFromUserText('ちょっと調べて！'), '');
+  assert.equal(searchQueryFromUserText(''), '');
 });
 
 test('tool intro lines avoid kanji that VOICEVOX misreads and keep the persona tone', () => {
