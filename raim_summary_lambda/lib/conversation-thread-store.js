@@ -358,6 +358,11 @@ function toSummaryHistory(messages) {
 //   'summary' … 要約から生成（より新しい要約が出れば差し替える）
 //   'user'    … ユーザーが手で付けた（差し替えない）
 
+// 会話一覧の題名に出したくない言葉。題名が「消えたいと感じている」になっていた
+// （2026-11-06 のテスト）。一覧は人に見られることもあるので、やわらかい題名にする。
+const SENSITIVE_TITLE_WORDS = Object.freeze(['消えたい', '死にたい', '傷つけたい', 'いなくなりたい']);
+const SENSITIVE_TITLE = '気持ちを話した';
+
 /**
  * 要約テキストの【事実】1件目からタイトルを作る。
  *
@@ -396,6 +401,10 @@ function deriveTitleFromSummary(summary) {
 
   if (!title) {
     return '';
+  }
+
+  if (SENSITIVE_TITLE_WORDS.some((word) => title.includes(word))) {
+    return SENSITIVE_TITLE;
   }
 
   return title.length <= 20 ? title : `${title.slice(0, 20)}…`;

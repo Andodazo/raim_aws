@@ -143,3 +143,16 @@ test('saveThreadSummary does not recreate a deleted thread', async () => {
     'attribute_exists(threadId) AND attribute_not_exists(deletedAt)'
   );
 });
+
+// 2026-11-06: 会話一覧の題名が「消えたいと感じている」になっていた
+test('deriveTitleFromSummary softens a title about wanting to disappear', () => {
+  const { deriveTitleFromSummary } = require('../lib/conversation-thread-store');
+  assert.equal(
+    deriveTitleFromSummary('【事実】\n- ユーザーは消えたいと感じている\n\n【関係性】\n- 弱音を吐いている様子'),
+    '気持ちを話した'
+  );
+  assert.equal(
+    deriveTitleFromSummary('【事実】\n- ユーザーは新宿で起こしてほしいと述べた'),
+    '新宿で起こしてほしいと述べた'
+  );
+});

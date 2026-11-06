@@ -172,3 +172,33 @@ test('building user memory asks to keep only who the person is', () => {
   const thread = buildSummaryInput(history, '', 'full', []);
   assert.ok(!thread.map((m) => m.content).join('\n').includes('その場限りの頼みごと'));
 });
+
+// 2026-11-06 の2回目のテスト: その日の気分、つらい気持ち、無理に読み取った【関係性】が記憶に入った
+test('memory leaves out moods of the day and hard feelings, and keeps one relationship line', () => {
+  const { MEMORY_INSTRUCTION } = require('../lib/summarize-service');
+  assert.ok(MEMORY_INSTRUCTION.includes('その日だけの気分や感想も書かない'));
+  assert.ok(MEMORY_INSTRUCTION.includes('そのときのつらい気持ちは書かない'));
+  assert.ok(MEMORY_INSTRUCTION.includes('relationship は1つまで'));
+
+  const raw = '{"facts": ["猫を飼っている"], "relationship": ["冗談が好きな様子", "振れ幅がある様子"]}';
+  assert.equal(
+    formatSummary(raw, [], { maxRelationship: 1 }),
+    '【事実】\n- 猫を飼っている\n\n【関係性】\n- 冗談が好きな様子'
+  );
+  // スレッドの要約は今までどおり全部残す
+  assert.ok(formatSummary(raw).includes('振れ幅がある様子'));
+});
+
+test('generateSummary cuts relationship to one line only for memory', async () => {
+  const { generateSummary } = require('../lib/summarize-service');
+  const raw = '{"facts": ["猫を飼っている"], "relationship": ["A な様子", "B な様子"]}';
+  const deps = {
+    env: { MANTLE_MODEL: 'm' },
+    createSummary: async () => ({ text: raw, usage: null }),
+  };
+  const history = [{ role: 'user', content: 'やあ' }];
+  const memory = await generateSummary({ history, purpose: 'memory' }, deps);
+  assert.ok(!memory.summary.includes('B な様子'));
+  const thread = await generateSummary({ history }, deps);
+  assert.ok(thread.summary.includes('B な様子'));
+});
