@@ -236,3 +236,22 @@ test('own mistakes are not blamed on the user, and AI jokes are not excuses (v6.
     }
   }
 });
+
+test('twitter has the "nori" patterns and asks about unknown memes, in full and digest (v6.4)', () => {
+  // 2026-11-06: 続きの会話に会話例を入れなくなったら、返事が長くて普通になった
+  for (const text of [buildSystemPrompt({ persona: 'twitter', now: NOW }), getPersonaDigest('twitter')]) {
+    assert.ok(text.includes('「んー」「うーん」から入っていい'));
+    assert.ok(text.includes('HP赤ゲージ'));
+    assert.ok(text.includes('全部で3文まで'));
+    assert.ok(text.includes('ミーム）の量は相手に合わせる'));
+    assert.ok(text.includes('茶目っ気とひとひねりは'));
+    assert.ok(text.includes('何それ、新しいやつ？教えて'));
+  }
+  // 「こんにちは」への丸写しの元だった参考の文は外した
+  assert.ok(!buildSystemPrompt({ persona: 'twitter', now: NOW }).includes('ちょうど暇してたとこだよ'));
+  // bright と downer は変えていない
+  for (const persona of ['bright', 'downer']) {
+    assert.ok(!buildSystemPrompt({ persona, now: NOW }).includes('【ノリの型】'), persona);
+    assert.ok(!getPersonaDigest(persona).includes('ノリの型'), persona);
+  }
+});
