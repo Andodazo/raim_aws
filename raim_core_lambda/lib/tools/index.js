@@ -135,9 +135,32 @@ function toChatCompletionsFormat(definitions = TOOL_DEFINITIONS) {
 //   { tavilyApiKey, openWeatherMapApiKey }
 //   Secrets Managerから取得した外部APIキー。
 
+// 検索する言葉がこれより短いと検索しない（Tavily は2文字未満を 400 で断る）
+const MIN_SEARCH_QUERY_LENGTH = 2;
+
+/**
+ * 検索する言葉を整える。空や短すぎるときは空文字を返す。
+ *
+ * 以前はそのまま Tavily に送っていて、1文字で 400（2026-10-10）、
+ * 言葉が無くて「query is required」（2026-10-28）になっていた。
+ */
+function normalizeSearchQuery(query) {
+  const text = typeof query === 'string' ? query.trim() : '';
+  return Array.from(text).length >= MIN_SEARCH_QUERY_LENGTH ? text : '';
+}
+
 const TOOL_FUNCTIONS = {
   web_search: async (args, secrets = {}) => {
-    return searchWeb(args.query, args.max_results, secrets.tavilyApiKey);
+    const query = normalizeSearchQuery(args.query);
+    if (!query) {
+      // 外部 API は呼ばず、何を調べるか聞き返せるように結果として返す
+      return {
+        error: true,
+        message: '検索する言葉が空か短すぎるので、検索しなかった。何を調べたいか、ユーザーに聞き返す',
+        tool: 'web_search',
+      };
+    }
+    return searchWeb(query, args.max_results, secrets.tavilyApiKey);
   },
 
   get_weather: async (args, secrets = {}, context = {}) => {
@@ -290,7 +313,11 @@ function pickToolIntro(toolName, turn, random = Math.random, persona = RAIM_PERS
 }
 
 const TOOL_DESCRIPTIONS = {
-  web_search: (args) => `「${args.query}」を検索しています`,
+  // 言葉が無いと「「undefined」を検索しています」と出ていた
+  web_search: (args) => {
+    const query = normalizeSearchQuery(args.query);
+    return query ? `「${query}」を検索しています` : 'ネットで調べています';
+  },
   get_weather: (args) => (isCurrentLocation(args.city)
     ? '今いるあたりの天気を調べています'
     : `${args.city}の天気を調べています`),
@@ -403,6 +430,7 @@ module.exports = {
   isClientActionRequested,
   toChatCompletionsFormat,
   executeTool,
+  normalizeSearchQuery,
   pickToolIntro,
   getToolDescription,
   parseToolArguments,

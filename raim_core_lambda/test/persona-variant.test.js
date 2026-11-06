@@ -215,3 +215,13 @@ test('no pretending to remember, no invented favorites, and misheard speech gets
     assert.ok(prompt.includes('子供を認知しました'), persona);
   }
 });
+
+test('unknown words are not taken as puns, and a refused tease is not repeated (v6.2)', () => {
+  // 2026-11-06: 選手名「グマユシ」をダジャレと取り、「やめて」と言われたあとも3回繰り返した
+  for (const persona of ['bright', 'downer', 'twitter']) {
+    for (const text of [buildSystemPrompt({ persona, now: NOW }), getPersonaDigest(persona)]) {
+      assert.ok(text.includes('ダジャレやボケと決めつけ'), persona);
+      assert.ok(text.includes('「違う」「やめて」と言われたいじりやネタ'), persona);
+    }
+  }
+});

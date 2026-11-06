@@ -401,8 +401,9 @@ async function refreshUserMemory(sub, deps = {}) {
   // summarize-service は「既存要約があれば統合」に対応しているため、
   // 入力を会話ログからスレッド要約へ差し替えるだけで流用できる。
   const forgotten = await readForgotten(sub, deps);
+  // purpose: 'memory' … この人がどんな人かだけを残す（その場限りの頼みごとは書かない）
   const { summary } = await (deps.generateSummary || generateSummary)(
-    { history: summaries, previousSummary: '', forgotten },
+    { history: summaries, previousSummary: '', forgotten, purpose: 'memory' },
     { env }
   );
 

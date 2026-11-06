@@ -155,3 +155,20 @@ test('formatSummary drops an item that is exactly a forgotten one', () => {
   );
   assert.equal(text, '【事実】\n- 卒業制作をしている');
 });
+
+// ── 記憶を作るときの指示 ─────────────────────────
+
+test('building user memory asks to keep only who the person is', () => {
+  const { buildSummaryInput, MEMORY_INSTRUCTION } = require('../lib/summarize-service');
+  const history = [{ role: 'user', content: '【天気】\n- ユーザーが八王子の天気を尋ねた' }];
+
+  // 以前はスレッドの要約と同じ指示で、天気やニュースの頼みごとが記憶に並んでいた
+  const memory = buildSummaryInput(history, '', 'full', [], 'memory');
+  const memoryText = memory.map((m) => m.content).join('\n');
+  assert.ok(memoryText.includes(MEMORY_INSTRUCTION));
+  assert.ok(memoryText.includes('その場限りの頼みごとは書かない'));
+
+  // スレッドの要約は今のまま（その会話の流れを残す）
+  const thread = buildSummaryInput(history, '', 'full', []);
+  assert.ok(!thread.map((m) => m.content).join('\n').includes('その場限りの頼みごと'));
+});

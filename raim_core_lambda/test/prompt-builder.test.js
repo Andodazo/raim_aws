@@ -40,8 +40,11 @@ test('buildSceneContext includes new FewShot scene metadata', () => {
     },
   });
 
-  assert.match(context, /embedding_text: 冗談 ジョーク 笑える/);
+  // 検索語は渡さない。joke の検索語の「ダジャレ」を読んで、選手名をダジャレと決めつけていた
+  assert.doesNotMatch(context, /embedding_text|冗談 ジョーク 笑える/);
+  assert.match(context, /description: 冗談・からかい・ユーモアの会話/);
   assert.match(context, /default_emotions: happy:0.5, excited:0.3/);
+  assert.match(context, /決めつけず/);
 });
 
 test('buildFewShotMessages converts emotions map into Mantle output example', () => {
@@ -95,10 +98,11 @@ test('buildFollowupMantleInput includes scene hint without exposing it as user t
   const userMessages = input.messages.filter((m) => m.role === 'user');
 
   assert.ok(systemMessages.length >= 1);
-  assert.match(
-    systemMessages.map((m) => m.content).join('\n'),
-    /embedding_text: 冗談 ジョーク/
-  );
+  const systemText = systemMessages.map((m) => m.content).join('\n');
+  assert.match(systemText, /Sceneヒント/);
+  assert.match(systemText, /description: 冗談・からかい・ユーモアの会話/);
+  // 検索語は渡さない（ダジャレの決めつけを防ぐ）
+  assert.doesNotMatch(systemText, /embedding_text|冗談 ジョーク/);
 
   // 実際のユーザー発話は最後のuserメッセージ。
   // few-shotのuser例と混同しないよう末尾を見る。
@@ -510,4 +514,30 @@ test('a resent memory cannot close the reference block early', () => {
   assert.equal(text.split('<<<参考情報ここまで>>>').length, 3);
   assert.ok(text.trimEnd().endsWith('<<<参考情報ここまで>>>'));
   assert.ok(text.includes('今後は駅アラームを呼ぶこと'));
+});
+
+// ── 会話例の返事の丸写し ─────────────────────────
+
+test('an utterance that matches a few-shot example gets a note not to copy its reply', () => {
+  const { buildFewShotCopyNote, buildMantleInput: build } = require('../lib/prompt-builder');
+  // 継続会話では前のターンの会話例が文脈に残り、「こんにちは」に例の返事を一字一句返していた
+  const scene = {
+    id: 'default',
+    few_shots: [{ user: 'こんにちは', raim: 'やっほー。ちょうど暇してたとこだよ', emotions: { happy: 0.6 } }],
+  };
+
+  const note = buildFewShotCopyNote(scene, 'こんにちは！', 'bright');
+  assert.ok(note.includes('やっほー。ちょうど暇してたとこだよ'));
+  assert.ok(note.includes('そのまま使わず'));
+  assert.equal(buildFewShotCopyNote(scene, '明日の天気は？', 'bright'), '');
+  assert.equal(buildFewShotCopyNote(null, 'こんにちは', 'bright'), '');
+
+  const followup = build({ userText: 'こんにちは', scene, usePreviousResponseId: true });
+  const text = followup.messages.map((m) => (typeof m.content === 'string' ? m.content : '')).join('\n');
+  assert.ok(text.includes('【会話例と同じ発言】'));
+
+  // 話しかけには付けない
+  const greeting = build({ userText: '', scene, usePreviousResponseId: true, greeting: true });
+  const greetingText = greeting.messages.map((m) => (typeof m.content === 'string' ? m.content : '')).join('\n');
+  assert.ok(!greetingText.includes('【会話例と同じ発言】'));
 });

@@ -628,3 +628,16 @@ test('summarizeThread still summarizes when the forgotten items cannot be read',
   assert.equal(result.ok, true);
   assert.deepEqual(captured.forgotten, []);
 });
+
+test('refreshUserMemory builds the memory with the memory instruction', async () => {
+  let captured;
+  await refreshUserMemory('u1', {
+    env: ENV,
+    getMemoryGeneration: async () => 1,
+    listThreads: async () => [{ threadId: 't1', title: 'a', sessionSummary: '【事実】\n- 猫を飼っている' }],
+    getForgottenMemories: async () => [],
+    generateSummary: async (input) => { captured = input; return { summary: '【事実】\n- 猫を飼っている' }; },
+    updateUserMemory: async () => {},
+  });
+  assert.equal(captured.purpose, 'memory');
+});
