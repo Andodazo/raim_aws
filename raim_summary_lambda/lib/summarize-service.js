@@ -96,6 +96,19 @@ const SUMMARY_INSTRUCTION_FACTS = `
 - 既存の要約がある場合は踏まえて更新する
 `.trim();
 
+// 記憶（userMemory）を作るときだけ足す指示。
+//
+// 以前はスレッドの要約と同じ指示で作っていたので、「ユーザーが八王子の天気を尋ねた」
+// 「最近のニュースを調べさせた」のような、その場限りの頼みごとが事実として並んでいた
+// （2026-11-06 のテスト）。スレッドの要約はその会話の流れを残すために今のままにし、
+// 記憶はこの人がどんな人かだけにする（安藤さんと決めた文言）。
+const MEMORY_INSTRUCTION = `
+【記憶にするときのルール】
+この要約は、ライムがこの人のことを覚えておくための記憶になる。
+- この人がどんな人かだけを残す。名前や呼び方、好きなもの・苦手なもの、学校や仕事、家族やペット、大きな出来事、これからの予定
+- 天気を聞いた・ニュースを調べさせた・自己紹介させた、のようなその場限りの頼みごとは書かない
+`.trim();
+
 // ─────────────────────────────────────────────
 // 入力の組み立て
 // ─────────────────────────────────────────────
@@ -110,12 +123,18 @@ const SUMMARY_INSTRUCTION_FACTS = `
  * @param {string} previousSummary 既存の要約（あれば統合させる）
  * @param {string} mode 'full' | 'facts'
  * @param {string[]} [forgotten] 利用者が消した項目（書かせない）
+ * @param {string} [purpose] 'thread'（スレッドの要約、既定）| 'memory'（記憶を作る）
  */
-function buildSummaryInput(history, previousSummary, mode, forgotten = []) {
+function buildSummaryInput(history, previousSummary, mode, forgotten = [], purpose = 'thread') {
   const instruction =
     mode === 'facts' ? SUMMARY_INSTRUCTION_FACTS : SUMMARY_INSTRUCTION_FULL;
 
   const messages = [{ role: 'system', content: instruction }];
+
+  // 記憶を作るときは、その場限りの頼みごとを書かせない
+  if (purpose === 'memory') {
+    messages.push({ role: 'system', content: MEMORY_INSTRUCTION });
+  }
 
   // 利用者がアプリで「忘れて」と消した項目。作り直すたびに戻ってこないよう除かせる
   if (forgotten.length > 0) {
@@ -307,7 +326,7 @@ function formatSummary(rawText, forgotten = []) {
  * @param {Object} [deps]
  * @returns {Promise<{ summary: string, usage: Object|null }>}
  */
-async function generateSummary({ history, previousSummary = '', forgotten = [] }, deps = {}) {
+async function generateSummary({ history, previousSummary = '', forgotten = [], purpose = 'thread' }, deps = {}) {
   const env = deps.env || process.env;
 
   if (!Array.isArray(history) || history.length === 0) {
@@ -322,7 +341,7 @@ async function generateSummary({ history, previousSummary = '', forgotten = [] }
   const createSummary =
     deps.createSummary || createSummaryMantleClient({ env });
 
-  const messages = buildSummaryInput(history, previousSummary, summaryMode(env), forgotten);
+  const messages = buildSummaryInput(history, previousSummary, summaryMode(env), forgotten, purpose);
 
   const response = await createSummary({
     messages,
@@ -344,4 +363,5 @@ module.exports = {
   parseSummaryJson,
   SUMMARY_INSTRUCTION_FULL,
   SUMMARY_INSTRUCTION_FACTS,
+  MEMORY_INSTRUCTION,
 };
