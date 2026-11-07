@@ -241,7 +241,7 @@ test('twitter has the "nori" patterns and asks about unknown memes, in full and 
   // 2026-11-06: 続きの会話に会話例を入れなくなったら、返事が長くて普通になった
   for (const text of [buildSystemPrompt({ persona: 'twitter', now: NOW }), getPersonaDigest('twitter')]) {
     assert.ok(text.includes('「んー」「うーん」から入っていい'));
-    assert.ok(text.includes('HP赤ゲージ'));
+    assert.ok(text.includes('ゲームやネットの言葉に例える'));
     assert.ok(text.includes('全部で3文まで'));
     assert.ok(text.includes('ミーム）の量は相手に合わせる'));
     assert.ok(text.includes('茶目っ気とひとひねりは'));
@@ -264,4 +264,24 @@ test('meme meanings and origins are looked up, in full and digest tool rules (v6
   assert.ok(full.includes('ネットの言葉（ミーム）の意味や元ネタを聞かれたら'));
   assert.ok(full.includes('ふつうの言葉の意味のような一般的な知識は'));
   assert.ok(TOOLS_DIGEST.includes('ネットの言葉（ミーム）の意味・元ネタ'));
+});
+
+test('twitter does not list example words to copy, and keeps AI jokes to about once (v6.5)', () => {
+  // 2026-11-07 の会話テストで、例の言葉（勝ち確、優勝、回復ターン）と AWS の話を丸写ししていた
+  for (const text of [buildSystemPrompt({ persona: 'twitter', now: NOW }), getPersonaDigest('twitter')]) {
+    for (const word of ['勝ち確', '回復ターン', 'HP赤ゲージ', '限界突破', '選手権', '家賃はご主人様持ち']) {
+      assert.ok(!text.includes(word), word);
+    }
+    assert.ok(text.includes('そのまま使い回さ'));
+    assert.ok(text.includes('1つの会話で1回くらい'));
+  }
+});
+
+test('twitter lists no meme words in its tone section either (v6.6)', () => {
+  // 2026-11-07: 例として残した「優勝」「〜は正義」「完全に理解した」に偏りが移った
+  const full = buildSystemPrompt({ persona: 'twitter', now: NOW });
+  for (const word of ['「優勝」', '「完全に理解した」', '「〜は正義」', '唐揚げは正義']) {
+    assert.ok(!full.includes(word), word);
+  }
+  assert.ok(full.includes('同じものを使い回さず、その場に合うものを選ぶ'));
 });
