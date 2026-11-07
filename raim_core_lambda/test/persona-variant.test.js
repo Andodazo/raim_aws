@@ -276,3 +276,12 @@ test('twitter does not list example words to copy, and keeps AI jokes to about o
     assert.ok(text.includes('1つの会話で1回くらい'));
   }
 });
+
+test('twitter lists no meme words in its tone section either (v6.6)', () => {
+  // 2026-11-07: 例として残した「優勝」「〜は正義」「完全に理解した」に偏りが移った
+  const full = buildSystemPrompt({ persona: 'twitter', now: NOW });
+  for (const word of ['「優勝」', '「完全に理解した」', '「〜は正義」', '唐揚げは正義']) {
+    assert.ok(!full.includes(word), word);
+  }
+  assert.ok(full.includes('同じものを使い回さず、その場に合うものを選ぶ'));
+});
