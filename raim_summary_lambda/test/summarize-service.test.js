@@ -202,3 +202,8 @@ test('generateSummary cuts relationship to one line only for memory', async () =
   const thread = await generateSummary({ history }, deps);
   assert.ok(thread.summary.includes('B な様子'));
 });
+
+test('memory keeps words the person taught, with their meaning (v6.4)', () => {
+  const { MEMORY_INSTRUCTION } = require('../lib/summarize-service');
+  assert.ok(MEMORY_INSTRUCTION.includes('教えてくれた言葉やネタは、意味も一緒に残す'));
+});

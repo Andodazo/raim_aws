@@ -27,6 +27,13 @@ const FACT_PATTERNS = [
   /について(教えて|知りたい)/,
   /どんな(人|曲|作品|ゲーム|アニメ|漫画|マンガ|映画|ドラマ|キャラ|店|お店|グループ|バンド)/,
   /(誰|だれ)が(歌|作|書|描|出|演|監督)/,
+  // 2026-11-06: ネットの言葉（ミーム）の意味や元ネタも調べる。
+  // Gemma は意味はよく知っているが、元ネタを自信満々に間違え、存在しない言葉にも説明を作る（meme-test2）。
+  // 「意味わからんw」のような雑談では調べないよう、聞いている形だけにする。
+  /って(どういう|どんな)意味/,
+  /の意味(は|って|を?教えて|わかる|知って)/,
+  /元ネタ/,
+  /由来/,
 ];
 
 // 自分たちのこと（ユーザーやライム自身）を聞いているときは調べない。
@@ -36,10 +43,13 @@ const SELF_PATTERN = /(私|わたし|俺|おれ|僕|ぼく|自分|ライム|あ�
 // 天気は get_weather の担当
 const EXCLUDE_PATTERN = /天気|気温/;
 
+// 「それってどういう意味？」は、ライムが今言ったことを聞き返しているので調べない
+const ASK_BACK_PATTERN = /(それ|これ|あれ|今の|いまの|さっきの)(って|は)?(どういう|どんな)意味/;
+
 function isFactQuestion(text) {
   const value = String(text || '');
   if (!value.trim()) return false;
-  if (EXCLUDE_PATTERN.test(value) || SELF_PATTERN.test(value)) return false;
+  if (EXCLUDE_PATTERN.test(value) || SELF_PATTERN.test(value) || ASK_BACK_PATTERN.test(value)) return false;
   return FACT_PATTERNS.some((pattern) => pattern.test(value));
 }
 
@@ -49,9 +59,9 @@ function isFactCheckEnabled(env = process.env) {
 
 const FACT_CHECK_INSTRUCTION = [
   '【今回は調べてから答える】',
-  'ユーザーは人・作品・ゲーム・お店などの事実を聞いている。',
+  'ユーザーは人・作品・ゲーム・お店・ネットの言葉（ミーム）などの事実を聞いている。',
   '知っているつもりでも、先に web_search で調べてから答える。',
-  '調べても分からなければ、知ったかぶりせず「分からなかった」と言う。',
+  '調べても分からなければ、知ったかぶりせず「分からなかった」と言う。ネットの言葉なら、どういう意味か教えてもらう。',
 ].join('\n');
 
 /**
