@@ -7,7 +7,25 @@
 const MEME_WORDS = [
   '草', '優勝', '勝ち確', 'ギルティ', '限界突破', '選手権', 'HP', '赤ゲージ',
   'ガチャ', '初見殺し', 'バグ', 'ワンチャン', 'しか勝たん', 'エモい', 'それな',
+  '回復ターン', '詰んで', '完全に理解',
 ];
+
+// 会話をまたいで同じ言葉ばかり使っていないか、まとめで数える言葉。
+// 2026-11-07 の初回: 68本で「勝ち確」「優勝」が9回、「AWS」が10回出ていた
+const WATCH_WORDS = [
+  ...MEME_WORDS,
+  '正義', '処理落ち', 'AWS', 'は？', '理不尽', 'やっほー', '完全に',
+];
+
+/**
+ * 返事の一覧から、WATCH_WORDS を含む返事の数を数える（多い順、minCount 以上だけ）。
+ */
+function countWatchWords(replies, { minCount = 3, words = WATCH_WORDS } = {}) {
+  return [...new Set(words)]
+    .map((word) => ({ word, count: replies.filter((reply) => String(reply || '').includes(word)).length }))
+    .filter((entry) => entry.count >= minCount)
+    .sort((a, b) => b.count - a.count);
+}
 
 // 顔文字や記号（返事は読み上げるので使わない）
 const EMOTICON_PATTERN = /[（(][^（）()]{0,8}[＾^;；´`ω▽∀°ｰ゜][^（）()]{0,8}[）)]|[☆★♡♥❤✨]/;
@@ -117,6 +135,8 @@ function longestCommonSubstring(a, b) {
 
 module.exports = {
   MEME_WORDS,
+  WATCH_WORDS,
+  countWatchWords,
   countSentences,
   checkReply,
   findRepeats,

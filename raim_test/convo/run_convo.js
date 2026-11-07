@@ -27,7 +27,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { checkReply, findRepeats } = require('./checks');
+const { checkReply, findRepeats, countWatchWords } = require('./checks');
 
 // ─────────────────────────────────────────────
 // 引数
@@ -393,6 +393,11 @@ function formatReport({ cores, scenarios, byCore, startedAt, options }) {
     const median = replies.length ? replies[Math.floor(replies.length / 2)] : 0;
     const flaggedConversations = conversations.filter((c) => countFlags(c) > 0).length;
     lines.push(`${core.label ? `[${core.label}] ` : ''}往復 ${turns}、エラー ${errors}、返事の長さの中央値 ${median}文字、引っかかった会話 ${flaggedConversations}/${conversations.length}`);
+
+    // 会話をまたいで同じ言葉ばかり使っていないか（1つの会話の中だけでは見えない）
+    const allReplies = conversations.flatMap((c) => c.results.filter((r) => !r.error).map((r) => r.reply));
+    const frequent = countWatchWords(allReplies);
+    lines.push(`  よく出た言葉（返事${allReplies.length}件中）: ${frequent.length ? frequent.map((f) => `${f.word} ${f.count}`).join('、') : 'なし'}`);
   }
 
   return lines.join('\n');
