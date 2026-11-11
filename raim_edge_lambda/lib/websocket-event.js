@@ -205,7 +205,7 @@ function normalizeBeforeIndex(value) {
 }
 
 // 予定を知らせる話しかけ（Core の planner-reminder.js と同じ形）
-const REMINDER_SLOTS = Object.freeze(['eve', 'before', 'morning']);
+const REMINDER_SLOTS = Object.freeze(['eve', 'before', 'morning', 'timer']);
 const REMINDER_ITEM_ID_PATTERN = /^[a-z]{2,4}_[A-Za-z0-9-]{8,64}$/;
 
 /**

@@ -47,8 +47,9 @@ const IMPORTANCE = Object.freeze(['important', 'normal', 'chore']);
 
 // タイマーの長さの上限（これより長いものは予定にする。安藤さんと決めた）
 const MAX_TIMER_SECONDS = 24 * 60 * 60;
-// 鳴ったあと、一覧に残しておく時間（「5分後にもう一回」の分も見て少し長め）
-const TIMER_KEEP_SECONDS = 10 * 60;
+// 鳴ったあと、サーバーに残しておく時間。アプリの一覧には鳴った時点で出さないが、
+// スマホで通知をあとから押したときに、ライムが何のタイマーだったか分かるように残す
+const TIMER_KEEP_SECONDS = 3 * 60 * 60;
 // 1人が同時に動かせるタイマーの数
 const MAX_ACTIVE_TIMERS = 10;
 

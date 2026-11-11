@@ -243,7 +243,7 @@ test('findEventCandidate returns a future event or null', async () => {
 // 会話の流れ
 // ─────────────────────────────────────────────
 
-const { normalizeReminder, buildReminderInstruction } = require('../lib/planner/planner-reminder');
+const { normalizeReminder, buildReminderInstruction, reminderMatchesItem } = require('../lib/planner/planner-reminder');
 
 function buildService({ text, features = ['planner'], mantleResponses, store, helperResponses = {}, request = {} }) {
   const mainCalls = [];
@@ -447,6 +447,41 @@ test('flow: a reminder greeting reads the item and uses the reminder instruction
   await gone.run();
   assert.doesNotMatch(JSON.stringify(gone.mainCalls[0].mantleInput || gone.mainCalls[0]), /予定を知らせる話しかけ/);
   assert.equal(gone.appended[0].assistantMessage.meta.reminder, undefined);
+});
+
+test('reminder: a timer uses its own instruction and only the timer slot', () => {
+  assert.deepEqual(normalizeReminder({ itemId: 'tm_123e4567-e89b', slot: 'timer' }), { itemId: 'tm_123e4567-e89b', slot: 'timer' });
+  const timer = { itemId: 'tm_1', kind: 'timer', title: 'パスタ', durationSec: 300, endsAt: NOW.toISOString() };
+  assert.equal(reminderMatchesItem(timer, 'timer'), true);
+  assert.equal(reminderMatchesItem(timer, 'before'), false);
+  assert.equal(reminderMatchesItem({ kind: 'event' }, 'timer'), false);
+  assert.equal(reminderMatchesItem(null, 'timer'), false);
+  const text = buildReminderInstruction({ item: timer, slot: 'timer', now: NOW });
+  assert.match(text, /タイマーを知らせる話しかけ/);
+  assert.match(text, /5分/);
+  assert.match(text, /パスタ/);
+  assert.doesNotMatch(text, /さっき/);
+  const late = buildReminderInstruction({ item: timer, slot: 'timer', now: new Date(NOW.getTime() + 20 * 60000) });
+  assert.match(late, /20分くらいたっている/);
+  const plain = buildReminderInstruction({ item: { ...timer, title: 'タイマー', durationSec: 5400 }, slot: 'timer', now: NOW });
+  assert.match(plain, /1時間30分/);
+  assert.doesNotMatch(plain, /何のタイマーか/);
+});
+
+test('flow: a timer reminder greeting reads the timer', async () => {
+  const store = createFakeStore([
+    { itemId: 'tm_000001aa-0000', kind: 'timer', title: '洗濯物', durationSec: 1800, endsAt: NOW.toISOString() },
+  ]);
+  store.getItem = async (sub, itemId) => store.items.find((i) => i.itemId === itemId) || null;
+  const svc = buildService({
+    text: '', mantleResponses: [replyText('洗濯物の時間だよ')], store,
+    request: { greeting: true, reminder: { itemId: 'tm_000001aa-0000', slot: 'timer' } },
+  });
+  await svc.run();
+  const prompt = JSON.stringify(svc.mainCalls[0].mantleInput || svc.mainCalls[0]);
+  assert.match(prompt, /タイマーを知らせる話しかけ/);
+  assert.match(prompt, /洗濯物/);
+  assert.deepEqual(svc.appended[0].assistantMessage.meta.reminder, { itemId: 'tm_000001aa-0000', slot: 'timer' });
 });
 
 // ─────────────────────────────────────────────

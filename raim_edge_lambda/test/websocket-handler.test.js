@@ -144,9 +144,11 @@ test('$default は予定を知らせる話しかけの reminder を Core へ渡�
   await send({ requestId: 'req-r1', type: 'greeting', reminder: { itemId, slot: 'before' } });
   await send({ requestId: 'req-r2', type: 'greeting', reminder: { itemId: '../x', slot: 'before' } });
   await send({ requestId: 'req-r3', text: 'こんにちは', reminder: { itemId, slot: 'before' } });
+  await send({ requestId: 'req-r4', type: 'greeting', reminder: { itemId: 'tm_123e4567-e89b', slot: 'timer' } });
   assert.deepEqual(published[0].reminder, { itemId, slot: 'before' });
   assert.equal(published[1].reminder, null);
   assert.equal(published[2].reminder, null);
+  assert.deepEqual(published[3].reminder, { itemId: 'tm_123e4567-e89b', slot: 'timer' });
 });
 
 test('$default forwards features the client supports', async () => {
