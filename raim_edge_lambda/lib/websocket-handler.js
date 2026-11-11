@@ -578,6 +578,7 @@ function createWebSocketHandler({
       greeting,
       // 予定を知らせる話しかけのときだけ入る（Core の planner-reminder.js）
       reminder: greeting ? normalized.reminder : null,
+      brief: greeting && normalized.brief === true,
       // クライアントが会話スレッドを指定した場合のみ入る。
       // 未指定なら Core が activeThreadId を使うか新規作成する。
       threadId: normalized.threadId,

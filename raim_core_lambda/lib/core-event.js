@@ -32,6 +32,7 @@ const { normalizeReminder } = require('./planner/planner-reminder');
 //   features: ["station_alarm"] // 任意。アプリが使える機能
 //   greeting: true // 任意。アプリを開いたときの話しかけ（text は空）
 //   reminder: { itemId, slot } // 任意。予定を知らせる話しかけ（greeting のときだけ）
+//   brief: true // 任意。その日はじめての話しかけで、今日の予定をまとめる（greeting のときだけ）
 // }
 //
 // JSON解釈や入力検証に失敗した場合はCoreEventErrorを投げる。
@@ -261,6 +262,7 @@ function normalizeCoreEvent(event, { fallbackRequestId } = {}) {
     greeting,
     // 任意。予定を知らせる話しかけ（planner-reminder.js）。話しかけのときだけ
     reminder: greeting ? normalizeReminder(payload.reminder) : null,
+    brief: greeting && payload.brief === true,
   };
 }
 

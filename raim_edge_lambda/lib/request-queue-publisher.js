@@ -36,6 +36,7 @@ function createRequestQueuePublisher({ client, env = process.env } = {}) {
     speech = true,
     greeting = false,
     reminder = null,
+    brief = false,
   }) {
     const message = {
       schemaVersion: REQUEST_SCHEMA_VERSION,
@@ -58,6 +59,7 @@ function createRequestQueuePublisher({ client, env = process.env } = {}) {
       ...(greeting ? { greeting: true } : {}),
       // 予定を知らせる話しかけのときだけ入れる
       ...(greeting && reminder ? { reminder } : {}),
+      ...(greeting && brief ? { brief: true } : {}),
       createdAt: new Date().toISOString(),
     };
 

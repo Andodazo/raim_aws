@@ -257,6 +257,8 @@ function normalizeWebSocketEvent(event, lambdaContext = {}) {
   const speech = payload.speech !== false;
   // 予定を知らせる話しかけのときだけ（type: greeting）
   const reminder = action === 'greeting' ? normalizeReminder(payload.reminder) : null;
+  // その日はじめての話しかけで、今日の予定をまとめる（Core の morning-brief.js）
+  const brief = action === 'greeting' && payload.brief === true;
 
   // text/images が要るのはチャット送信のときだけ。
   // thread.list のような読み取り要求は本文を持たない。
@@ -289,6 +291,7 @@ function normalizeWebSocketEvent(event, lambdaContext = {}) {
     location,
     speech,
     reminder,
+    brief,
     // 履歴を遡る位置。null なら最新側から返す
     beforeIndex,
     rawPayload: payload,

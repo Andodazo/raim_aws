@@ -14,6 +14,7 @@
 //   timer   タイマー（「3分計って」）。endsAt に鳴る時刻、鳴って3時間たつと一覧から消える
 //   memo    普通のメモ（「駐輪場は3階」）。自動では消さない
 //   list    チェックできるリスト（「買うもの」）。チェックした項目は次の日に消す（planner-memo.js）
+//   weather その日の気温の控え（朝のまとめで「昨日より寒い」を言うため。itemId は wx_YYYY-MM-DD、3日で消える）
 //   ※ あとで聞くことは、あとから同じテーブルに足す
 //
 // Edge Lambda 側にも同じテーブルを読み書きする planner-store.js がある
@@ -307,7 +308,28 @@ function createPlannerStore({ docClient, tableName = TABLE_NAME, now = () => new
     return toPublicItem(result.Attributes);
   }
 
-  return { listItems, getItem, addEvent, addTimer, addMemo, addList, updateItem, deleteItem };
+  /**
+   * その日の気温を控えておく（朝のまとめ）。同じ日なら上書きする。
+   */
+  async function saveWeather(sub, { date, max, min, keepDays = 3 }) {
+    const [y, m, d] = String(date).split('-').map(Number);
+    const expiresAt = Math.floor(Date.UTC(y, m - 1, d + keepDays) / 1000);
+    await client().send(new PutCommand({
+      TableName: tableName,
+      Item: {
+        sub,
+        itemId: `wx_${date}`,
+        kind: 'weather',
+        date,
+        max: Math.round(Number(max)),
+        min: Math.round(Number(min)),
+        updatedAt: now().toISOString(),
+        expiresAt,
+      },
+    }));
+  }
+
+  return { listItems, getItem, addEvent, addTimer, addMemo, addList, updateItem, deleteItem, saveWeather };
 }
 
 const defaultPlannerStore = createPlannerStore();

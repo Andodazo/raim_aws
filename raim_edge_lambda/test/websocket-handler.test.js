@@ -92,6 +92,7 @@ test('$default publishes a chat request to Core request queue', async () => {
     speech: true,
     greeting: false,
     reminder: null,
+    brief: false,
   });
 });
 
@@ -149,6 +150,10 @@ test('$default は予定を知らせる話しかけの reminder を Core へ渡�
   assert.equal(published[1].reminder, null);
   assert.equal(published[2].reminder, null);
   assert.deepEqual(published[3].reminder, { itemId: 'tm_123e4567-e89b', slot: 'timer' });
+  await send({ requestId: 'req-b1', type: 'greeting', brief: true });
+  await send({ requestId: 'req-b2', text: 'こんにちは', brief: true });
+  assert.equal(published[4].brief, true);
+  assert.equal(published[5].brief, false);
 });
 
 test('$default forwards features the client supports', async () => {
