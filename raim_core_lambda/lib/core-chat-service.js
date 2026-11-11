@@ -105,6 +105,7 @@ const {
   buildPlannerContext,
 } = require('./planner/planner-context');
 const { writeEventExtras, findEventCandidate } = require('./planner/planner-writer');
+const { buildReminderInstruction } = require('./planner/planner-reminder');
 const { isPlannerTool, runPlannerTool } = require('./tools/planner');
 
 // 予定の知らせる文・「予定に入れる？」の中身を待つ上限。
@@ -487,7 +488,21 @@ function createCoreChatService(dependencyOverrides = {}) {
     // 何日も空いていたら切り口は使わず「久しぶり」を優先する
     // 少し前につらい話をしていたら、切り口は使わず、そっと様子を聞く（greeting.js 参照）
     let greetingInstruction = '';
-    if (input.greeting && isAfterHardTalk(threadContext.thread, now)) {
+    // 予定を知らせる話しかけ（planner-reminder.js）。予定が読めなければ普段の話しかけにする
+    let reminderItem = null;
+    if (input.greeting && input.reminder) {
+      try {
+        const item = await dependencies.plannerStore.getItem(input.sub, input.reminder.itemId);
+        if (item && item.kind === 'event') reminderItem = item;
+      } catch (error) {
+        console.error(`[Planner] reminder item read failed (non-fatal): ${error.message}`);
+      }
+      if (!reminderItem) console.warn('[Greeting] reminder item not found; using a normal greeting');
+    }
+    if (reminderItem) {
+      greetingInstruction = buildReminderInstruction({ item: reminderItem, slot: input.reminder.slot, now });
+      console.log(`[Greeting] angle=reminder slot=${input.reminder.slot}`);
+    } else if (input.greeting && isAfterHardTalk(threadContext.thread, now)) {
       greetingInstruction = buildCareGreetingInstruction();
       console.log('[Greeting] angle=care');
     } else if (input.greeting) {
@@ -1036,6 +1051,8 @@ function createCoreChatService(dependencyOverrides = {}) {
             reasoningEffort: reasoningEffort ||
               String((dependencies.env || process.env).MANTLE_REASONING_EFFORT || 'none'),
             ...(input.greeting ? { greeting: true } : {}),
+            // 予定を知らせる話しかけだったか（どの予定のどの時刻か）
+            ...(reminderItem ? { reminder: { itemId: reminderItem.itemId, slot: input.reminder.slot } } : {}),
             // 予定の手帳を開いたか。次の発言（「うん」など）でも続けて開くのに使う
             ...(plannerOpen ? { planner: true } : {}),
           },

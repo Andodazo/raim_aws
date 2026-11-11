@@ -236,7 +236,9 @@ test('findEventCandidate returns a future event or null', async () => {
 // 会話の流れ
 // ─────────────────────────────────────────────
 
-function buildService({ text, features = ['planner'], mantleResponses, store, helperResponses = {} }) {
+const { normalizeReminder, buildReminderInstruction } = require('../lib/planner/planner-reminder');
+
+function buildService({ text, features = ['planner'], mantleResponses, store, helperResponses = {}, request = {} }) {
   const mainCalls = [];
   const helperCalls = [];
   const actions = [];
@@ -276,7 +278,7 @@ function buildService({ text, features = ['planner'], mantleResponses, store, he
   });
   const run = () => service({
     schemaVersion: 1, type: 'chat.request', requestId: 'r1', sub: 'u1', source: 'websocket',
-    text, images: [], features,
+    text, images: [], features, ...request,
   }, { onClientAction: async (a) => { actions.push(a); } });
   return { run, mainCalls, helperCalls, actions, appended };
 }
@@ -389,4 +391,53 @@ test('sqs: planner.enrich messages skip the chat flow', async () => {
   assert.deepEqual(result.batchItemFailures, []);
   assert.equal(chats, 0);
   assert.equal(jobs[0].itemId, 'ev_1');
+});
+
+// ─────────────────────────────────────────────
+// 予定を知らせる話しかけ
+// ─────────────────────────────────────────────
+
+test('reminder: only well-formed itemId and slot pass', () => {
+  assert.deepEqual(normalizeReminder({ itemId: 'ev_123e4567-e89b-12d3-a456-426614174000', slot: 'eve' }), {
+    itemId: 'ev_123e4567-e89b-12d3-a456-426614174000', slot: 'eve',
+  });
+  assert.equal(normalizeReminder({ itemId: 'ev_x', slot: 'eve' }), null);
+  assert.equal(normalizeReminder({ itemId: 'ev_123e4567-e89b', slot: 'noon' }), null);
+  assert.equal(normalizeReminder('ev_1'), null);
+});
+
+test('reminder: instruction names the event with today/tomorrow and the importance', () => {
+  const item = { title: '面接', date: '2026-11-12', time: '10:00', note: 'スーツ', importance: 'important' };
+  const text = buildReminderInstruction({ item, slot: 'eve', now: NOW });
+  assert.match(text, /面接/);
+  assert.match(text, /明日（11\/12\(木\)） 10:00/);
+  assert.match(text, /スーツ/);
+  assert.match(text, /応援/);
+  assert.doesNotMatch(buildReminderInstruction({ item: { ...item, importance: 'normal' }, slot: 'before', now: NOW }), /応援/);
+});
+
+test('flow: a reminder greeting reads the item and uses the reminder instruction', async () => {
+  const store = createFakeStore([
+    { itemId: 'ev_000001aa-0000', kind: 'event', title: '歯医者', date: '2026-11-11', time: '15:00', importance: 'normal' },
+  ]);
+  store.getItem = async (sub, itemId) => store.items.find((i) => i.itemId === itemId) || null;
+  const svc = buildService({
+    text: '', mantleResponses: [replyText('このあと15時に歯医者だよ')], store,
+    request: { greeting: true, reminder: { itemId: 'ev_000001aa-0000', slot: 'before' } },
+  });
+  const result = await svc.run();
+  assert.equal(result.ok, true);
+  const prompt = JSON.stringify(svc.mainCalls[0].mantleInput || svc.mainCalls[0]);
+  assert.match(prompt, /予定を知らせる話しかけ/);
+  assert.match(prompt, /歯医者/);
+  assert.deepEqual(svc.appended[0].assistantMessage.meta.reminder, { itemId: 'ev_000001aa-0000', slot: 'before' });
+
+  // 予定が消えていたら、普段の話しかけにする
+  const gone = buildService({
+    text: '', mantleResponses: [replyText('やっほー')], store,
+    request: { greeting: true, reminder: { itemId: 'ev_999999aa-0000', slot: 'before' } },
+  });
+  await gone.run();
+  assert.doesNotMatch(JSON.stringify(gone.mainCalls[0].mantleInput || gone.mainCalls[0]), /予定を知らせる話しかけ/);
+  assert.equal(gone.appended[0].assistantMessage.meta.reminder, undefined);
 });
