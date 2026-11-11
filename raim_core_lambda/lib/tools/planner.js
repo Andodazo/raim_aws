@@ -5,6 +5,7 @@
 // ==============================================================================
 //
 // 「金曜10時に面接、入れといて」と頼まれたら、ライムが add_schedule を呼ぶ。
+// 「3分計って」なら set_timer（タイマーも同じ手帳に入れて、全部の端末で鳴らす）。
 //
 // 【駅アラームとの違い】
 // 駅アラームはアプリが動かすので、サーバーは「アプリにやって」と伝えるだけだった。
@@ -28,8 +29,13 @@ const {
   normalizeTime,
   formatDateLabel,
 } = require('../planner/planner-dates');
-const { findItemByShortId } = require('../planner/planner-context');
-const { MAX_ITEMS_PER_USER, MAX_TITLE_LENGTH } = require('../planner/planner-store');
+const { findItemByShortId, activeTimers, jstClock } = require('../planner/planner-context');
+const {
+  MAX_ITEMS_PER_USER,
+  MAX_TITLE_LENGTH,
+  MAX_TIMER_SECONDS,
+  MAX_ACTIVE_TIMERS,
+} = require('../planner/planner-store');
 
 const PLANNER_TOOL_DEFINITIONS = Object.freeze([
   {
@@ -87,6 +93,31 @@ const PLANNER_TOOL_DEFINITIONS = Object.freeze([
       required: ['id'],
     },
   },
+  {
+    type: 'function',
+    name: 'set_timer',
+    description: 'タイマーを始めます。時間が来たら、ユーザーの全部の端末で鳴ります。「3分計って」「30分たったら教えて」のように、はっきり頼まれたときだけ使ってください。24時間までです。',
+    parameters: {
+      type: 'object',
+      properties: {
+        hours: { type: 'integer', description: '時間（なければ 0）' },
+        minutes: { type: 'integer', description: '分（なければ 0）。「1時間半」なら hours=1, minutes=30' },
+        seconds: { type: 'integer', description: '秒（なければ 0）' },
+        label: { type: 'string', description: '何のタイマーか（例: カップ麺、洗濯）。言われなければ空' },
+      },
+    },
+  },
+  {
+    type: 'function',
+    name: 'cancel_timer',
+    description: '動いているタイマーを止めます。「タイマーやめて」「もういいよ」と頼まれたときに使ってください。聞き返さずに止めてかまいません。',
+    parameters: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: '「動いているタイマー」の id。1つしか無ければ空でよい' },
+      },
+    },
+  },
 ]);
 
 const PLANNER_TOOL_NAMES = Object.freeze(PLANNER_TOOL_DEFINITIONS.map((tool) => tool.name));
@@ -104,6 +135,77 @@ function isPlannerTool(toolName) {
 
 function failure(toolName, message) {
   return { result: { error: true, message, tool: toolName }, change: null };
+}
+
+/** 「1時間30分」「3分」「45秒」 */
+function formatDuration(totalSec) {
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const sec = totalSec % 60;
+  return [h ? `${h}時間` : '', m ? `${m}分` : '', sec ? `${sec}秒` : ''].join('') || '0秒';
+}
+
+function describeTimerForRaim(item) {
+  return {
+    id: item.itemId.replace(/^[a-z]+_/, '').slice(0, 6),
+    label: item.title,
+    length: formatDuration(Number(item.durationSec) || 0),
+    ringsAt: jstClock(item.endsAt),
+  };
+}
+
+/** 引数の数を整数に（文字の「3」も受ける）。負の数・おかしな値は 0 */
+function toCount(value) {
+  const n = Math.round(Number(value));
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+async function runTimerTool(toolName, args, { sub, store, items, now }) {
+  if (toolName === 'set_timer') {
+    const total = toCount(args.hours) * 3600 + toCount(args.minutes) * 60 + toCount(args.seconds);
+    if (total < 1) {
+      return failure(toolName, '何分か分からなかったので始めていない。何分か聞く');
+    }
+    if (total > MAX_TIMER_SECONDS) {
+      return failure(toolName, '24時間より長いのでタイマーにしていない。予定に入れるか聞く');
+    }
+    if (activeTimers(items, now).length >= MAX_ACTIVE_TIMERS) {
+      return failure(toolName, 'タイマーが多すぎて始められなかった。いらないタイマーを止めてもらう');
+    }
+    const label = String(args.label || '').replace(/\s+/g, ' ').trim().slice(0, MAX_TITLE_LENGTH);
+    const item = await store.addTimer(sub, { title: label || 'タイマー', durationSec: total, source: 'raim' });
+    console.log(`[Planner] timer started: seconds=${total}`);
+    return {
+      result: {
+        ok: true,
+        started: describeTimerForRaim(item),
+        note: '時間になったら全部の端末で鳴る。何分のタイマーか短く言う',
+      },
+      change: { type: 'added', item },
+    };
+  }
+
+  // cancel_timer
+  const timers = activeTimers(items, now);
+  if (timers.length === 0) {
+    return failure(toolName, '動いているタイマーは無かった。そう伝える');
+  }
+  let target = null;
+  if (args.id && String(args.id).trim()) {
+    target = findItemByShortId(timers, args.id);
+  } else if (timers.length === 1) {
+    [target] = timers;
+  }
+  if (!target) {
+    return failure(toolName, 'どのタイマーか分からなかったので止めていない。どれを止めるか聞く');
+  }
+  const item = await store.deleteItem(sub, target.itemId);
+  if (!item) return failure(toolName, 'そのタイマーはもう無かった');
+  console.log('[Planner] timer cancelled');
+  return {
+    result: { ok: true, cancelled: describeTimerForRaim(item) },
+    change: { type: 'deleted', item },
+  };
 }
 
 function describeForRaim(item) {
@@ -127,6 +229,9 @@ function describeForRaim(item) {
  *   result はライムに返す結果、change はアプリに知らせる変更
  */
 async function runPlannerTool(toolName, args = {}, { sub, store, items = [], userText = '', now = new Date() } = {}) {
+  if (toolName === 'set_timer' || toolName === 'cancel_timer') {
+    return runTimerTool(toolName, args || {}, { sub, store, items, now });
+  }
   if (toolName === 'add_schedule') {
     const title = String(args.title || '').replace(/\s+/g, ' ').trim().slice(0, MAX_TITLE_LENGTH);
     const date = String(args.date || '').trim();

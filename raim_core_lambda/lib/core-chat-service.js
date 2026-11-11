@@ -100,6 +100,8 @@ const { defaultPlannerStore } = require('./planner/planner-store');
 const {
   PLANNER_FEATURE,
   mentionsPlanner,
+  mentionsEventDate,
+  mentionsTimer,
   previousTurnUsedPlanner,
   shouldOpenPlanner,
   buildPlannerContext,
@@ -575,7 +577,7 @@ function createCoreChatService(dependencyOverrides = {}) {
 
     // 話に出ただけの予定（「予定に入れる？」ボタン）を、返事と並行して探す。
     // 日付や予定の言葉が今回の発言にあるときだけ（前の返事からの続きだけでは探さない）
-    const candidatePromise = plannerOpen && mentionsPlanner(input.text)
+    const candidatePromise = plannerOpen && mentionsEventDate(input.text) && !mentionsTimer(input.text)
       ? dependencies.findEventCandidate({
         userText: input.text,
         now,
@@ -797,8 +799,9 @@ function createCoreChatService(dependencyOverrides = {}) {
           await notifyClientAction({ action: `planner.${change.type}`, params: { item: change.item } });
           if (change.type === 'added') plannerAddedThisTurn = true;
           // 名前か日時が変わったら、知らせる文と大事さを作り直す
-          const needsExtras = change.type === 'added' ||
-            (change.type === 'updated' && (change.changedFields || []).some((f) => ['title', 'date', 'time'].includes(f)));
+          // タイマーは知らせる文を作らない（鳴ったときの文は決まり文句）
+          const needsExtras = change.item?.kind === 'event' && (change.type === 'added' ||
+            (change.type === 'updated' && (change.changedFields || []).some((f) => ['title', 'date', 'time'].includes(f))));
           if (needsExtras) {
             plannerExtrasJobs.push({
               itemId: change.item.itemId,

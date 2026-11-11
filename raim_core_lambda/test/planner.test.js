@@ -136,6 +136,13 @@ function createFakeStore(initial = []) {
       items.push(item);
       return item;
     },
+    async addTimer(sub, input) {
+      n += 1;
+      const endsAt = new Date(NOW.getTime() + input.durationSec * 1000).toISOString();
+      const item = { itemId: `tm_${String(n).padStart(6, '0')}bb`, kind: 'timer', title: input.title, durationSec: input.durationSec, endsAt };
+      items.push(item);
+      return item;
+    },
     async updateItem(sub, itemId, changes) {
       const item = items.find((i) => i.itemId === itemId);
       if (!item) return null;
@@ -440,4 +447,90 @@ test('flow: a reminder greeting reads the item and uses the reminder instruction
   await gone.run();
   assert.doesNotMatch(JSON.stringify(gone.mainCalls[0].mantleInput || gone.mainCalls[0]), /予定を知らせる話しかけ/);
   assert.equal(gone.appended[0].assistantMessage.meta.reminder, undefined);
+});
+
+// ─────────────────────────────────────────────
+// タイマー（機能3）
+// ─────────────────────────────────────────────
+
+test('timer gate: timer words open the planner but do not look for an event suggestion', () => {
+  const { mentionsTimer, mentionsEventDate } = require('../lib/planner/planner-context');
+  assert.equal(mentionsTimer('3分計って'), true);
+  assert.equal(mentionsTimer('３０分たったら教えて'), true);
+  assert.equal(mentionsTimer('タイマーやめて'), true);
+  assert.equal(mentionsTimer('5分で着く'), false);
+  assert.equal(mentionsPlanner('カップ麺、3分計って'), true);
+  assert.equal(mentionsEventDate('カップ麺、3分計って'), false);
+  // 動いているタイマーがあれば、止める言葉でも開く
+  const timers = [{ itemId: 'tm_aaaaaa00-0000', kind: 'timer', title: 'カップ麺', endsAt: new Date(Date.now() + 60000).toISOString() }];
+  assert.equal(shouldOpenPlanner({ features: ['planner'], userText: 'やっぱ消して', items: timers }), true);
+});
+
+test('set_timer: starts within 24h, refuses longer or empty', async () => {
+  const store = createFakeStore();
+  const ok = await runPlannerTool('set_timer', { minutes: 3, label: 'カップ麺' }, { sub: 'u', store, items: [], now: NOW });
+  assert.equal(ok.change.type, 'added');
+  assert.equal(ok.change.item.kind, 'timer');
+  assert.equal(ok.change.item.durationSec, 180);
+  assert.equal(ok.result.started.length, '3分');
+  assert.equal(ok.result.started.ringsAt, '11:33');
+
+  const mixed = await runPlannerTool('set_timer', { hours: '1', minutes: 30 }, { sub: 'u', store, items: [], now: NOW });
+  assert.equal(mixed.change.item.durationSec, 5400);
+  assert.equal(mixed.change.item.title, 'タイマー');
+
+  const long = await runPlannerTool('set_timer', { hours: 25 }, { sub: 'u', store, items: [], now: NOW });
+  assert.equal(long.change, null);
+  assert.match(long.result.message, /予定に入れるか/);
+  const empty = await runPlannerTool('set_timer', { minutes: -3 }, { sub: 'u', store, items: [], now: NOW });
+  assert.equal(empty.change, null);
+});
+
+test('cancel_timer: stops the only timer without asking, asks when there are several', async () => {
+  const future = (min) => new Date(NOW.getTime() + min * 60000).toISOString();
+  const one = [{ itemId: 'tm_aaaaaa00-0000', kind: 'timer', title: 'カップ麺', durationSec: 180, endsAt: future(2) }];
+  const store = createFakeStore(one);
+  const done = await runPlannerTool('cancel_timer', {}, { sub: 'u', store, items: one, now: NOW });
+  assert.equal(done.change.type, 'deleted');
+  assert.equal(store.items.length, 0);
+
+  const two = [...one, { itemId: 'tm_bbbbbb00-0000', kind: 'timer', title: '洗濯', durationSec: 600, endsAt: future(8) }];
+  const store2 = createFakeStore(two);
+  const ask = await runPlannerTool('cancel_timer', {}, { sub: 'u', store: store2, items: two, now: NOW });
+  assert.equal(ask.change, null);
+  assert.match(ask.result.message, /どれ/);
+  const pick = await runPlannerTool('cancel_timer', { id: 'bbbbbb' }, { sub: 'u', store: store2, items: two, now: NOW });
+  assert.equal(pick.change.item.title, '洗濯');
+
+  const none = await runPlannerTool('cancel_timer', {}, { sub: 'u', store: createFakeStore(), items: [], now: NOW });
+  assert.match(none.result.message, /無かった/);
+});
+
+test('timer context: running timers are listed, rung ones are not', () => {
+  const items = [
+    { itemId: 'tm_aaaaaa00-0000', kind: 'timer', title: 'カップ麺', endsAt: new Date(NOW.getTime() + 180000).toISOString() },
+    { itemId: 'tm_cccccc00-0000', kind: 'timer', title: '終わった', endsAt: new Date(NOW.getTime() - 60000).toISOString() },
+  ];
+  const context = buildPlannerContext({ items, now: NOW });
+  assert.match(context, /id=aaaaaa タイマー「カップ麺」 11:33 に鳴る（あと約3分）/);
+  assert.doesNotMatch(context, /終わった/);
+  assert.match(context, /set_timer/);
+});
+
+test('flow: set_timer saves, notifies the app, and writes no extra lines or suggestion', async () => {
+  const store = createFakeStore();
+  const svc = buildService({
+    text: 'カップ麺、3分計って',
+    store,
+    mantleResponses: [
+      { responseId: 'r-t', rawText: '', toolCalls: [{ name: 'set_timer', callId: 'c1', arguments: JSON.stringify({ minutes: 3, label: 'カップ麺' }) }] },
+      replyText('3分ね、計っとく'),
+    ],
+  });
+  const result = await svc.run();
+  assert.equal(result.ok, true);
+  assert.deepEqual(svc.actions.map((a) => a.action), ['planner.added']);
+  assert.equal(svc.actions[0].params.item.kind, 'timer');
+  assert.equal(svc.helperCalls.length, 0);
+  assert.ok(svc.mainCalls[0].tools.some((t) => t.name === 'set_timer'));
 });
