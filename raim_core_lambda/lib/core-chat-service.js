@@ -107,7 +107,7 @@ const {
   buildPlannerContext,
 } = require('./planner/planner-context');
 const { writeEventExtras, findEventCandidate } = require('./planner/planner-writer');
-const { buildReminderInstruction } = require('./planner/planner-reminder');
+const { buildReminderInstruction, reminderMatchesItem } = require('./planner/planner-reminder');
 const { isPlannerTool, runPlannerTool } = require('./tools/planner');
 
 // 予定の知らせる文・「予定に入れる？」の中身を待つ上限。
@@ -495,7 +495,7 @@ function createCoreChatService(dependencyOverrides = {}) {
     if (input.greeting && input.reminder) {
       try {
         const item = await dependencies.plannerStore.getItem(input.sub, input.reminder.itemId);
-        if (item && item.kind === 'event') reminderItem = item;
+        if (reminderMatchesItem(item, input.reminder.slot)) reminderItem = item;
       } catch (error) {
         console.error(`[Planner] reminder item read failed (non-fatal): ${error.message}`);
       }
