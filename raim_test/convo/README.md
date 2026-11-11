@@ -52,7 +52,14 @@ node ~/convo/run_convo.js --core ~/core --fake                                  
 node ~/convo/run_convo.js --core before=~/core-old --core after=~/core --env ~/core-env.json
 ```
 
-## 台本（scenarios.json）
+## 台本（scenarios.json / scenarios2.json）
+
+- `scenarios.json`: 68本。あいさつ、ノリ、褒め、落ち込み、重い話、説明、ミーム、記憶、話しかけ など
+- `scenarios2.json`: 66本。1本目と別の場面（短い返事しかしない人、意見を聞く、ゲーム、恋愛、愚痴、
+  ライムへの質問、乱暴な言葉、若者言葉、体調、話題の切り替え、8往復の会話、別の人の記憶 など）。
+  `--scenarios ~/convo/scenarios2.json` で使う
+
+### 書き方
 
 ```json
 {
