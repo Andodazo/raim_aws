@@ -81,8 +81,35 @@ function createRequestQueuePublisher({ client, env = process.env } = {}) {
     return message;
   }
 
+  /**
+   * 手で足した予定に、知らせる文と大事さを付けてもらう（Core の planner-enrich.js）。
+   * チャットではないので、本文も読み上げも無い。
+   */
+  async function publishPlannerEnrich({ requestId, connectionId, sub, itemId }) {
+    const message = {
+      schemaVersion: REQUEST_SCHEMA_VERSION,
+      type: 'planner.enrich',
+      requestId,
+      connectionId,
+      sub,
+      itemId,
+      createdAt: new Date().toISOString(),
+    };
+    const messageGroupId = connectionId && connectionId.length <= 128
+      ? connectionId
+      : hashForFifo(connectionId || sub);
+
+    await sqs.send(new SendMessageCommand({
+      QueueUrl: config.requestQueueUrl,
+      MessageBody: JSON.stringify(message),
+      MessageGroupId: messageGroupId,
+      MessageDeduplicationId: hashForFifo(`${sub}\u0000enrich\u0000${itemId}\u0000${requestId}`),
+    }));
+  }
+
   return {
     publishChatRequest,
+    publishPlannerEnrich,
   };
 }
 

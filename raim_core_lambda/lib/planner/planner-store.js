@@ -24,6 +24,7 @@ const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
 const {
   DynamoDBDocumentClient,
   DeleteCommand,
+  GetCommand,
   PutCommand,
   QueryCommand,
   UpdateCommand,
@@ -92,6 +93,17 @@ function createPlannerStore({ docClient, tableName = TABLE_NAME, now = () => new
       startKey = result.LastEvaluatedKey;
     } while (startKey && items.length < MAX_ITEMS_PER_USER * 2);
     return items.map(toPublicItem);
+  }
+
+  /**
+   * 項目を1つ読む。無ければ null。
+   */
+  async function getItem(sub, itemId) {
+    const result = await client().send(new GetCommand({
+      TableName: tableName,
+      Key: { sub, itemId },
+    }));
+    return toPublicItem(result.Item);
   }
 
   /**
@@ -186,7 +198,7 @@ function createPlannerStore({ docClient, tableName = TABLE_NAME, now = () => new
     return toPublicItem(result.Attributes);
   }
 
-  return { listItems, addEvent, updateItem, deleteItem };
+  return { listItems, getItem, addEvent, updateItem, deleteItem };
 }
 
 const defaultPlannerStore = createPlannerStore();

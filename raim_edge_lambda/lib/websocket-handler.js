@@ -29,6 +29,8 @@ const { createWebSocketPostback } = require('./websocket-postback');
 const { createRateLimiter } = require('./rate-limiter');
 const threadListStore = require('./thread-list-store');
 const userSessionStore = require('./user-session-store');
+const { createPlannerStore, PlannerInputError } = require('./planner-store');
+const { broadcastPlannerChanged } = require('./planner-sync');
 
 // memory.forget で一度に消せる項目の数と、1項目の長さの上限
 const MAX_FORGET_ITEMS = 50;
@@ -50,8 +52,11 @@ function createWebSocketHandler({
   sqsClient,
   memoryQueueUrl,
   rateLimiter,
+  plannerStore,
   now = () => Date.now(),
 } = {}) {
+  let cachedPlannerStore = null;
+  const getPlannerStore = () => plannerStore || (cachedPlannerStore ||= createPlannerStore());
   let cachedRateLimiter = null;
   const getRateLimiter = () =>
     rateLimiter || (cachedRateLimiter ||= createRateLimiter());
@@ -87,6 +92,13 @@ function createWebSocketHandler({
       tokenExpiresAt: normalized.tokenExpiresAt,
     });
 
+    // 予定が変わったときにほかの端末へ知らせるため、その人の接続一覧に足す（planner-sync.js）
+    try {
+      await getUserSessionStore().addConnection?.(normalized.sub, normalized.connectionId);
+    } catch (error) {
+      console.warn(`[Connection] could not register for sync (non-fatal): ${error.message}`);
+    }
+
     return createOkResponse({
       type: 'connected',
       connectionId: normalized.connectionId,
@@ -94,6 +106,17 @@ function createWebSocketHandler({
   }
 
   async function handleDisconnect(normalized) {
+    // 接続一覧から外すために、消す前にだれの接続かを読む（失敗しても切断は進める）
+    try {
+      const connection = await getConnectionStore().getConnection?.(normalized.connectionId);
+      const sub = String(normalized.sub || connection?.sub || '').trim();
+      if (sub) {
+        await getUserSessionStore().removeConnection?.(sub, normalized.connectionId);
+      }
+    } catch (error) {
+      console.warn(`[Connection] could not unregister for sync (non-fatal): ${error.message}`);
+    }
+
     await getConnectionStore().deleteConnection(normalized.connectionId);
 
     return createOkResponse({
@@ -325,6 +348,81 @@ function createWebSocketHandler({
   }
 
   /**
+   * 予定の一覧・手で足す・直す・消す（「予定とメモ」画面、「予定に入れる？」ボタン）。
+   *
+   * LLM を通さないので Edge で DynamoDB を読み書きして、そのまま一覧を返す。
+   * 足した・直した・消したら、ほかの端末へ planner.changed を送る。
+   * 手で足した予定（と名前・日時を直した予定）は、Core に知らせる文を作ってもらう。
+   */
+  async function handlePlanner(sub, normalized) {
+    const store = getPlannerStore();
+    const raw = normalized.rawPayload || {};
+    const itemId = String(raw.itemId || '').trim();
+    let changed = null;
+
+    try {
+      if (normalized.action === 'planner.add') {
+        const current = await store.listItems(sub);
+        const item = await store.addEvent(sub, { ...(raw.item || {}), source: raw.source }, {
+          count: current.filter((i) => i.kind === 'event').length,
+        });
+        changed = { type: 'added', item, enrich: true };
+        console.log(`[Planner] added by hand: source=${item.source}`);
+      } else if (normalized.action === 'planner.update') {
+        if (!itemId) throw new PlannerInputError('itemId is required');
+        const { item, needsEnrich } = await store.updateEvent(sub, itemId, raw.changes || {});
+        if (!item) {
+          return createHttpResponse(404, { code: 'NOT_FOUND', message: 'Planner item not found' });
+        }
+        changed = { type: 'updated', item, enrich: needsEnrich };
+      } else if (normalized.action === 'planner.delete') {
+        if (!itemId) throw new PlannerInputError('itemId is required');
+        const item = await store.deleteItem(sub, itemId);
+        changed = item ? { type: 'deleted', item, enrich: false } : null;
+      }
+
+      const items = await store.listItems(sub);
+      await getPostback().postJson(normalized.connectionId, {
+        type: 'planner',
+        requestId: normalized.requestId,
+        items,
+        ...(changed ? { changed: { type: changed.type, itemId: changed.item.itemId } } : {}),
+      });
+
+      if (changed) {
+        await broadcastPlannerChanged({
+          sub,
+          exceptConnectionId: normalized.connectionId,
+          sessionStore: getUserSessionStore(),
+          postback: getPostback(),
+        });
+      }
+
+      if (changed?.enrich) {
+        try {
+          await getRequestPublisher().publishPlannerEnrich({
+            requestId: normalized.requestId,
+            connectionId: normalized.connectionId,
+            sub,
+            itemId: changed.item.itemId,
+          });
+        } catch (error) {
+          // 知らせる文は決まり文句のまま使えるので、失敗しても予定は足せている
+          console.warn(`[Planner] enrich request failed (non-fatal): ${error.message}`);
+        }
+      }
+
+      return createAcceptedResponse({ type: 'accepted', requestId: normalized.requestId });
+    } catch (error) {
+      if (error instanceof PlannerInputError) {
+        return createHttpResponse(400, { code: 'INVALID_INPUT', message: error.message });
+      }
+      console.error(`[Planner] ${normalized.action} failed: ${error.message}`);
+      return createHttpResponse(500, { code: 'PLANNER_FAILED', message: 'Failed to read or update planner' });
+    }
+  }
+
+  /**
    * Summary Lambda へユーザー記憶の再生成を依頼する。
    *
    * キューが未設定なら何もしない。
@@ -438,6 +536,11 @@ function createWebSocketHandler({
     // 覚えていることの表示と削除。DynamoDB を読み書きするだけなので Edge で返す
     if (normalized.action === 'memory.get' || normalized.action === 'memory.forget') {
       return handleMemory(sub, normalized);
+    }
+
+    // 予定の一覧と手での変更。DynamoDB を読み書きするだけなので Edge で返す
+    if (['planner.list', 'planner.add', 'planner.update', 'planner.delete'].includes(normalized.action)) {
+      return handlePlanner(sub, normalized);
     }
 
     // 人ごとの回数の上限（C-04）。一覧・履歴・削除は DynamoDB を読むだけで
