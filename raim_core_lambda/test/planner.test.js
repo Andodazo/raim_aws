@@ -726,3 +726,95 @@ test('store: memos have no expiry; list updates drop old checked entries', async
   ] });
   assert.deepEqual(updated.entries.map((e) => e.text), ['今日']);
 });
+
+// ─────────────────────────────────────────────
+// 朝のまとめ（機能4）
+// ─────────────────────────────────────────────
+
+const brief = require('../lib/planner/morning-brief');
+
+test('brief: today upcoming events only, in time order', () => {
+  const items = [
+    { itemId: 'ev_1', kind: 'event', title: 'バイト', date: '2026-11-11', time: '15:00' },
+    { itemId: 'ev_2', kind: 'event', title: '朝ゼミ', date: '2026-11-11', time: '09:00' }, // もう過ぎた（11:30）
+    { itemId: 'ev_3', kind: 'event', title: 'ゴミ出し', date: '2026-11-11', time: '' },
+    { itemId: 'ev_4', kind: 'event', title: '面接', date: '2026-11-12', time: '10:00' },
+    { itemId: 'mm_1', kind: 'memo', text: 'x' },
+  ];
+  assert.deepEqual(brief.todaysUpcomingEvents(items, NOW).map((e) => e.title), ['ゴミ出し', 'バイト']);
+});
+
+test('brief: weather is mentioned only when it matters', () => {
+  const at = (h) => Math.floor(Date.parse(`2026-11-11T${String(h).padStart(2, '0')}:00:00+09:00`) / 1000);
+  const today = brief.summarizeForecast([
+    { dt: at(12), main: { temp: 14, temp_max: 15, temp_min: 13 }, weather: [{ main: 'Clouds' }] },
+    { dt: at(18), main: { temp: 10, temp_max: 11, temp_min: 9 }, weather: [{ main: 'Rain' }] },
+    { dt: at(24 + 3), main: { temp: 2, temp_max: 2, temp_min: 2 }, weather: [{ main: 'Snow' }] }, // 明日の分
+  ], NOW);
+  assert.deepEqual(today, { date: '2026-11-11', max: 15, min: 9, rain: true, snow: false });
+  assert.deepEqual(brief.weatherReasons(today).map((r) => r.id), ['rain']);
+  const mild = { max: 18, min: 10, rain: false, snow: false };
+  assert.deepEqual(brief.weatherReasons(mild, { max: 17 }), []);
+  assert.deepEqual(brief.weatherReasons(mild, { max: 24 }).map((r) => r.id), ['colder']);
+  assert.deepEqual(brief.weatherReasons({ max: 31, min: 4, rain: false, snow: false }).map((r) => r.id), ['hot', 'cold']);
+});
+
+test('brief: instruction speaks two events and counts the rest', () => {
+  const events = ['A', 'B', 'C', 'D'].map((t, i) => ({ title: t, time: `1${i}:00` }));
+  const text = brief.buildBriefInstruction({ events, weather: [{ id: 'rain', text: '今日は雨の予報。傘の一言を添える' }] });
+  assert.match(text, /10:00 A/);
+  assert.match(text, /11:00 B/);
+  assert.doesNotMatch(text, /C/);
+  assert.match(text, /ほかに2つあるよ/);
+  assert.match(text, /傘/);
+  assert.doesNotMatch(brief.buildBriefInstruction({ events: events.slice(0, 1) }), /天気/);
+});
+
+test('brief: weather reads yesterday and saves today; failures stay quiet', async () => {
+  const saved = [];
+  const store = {
+    getItem: async (sub, id) => (id === 'wx_2026-11-10' ? { max: 22, min: 12 } : null),
+    saveWeather: async (sub, w) => saved.push(w),
+  };
+  const at = Math.floor(Date.parse('2026-11-11T15:00:00+09:00') / 1000);
+  const fetchImpl = async () => ({
+    ok: true,
+    json: async () => ({ list: [{ dt: at, main: { temp: 15, temp_max: 15, temp_min: 11 }, weather: [{ main: 'Clear' }] }] }),
+  });
+  const reasons = await brief.briefWeather({
+    sub: 'u', location: { lat: 35.7, lon: 139.3 }, now: NOW, store, getApiKey: async () => 'k', fetchImpl,
+  });
+  assert.deepEqual(reasons.map((r) => r.id), ['colder']);
+  assert.equal(saved[0].date, '2026-11-11');
+  assert.equal(saved[0].max, 15);
+  assert.deepEqual(await brief.briefWeather({ sub: 'u', location: null, now: NOW, store, getApiKey: async () => 'k', fetchImpl }), []);
+  const broken = async () => ({ ok: false, status: 500 });
+  assert.deepEqual(await brief.briefWeather({
+    sub: 'u', location: { lat: 1, lon: 1 }, now: NOW, store, getApiKey: async () => 'k', fetchImpl: broken,
+  }), []);
+});
+
+test('flow: a brief greeting with plans today uses the brief and sends the card; without plans it is a normal greeting', async () => {
+  const store = createFakeStore([
+    { itemId: 'ev_000001aa-0000', kind: 'event', title: 'バイト', date: '2026-11-11', time: '15:00' },
+  ]);
+  const svc = buildService({
+    text: '', store, mantleResponses: [replyText('おはよ。今日は15時からバイトだね')],
+    request: { greeting: true, brief: true },
+  });
+  const result = await svc.run();
+  assert.equal(result.ok, true);
+  const prompt = JSON.stringify(svc.mainCalls[0].mantleInput || svc.mainCalls[0]);
+  assert.match(prompt, /その日はじめての話しかけ/);
+  assert.match(prompt, /15:00 バイト/);
+  assert.deepEqual(svc.actions.map((a) => a.action), ['planner.show']);
+  assert.equal(svc.actions[0].params.brief, true);
+
+  const empty = buildService({
+    text: '', store: createFakeStore(), mantleResponses: [replyText('やっほー')],
+    request: { greeting: true, brief: true },
+  });
+  await empty.run();
+  assert.doesNotMatch(JSON.stringify(empty.mainCalls[0].mantleInput || empty.mainCalls[0]), /その日はじめて/);
+  assert.equal(empty.actions.length, 0);
+});

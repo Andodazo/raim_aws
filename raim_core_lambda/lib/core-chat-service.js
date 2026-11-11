@@ -107,6 +107,7 @@ const {
 } = require('./planner/planner-context');
 const { writeEventExtras, findEventCandidate } = require('./planner/planner-writer');
 const { buildReminderInstruction, reminderMatchesItem } = require('./planner/planner-reminder');
+const { todaysUpcomingEvents, buildBriefInstruction, briefWeather } = require('./planner/morning-brief');
 const { isPlannerTool, runPlannerTool } = require('./tools/planner');
 
 // 予定の知らせる文・「予定に入れる？」の中身を待つ上限。
@@ -253,6 +254,15 @@ const defaultDependencies = Object.freeze({
   writeEventExtras,
   findEventCandidate,
   plannerHelperTimeoutMs: PLANNER_HELPER_TIMEOUT_MS,
+
+  // 朝のまとめの天気（当たった日だけ理由が返る。morning-brief.js）
+  briefWeather: ({ sub, location, now, store }) => briefWeather({
+    sub,
+    location,
+    now,
+    store,
+    getApiKey: async () => (await getToolSecrets())?.openWeatherMapApiKey || process.env.OPENWEATHERMAP_API_KEY,
+  }),
 });
 
 /**
@@ -489,6 +499,16 @@ function createCoreChatService(dependencyOverrides = {}) {
     // 何日も空いていたら切り口は使わず「久しぶり」を優先する
     // 少し前につらい話をしていたら、切り口は使わず、そっと様子を聞く（greeting.js 参照）
     let greetingInstruction = '';
+    // 朝のまとめで伝える今日の予定（返事のあと、カードにも出す）
+    let briefEvents = [];
+    const readBriefEvents = async () => {
+      try {
+        return todaysUpcomingEvents(await dependencies.plannerStore.listItems(input.sub), now);
+      } catch (error) {
+        console.error(`[Brief] planner read failed (non-fatal): ${error.message}`);
+        return [];
+      }
+    };
     // 予定を知らせる話しかけ（planner-reminder.js）。予定が読めなければ普段の話しかけにする
     let reminderItem = null;
     if (input.greeting && input.reminder) {
@@ -506,6 +526,18 @@ function createCoreChatService(dependencyOverrides = {}) {
     } else if (input.greeting && isAfterHardTalk(threadContext.thread, now)) {
       greetingInstruction = buildCareGreetingInstruction();
       console.log('[Greeting] angle=care');
+    } else if (input.greeting && input.brief && (briefEvents = await readBriefEvents()).length > 0) {
+      // その日はじめての話しかけ（morning-brief.js）。今日これからの予定が無ければ普段の話しかけ
+      const weather = await dependencies.briefWeather({
+        sub: input.sub,
+        location: input.location,
+        now,
+        store: dependencies.plannerStore,
+      });
+      greetingInstruction = buildBriefInstruction({ events: briefEvents, weather });
+      console.log(`[Greeting] angle=brief events=${briefEvents.length} weather=${weather.length > 0}`);
+      // 今日の予定は全部カードで出す（アプリは返事を出し終えてから並べる）
+      await notifyClientAction({ action: 'planner.show', params: { items: briefEvents, brief: true } });
     } else if (input.greeting) {
       const gapMinutes = lastTalked.lastTalkedAt
         ? Math.max(0, (now.getTime() - Date.parse(lastTalked.lastTalkedAt)) / 60000)
