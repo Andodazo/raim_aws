@@ -362,6 +362,8 @@ const TOOL_DESCRIPTIONS = {
   add_schedule: () => '予定を手帳に入れています',
   update_schedule: () => '手帳の予定を直しています',
   delete_schedule: () => '手帳の予定を消しています',
+  set_timer: () => 'タイマーを始めています',
+  cancel_timer: () => 'タイマーを止めています',
 };
 
 function getToolDescription(toolName, args = {}) {

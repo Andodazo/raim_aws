@@ -11,7 +11,8 @@
 //
 // 【項目の種類（kind）】
 //   event   予定（「金曜10時に面接」）
-//   ※ タイマー・メモ・あとで聞くことは、あとから同じテーブルに足す
+//   timer   タイマー（「3分計って」）。endsAt に鳴る時刻、鳴って10分たつと一覧から消える
+//   ※ メモ・あとで聞くことは、あとから同じテーブルに足す
 //
 // Edge Lambda 側にも同じテーブルを読み書きする planner-store.js がある
 // （一覧・手で直す・消す）。各 Lambda が独立したパッケージなので実装は分かれている。
@@ -43,6 +44,13 @@ const MAX_NOTE_LENGTH = 100;
 const MAX_LINE_LENGTH = 80;
 
 const IMPORTANCE = Object.freeze(['important', 'normal', 'chore']);
+
+// タイマーの長さの上限（これより長いものは予定にする。安藤さんと決めた）
+const MAX_TIMER_SECONDS = 24 * 60 * 60;
+// 鳴ったあと、一覧に残しておく時間（「5分後にもう一回」の分も見て少し長め）
+const TIMER_KEEP_SECONDS = 10 * 60;
+// 1人が同時に動かせるタイマーの数
+const MAX_ACTIVE_TIMERS = 10;
 
 let cachedDocClient = null;
 function defaultDocClient() {
@@ -141,6 +149,37 @@ function createPlannerStore({ docClient, tableName = TABLE_NAME, now = () => new
   }
 
   /**
+   * タイマーを足す。鳴ったあと少しして一覧から消えるよう、expiresAt を終わる時刻の少しあとにする
+   * （DynamoDB の TTL は遅れて消すので、一覧では expiresAt を過ぎたものを見せない）。
+   *
+   * @param {string} sub
+   * @param {{ title?, durationSec, source? }} input  検証済みのもの
+   */
+  async function addTimer(sub, input) {
+    const start = now();
+    const durationSec = Math.max(1, Math.round(Number(input.durationSec) || 0));
+    const endsAtMs = start.getTime() + durationSec * 1000;
+    const item = {
+      sub,
+      itemId: `tm_${randomUUID()}`,
+      kind: 'timer',
+      title: cleanText(input.title, MAX_TITLE_LENGTH) || 'タイマー',
+      durationSec,
+      endsAt: new Date(endsAtMs).toISOString(),
+      source: ['raim', 'manual'].includes(input.source) ? input.source : 'raim',
+      createdAt: start.toISOString(),
+      updatedAt: start.toISOString(),
+      expiresAt: Math.floor(endsAtMs / 1000) + TIMER_KEEP_SECONDS,
+    };
+    await client().send(new PutCommand({
+      TableName: tableName,
+      Item: item,
+      ConditionExpression: 'attribute_not_exists(itemId)',
+    }));
+    return toPublicItem(item);
+  }
+
+  /**
    * 項目を一部だけ直す。無ければ null。
    *
    * 日付を直したら、消す日（expiresAt）も合わせて直す。
@@ -198,7 +237,7 @@ function createPlannerStore({ docClient, tableName = TABLE_NAME, now = () => new
     return toPublicItem(result.Attributes);
   }
 
-  return { listItems, getItem, addEvent, updateItem, deleteItem };
+  return { listItems, getItem, addEvent, addTimer, updateItem, deleteItem };
 }
 
 const defaultPlannerStore = createPlannerStore();
@@ -209,6 +248,8 @@ module.exports = {
   MAX_TITLE_LENGTH,
   MAX_NOTE_LENGTH,
   IMPORTANCE,
+  MAX_TIMER_SECONDS,
+  MAX_ACTIVE_TIMERS,
   createPlannerStore,
   defaultPlannerStore,
   toPublicItem,

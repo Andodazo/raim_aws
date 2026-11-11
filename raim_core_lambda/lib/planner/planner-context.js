@@ -49,6 +49,15 @@ const PLANNER_PATTERNS = Object.freeze([
   /\d{1,2}\s*[/／]\s*\d{1,2}/,
 ]);
 
+// タイマーを頼む言葉（「3分計って」「30分たったら教えて」「タイマーやめて」）
+const TIMER_WORDS = Object.freeze([
+  'タイマー', 'たいまー', '計って', 'はかって', '測って',
+]);
+
+const TIMER_PATTERNS = Object.freeze([
+  /\d+\s*(?:分|ふん|ぷん|秒|びょう|時間半?)\s*(?:後|ご|たったら|経ったら|したら|で(?:教|知|呼|起|声))/,
+]);
+
 // ライムに見せる予定の数。多いとプロンプトが長くなる
 const MAX_CONTEXT_ITEMS = 20;
 
@@ -66,10 +75,30 @@ function toHalfWidthDigits(text) {
 function mentionsPlanner(userText, { hasItems = false } = {}) {
   const text = toHalfWidthDigits(userText);
   if (!text) return false;
-  if (PLANNER_WORDS.some((word) => text.includes(word))) return true;
-  if (PLANNER_PATTERNS.some((pattern) => pattern.test(text))) return true;
+  if (mentionsEventDate(text)) return true;
+  if (mentionsTimer(text)) return true;
   if (hasItems && PLANNER_CHANGE_WORDS.some((word) => text.includes(word))) return true;
   return false;
+}
+
+/**
+ * 日付・時間・予定の言葉があるか（「予定に入れる？」の候補を探すかどうかに使う）。
+ */
+function mentionsEventDate(userText) {
+  const text = toHalfWidthDigits(userText);
+  if (!text) return false;
+  return PLANNER_WORDS.some((word) => text.includes(word)) ||
+    PLANNER_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+/**
+ * タイマーの話か（「3分計って」「タイマーやめて」）。
+ */
+function mentionsTimer(userText) {
+  const text = toHalfWidthDigits(userText);
+  if (!text) return false;
+  return TIMER_WORDS.some((word) => text.includes(word)) ||
+    TIMER_PATTERNS.some((pattern) => pattern.test(text));
 }
 
 /**
@@ -91,7 +120,7 @@ function previousTurnUsedPlanner(history = []) {
 function shouldOpenPlanner({ features = [], userText = '', history = [], items = [], greeting = false }) {
   if (greeting) return false;
   if (!Array.isArray(features) || !features.includes(PLANNER_FEATURE)) return false;
-  const hasItems = items.some((item) => item?.kind === 'event');
+  const hasItems = items.some((item) => item?.kind === 'event') || activeTimers(items).length > 0;
   return mentionsPlanner(userText, { hasItems }) || previousTurnUsedPlanner(history);
 }
 
@@ -124,6 +153,28 @@ function upcomingEvents(items, now = new Date()) {
     ));
 }
 
+/**
+ * まだ鳴っていないタイマー（終わる時刻の早い順）。
+ */
+function activeTimers(items, now = new Date()) {
+  const nowMs = now.getTime();
+  return items
+    .filter((item) => item?.kind === 'timer' && Date.parse(item.endsAt || '') > nowMs)
+    .sort((a, b) => String(a.endsAt).localeCompare(String(b.endsAt)));
+}
+
+/** 日本時間の「HH:mm」 */
+function jstClock(iso) {
+  const ms = Date.parse(iso || '');
+  if (!Number.isFinite(ms)) return '';
+  return new Date(ms + 9 * 60 * 60 * 1000).toISOString().slice(11, 16);
+}
+
+function describeTimer(item, now) {
+  const left = Math.max(1, Math.round((Date.parse(item.endsAt) - now.getTime()) / 60000));
+  return `- id=${shortIdOf(item.itemId)} タイマー「${item.title}」 ${jstClock(item.endsAt)} に鳴る（あと約${left}分）`;
+}
+
 function describeEvent(item) {
   const time = item.time ? ` ${item.time}` : '';
   const note = item.note ? `（メモ: ${item.note}）` : '';
@@ -141,6 +192,8 @@ const PLANNER_INSTRUCTION = [
   '- 消す前に「〇〇、消していい？」と1回聞く。ユーザーが「うん」などと答えてから delete_schedule を使う',
   '- 入れた・直した・消したら、何をいつにしたか短く言う',
   '- ツールを使っていないのに「入れた」「消した」と言わない。手帳に無い予定を「入っている」と言わない',
+  '- 「3分計って」「30分たったら教えて」のようにタイマーを頼まれたら set_timer。24時間より長いときは予定に入れるか聞く',
+  '- 「タイマーやめて」は cancel_timer（聞き返さずに止める）。動いているタイマーが2つ以上なら、どれか聞く',
 ].join('\n');
 
 /**
@@ -148,6 +201,7 @@ const PLANNER_INSTRUCTION = [
  */
 function buildPlannerContext({ items = [], now = new Date() }) {
   const events = upcomingEvents(items, now).slice(0, MAX_CONTEXT_ITEMS);
+  const timers = activeTimers(items, now);
   return [
     PLANNER_INSTRUCTION,
     '',
@@ -156,6 +210,7 @@ function buildPlannerContext({ items = [], now = new Date() }) {
     '',
     '今入っている予定:',
     ...(events.length > 0 ? events.map(describeEvent) : ['- （まだ無い）']),
+    ...(timers.length > 0 ? ['', '動いているタイマー:', ...timers.map((t) => describeTimer(t, now))] : []),
   ].join('\n');
 }
 
@@ -163,6 +218,10 @@ module.exports = {
   PLANNER_FEATURE,
   PLANNER_INSTRUCTION,
   mentionsPlanner,
+  mentionsEventDate,
+  mentionsTimer,
+  activeTimers,
+  jstClock,
   previousTurnUsedPlanner,
   shouldOpenPlanner,
   shortIdOf,
