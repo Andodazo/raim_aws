@@ -12,17 +12,22 @@
 //
 // Core Lambda 側にも同じテーブルを読み書きする lib/planner/planner-store.js がある。
 // 項目の形を変えるときは両方そろえること。
+//
+// 【項目の種類】 event 予定 / timer タイマー / memo メモ / list チェックできるリスト
+//   list の entries: [{ id, text, checked, checkedAt }]。チェックした項目は次の日（日本時間）に
+//   見せなくなり、次に書くときに保存からも外す（Core の planner-memo.js と同じ決まり）。
 // ==============================================================================
 
 const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
 const {
   DynamoDBDocumentClient,
   DeleteCommand,
+  GetCommand,
   PutCommand,
   QueryCommand,
   UpdateCommand,
 } = require('@aws-sdk/lib-dynamodb');
-const { randomUUID } = require('node:crypto');
+const { randomBytes, randomUUID } = require('node:crypto');
 
 const TABLE_NAME = process.env.PLANNER_TABLE_NAME || 'RAiM-Planner-dev';
 const REGION = process.env.AWS_REGION || 'ap-northeast-1';
@@ -36,6 +41,13 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 // 終わった予定を残す日数（Core と同じ）
 const KEEP_DAYS_AFTER_EVENT = 7;
 const MAX_DAYS_AHEAD = 400;
+
+// メモ帳（Core の planner-memo.js と同じ）
+const MAX_MEMO_LENGTH = 300;
+const MAX_LIST_TITLE_LENGTH = 40;
+const MAX_ENTRY_LENGTH = 60;
+const MAX_ENTRIES_PER_LIST = 50;
+const MAX_LISTS_PER_USER = 20;
 
 class PlannerInputError extends Error {
   constructor(message) {
@@ -98,6 +110,51 @@ function cleanText(value, maxLength) {
   return String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, maxLength);
 }
 
+// ─────────────────────────────────────────────
+// リストの項目
+// ─────────────────────────────────────────────
+
+function newEntryId() {
+  return `e${randomBytes(4).toString('hex')}`;
+}
+
+/** チェックした日（日本時間）が今日より前の項目を外す */
+function pruneCheckedEntries(entries, now = new Date()) {
+  if (!Array.isArray(entries)) return [];
+  const today = todayJst(now);
+  return entries.filter((entry) => {
+    if (!entry?.checked) return true;
+    const at = Date.parse(entry.checkedAt || '');
+    if (!Number.isFinite(at)) return true;
+    return todayJst(new Date(at)) >= today;
+  });
+}
+
+/**
+ * アプリから来た項目をそろえる。id が無ければ作る。チェックを付けた時刻は、
+ * 前から付いていればそのまま、新しく付けたなら今にする。
+ */
+function normalizeEntries(entries, previous = [], now = new Date()) {
+  if (!Array.isArray(entries)) throw new PlannerInputError('entries must be an array');
+  const before = new Map((previous || []).map((e) => [e.id, e]));
+  const out = [];
+  const seen = new Set();
+  for (const raw of entries) {
+    const text = cleanText(typeof raw === 'string' ? raw : raw?.text, MAX_ENTRY_LENGTH);
+    if (!text) continue;
+    let id = raw && typeof raw === 'object' && /^e[0-9a-f]{8}$/.test(String(raw.id || '')) ? raw.id : newEntryId();
+    while (seen.has(id)) id = newEntryId();
+    seen.add(id);
+    const checked = Boolean(raw && typeof raw === 'object' && raw.checked);
+    const old = before.get(id);
+    const entry = { id, text, checked };
+    if (checked) entry.checkedAt = old?.checked && old.checkedAt ? old.checkedAt : now.toISOString();
+    out.push(entry);
+    if (out.length >= MAX_ENTRIES_PER_LIST) break;
+  }
+  return pruneCheckedEntries(out, now);
+}
+
 function toPublicItem(item) {
   if (!item) return null;
   const { sub: _sub, ...rest } = item;
@@ -130,7 +187,120 @@ function createPlannerStore({ docClient, tableName = TABLE_NAME, now = () => new
     const nowSec = Math.floor(now().getTime() / 1000);
     return items
       .filter((item) => !item.expiresAt || Number(item.expiresAt) > nowSec)
-      .map(toPublicItem);
+      .map(visible);
+  }
+
+  /** リストは、前の日までにチェックした項目を外して返す */
+  function visible(item) {
+    const out = toPublicItem(item);
+    if (out?.kind === 'list') out.entries = pruneCheckedEntries(out.entries, now());
+    return out;
+  }
+
+  async function putNew(item) {
+    await client().send(new PutCommand({
+      TableName: tableName,
+      Item: item,
+      ConditionExpression: 'attribute_not_exists(itemId)',
+    }));
+    return visible(item);
+  }
+
+  /**
+   * 手でメモかリストを足す（「予定とメモ」画面のメモタブ）。
+   *
+   * @param {{ kind: 'memo'|'list', text?, title?, entries? }} input
+   * @param {{ items?: object[] }} options  今の一覧（数の上限を見る）
+   */
+  async function addMemoOrList(sub, input, { items = [] } = {}) {
+    if (items.length >= MAX_ITEMS_PER_USER) throw new PlannerInputError('too many items');
+    const timestamp = now().toISOString();
+    if (input?.kind === 'list') {
+      const title = cleanText(input.title, MAX_LIST_TITLE_LENGTH);
+      if (!title) throw new PlannerInputError('title is required');
+      if (items.filter((i) => i.kind === 'list').length >= MAX_LISTS_PER_USER) {
+        throw new PlannerInputError('too many lists');
+      }
+      return putNew({
+        sub,
+        itemId: `ls_${randomUUID()}`,
+        kind: 'list',
+        title,
+        entries: normalizeEntries(input.entries || [], [], now()),
+        source: 'manual',
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      });
+    }
+    const text = cleanText(input?.text, MAX_MEMO_LENGTH);
+    if (!text) throw new PlannerInputError('text is required');
+    return putNew({
+      sub,
+      itemId: `mm_${randomUUID()}`,
+      kind: 'memo',
+      text,
+      source: 'manual',
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
+  }
+
+  /**
+   * 手で直す。種類を読んでから、予定・メモ・リストそれぞれの直し方にする。
+   * タイマーは直せない（止めるときは消す）。
+   *
+   * @returns {Promise<{ item: object|null, needsEnrich: boolean }>}
+   */
+  async function updateItem(sub, itemId, changes = {}) {
+    const current = await client().send(new GetCommand({ TableName: tableName, Key: { sub, itemId } }));
+    const existing = current.Item;
+    if (!existing) return { item: null, needsEnrich: false };
+    if (existing.kind === 'event' || !existing.kind) return updateEvent(sub, itemId, changes);
+    if (existing.kind === 'memo') {
+      const text = cleanText(changes.text, MAX_MEMO_LENGTH);
+      if (!text) throw new PlannerInputError('text must not be empty');
+      return { item: await setFields(sub, itemId, { text }), needsEnrich: false };
+    }
+    if (existing.kind === 'list') {
+      const fields = {};
+      if (changes.title !== undefined) {
+        const title = cleanText(changes.title, MAX_LIST_TITLE_LENGTH);
+        if (!title) throw new PlannerInputError('title must not be empty');
+        fields.title = title;
+      }
+      if (changes.entries !== undefined) {
+        fields.entries = normalizeEntries(changes.entries, existing.entries, now());
+      }
+      if (Object.keys(fields).length === 0) throw new PlannerInputError('nothing to change');
+      return { item: await setFields(sub, itemId, fields), needsEnrich: false };
+    }
+    throw new PlannerInputError('this item cannot be changed');
+  }
+
+  async function setFields(sub, itemId, fields) {
+    const names = { '#updatedAt': 'updatedAt' };
+    const values = { ':updatedAt': now().toISOString() };
+    const sets = ['#updatedAt = :updatedAt'];
+    for (const [field, value] of Object.entries(fields)) {
+      names[`#${field}`] = field;
+      values[`:${field}`] = value;
+      sets.push(`#${field} = :${field}`);
+    }
+    try {
+      const result = await client().send(new UpdateCommand({
+        TableName: tableName,
+        Key: { sub, itemId },
+        UpdateExpression: `SET ${sets.join(', ')}`,
+        ConditionExpression: 'attribute_exists(itemId)',
+        ExpressionAttributeNames: names,
+        ExpressionAttributeValues: values,
+        ReturnValues: 'ALL_NEW',
+      }));
+      return visible(result.Attributes);
+    } catch (error) {
+      if (error?.name === 'ConditionalCheckFailedException') return null;
+      throw error;
+    }
   }
 
   /**
@@ -220,7 +390,7 @@ function createPlannerStore({ docClient, tableName = TABLE_NAME, now = () => new
         ExpressionAttributeValues: values,
         ReturnValues: 'ALL_NEW',
       }));
-      return { item: toPublicItem(result.Attributes), needsEnrich };
+      return { item: visible(result.Attributes), needsEnrich };
     } catch (error) {
       if (error?.name === 'ConditionalCheckFailedException') return { item: null, needsEnrich: false };
       throw error;
@@ -236,7 +406,7 @@ function createPlannerStore({ docClient, tableName = TABLE_NAME, now = () => new
     return toPublicItem(result.Attributes);
   }
 
-  return { listItems, addEvent, updateEvent, deleteItem };
+  return { listItems, addEvent, addMemoOrList, updateEvent, updateItem, deleteItem };
 }
 
 module.exports = {
@@ -245,4 +415,5 @@ module.exports = {
   createPlannerStore,
   expiresAtForEvent,
   todayJst,
+  pruneCheckedEntries,
 };

@@ -13,6 +13,9 @@
 //
 // 前の返事で予定の話をしていたら（「消していい？」→「うん」）、言葉が無くても続けて渡す。
 //
+// メモ帳（メモ・リスト）も同じ手帳に入れる。「メモ」「買うもの」などの言葉があるときと、
+// リストを持っている人が、リストの名前や項目（「牛乳買った」）を言ったときに開く。
+//
 // 指示の文は人格のプロンプト（prompts/）には入れず、状況のルールとしてここに置く。
 // ==============================================================================
 
@@ -22,6 +25,7 @@ const {
   todayJst,
   daysBetween,
 } = require('./planner-dates');
+const { keyOf } = require('./planner-memo');
 
 const PLANNER_FEATURE = 'planner';
 
@@ -58,8 +62,24 @@ const TIMER_PATTERNS = Object.freeze([
   /\d+\s*(?:分|ふん|ぷん|秒|びょう|時間半?)\s*(?:後|ご|たったら|経ったら|したら|で(?:教|知|呼|起|声))/,
 ]);
 
+// メモ帳の言葉（「メモして」「買うものに牛乳足して」「メモ何あったっけ」）
+const MEMO_WORDS = Object.freeze([
+  'メモ', 'めも', '買うもの', 'かうもの', '買い物リスト', 'かいものリスト', '買い物メモ',
+  'リスト', 'りすと', '控えて', 'ひかえて', '控えといて', '書いといて', '書いておいて',
+]);
+
+// リストの項目を足す・チェックする言葉。リストの名前や項目が発言にあるかは、
+// 手帳を読んでから確かめる（この言葉だけでは開かない）
+const LIST_ACTION_WORDS = Object.freeze([
+  '買った', '買いました', '買ってきた', '済んだ', '済ませた', 'すませた', '終わった', 'おわった',
+  'やった', 'できた', '足して', 'たして', '追加', '入れて', 'いれて', 'いらなくなった',
+  'いらない', 'チェック', '外して', 'はずして',
+]);
+
 // ライムに見せる予定の数。多いとプロンプトが長くなる
 const MAX_CONTEXT_ITEMS = 20;
+// ライムに見せるメモの数（新しい順）
+const MAX_CONTEXT_MEMOS = 20;
 
 /** 全角数字を半角にする（音声の聞き取りで全角になることがある） */
 function toHalfWidthDigits(text) {
@@ -79,6 +99,52 @@ function mentionsPlanner(userText, { hasItems = false } = {}) {
   if (mentionsTimer(text)) return true;
   if (hasItems && PLANNER_CHANGE_WORDS.some((word) => text.includes(word))) return true;
   return false;
+}
+
+/**
+ * メモ帳の言葉があるか（「メモして」「買うもの何だっけ」）。
+ */
+function mentionsMemo(userText) {
+  const text = String(userText || '');
+  if (!text) return false;
+  return MEMO_WORDS.some((word) => text.includes(word));
+}
+
+/**
+ * リストの項目を足す・チェックしそうな言葉があるか（手帳を読むかどうかだけに使う）。
+ */
+function mentionsListAction(userText) {
+  const text = String(userText || '');
+  if (!text) return false;
+  return LIST_ACTION_WORDS.some((word) => text.includes(word));
+}
+
+/**
+ * リストの名前か、チェックしていない項目が発言に出てきたか。
+ */
+function mentionsListContent(userText, items = []) {
+  const key = keyOf(userText);
+  if (!key) return false;
+  for (const item of items) {
+    if (item?.kind !== 'list') continue;
+    const title = keyOf(item.title).replace(/リスト$/, '');
+    if (title.length >= 2 && key.includes(title)) return true;
+    for (const entry of item.entries || []) {
+      const text = keyOf(entry?.text);
+      if (!entry?.checked && text.length >= 1 && key.includes(text)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * 手帳を読んでみる価値があるか（読んだあと shouldOpenPlanner で決める）。
+ */
+function mayNeedPlanner(userText, history = []) {
+  return mentionsPlanner(userText, { hasItems: true }) ||
+    mentionsMemo(userText) ||
+    mentionsListAction(userText) ||
+    previousTurnUsedPlanner(history);
 }
 
 /**
@@ -120,8 +186,12 @@ function previousTurnUsedPlanner(history = []) {
 function shouldOpenPlanner({ features = [], userText = '', history = [], items = [], greeting = false }) {
   if (greeting) return false;
   if (!Array.isArray(features) || !features.includes(PLANNER_FEATURE)) return false;
-  const hasItems = items.some((item) => item?.kind === 'event') || activeTimers(items).length > 0;
-  return mentionsPlanner(userText, { hasItems }) || previousTurnUsedPlanner(history);
+  const hasItems = items.some((item) => item?.kind === 'event' || item?.kind === 'memo' || item?.kind === 'list') ||
+    activeTimers(items).length > 0;
+  return mentionsPlanner(userText, { hasItems }) ||
+    mentionsMemo(userText) ||
+    (mentionsListAction(userText) && mentionsListContent(userText, items)) ||
+    previousTurnUsedPlanner(history);
 }
 
 /** ライムに見せる短い ID（itemId の uuid の先頭6文字） */
@@ -181,6 +251,54 @@ function describeEvent(item) {
   return `- id=${shortIdOf(item.itemId)} ${item.date} ${formatDateLabel(item.date)}${time} ${item.title}${note}`;
 }
 
+/** 新しい順のメモ */
+function memosOf(items) {
+  return items
+    .filter((item) => item?.kind === 'memo')
+    .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+}
+
+/** 作った順のリスト */
+function listsOf(items) {
+  return items
+    .filter((item) => item?.kind === 'list')
+    .sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
+}
+
+function describeMemo(item) {
+  const day = item.createdAt ? jstDay(item.createdAt) : '';
+  return `- id=${shortIdOf(item.itemId)} メモ「${item.text}」${day ? `（${day}）` : ''}`;
+}
+
+function describeList(item) {
+  const entries = item.entries || [];
+  const open = entries.filter((e) => !e.checked).map((e) => e.text);
+  const done = entries.filter((e) => e.checked).map((e) => e.text);
+  return `- id=${shortIdOf(item.itemId)} リスト「${item.title}」: ${open.length ? open.join('、') : '（空）'}` +
+    (done.length ? `（チェック済み: ${done.join('、')}）` : '');
+}
+
+/** 「11/10」（日本時間） */
+function jstDay(iso) {
+  const ms = Date.parse(iso || '');
+  if (!Number.isFinite(ms)) return '';
+  const d = new Date(ms + 9 * 60 * 60 * 1000);
+  return `${d.getUTCMonth() + 1}/${d.getUTCDate()}`;
+}
+
+const MEMO_INSTRUCTION = [
+  '【メモ帳】',
+  'ライムはユーザーのメモと、項目ごとにチェックできるリスト（買うものなど）も持っておける。',
+  '- 「メモして」「買うものに牛乳足して」のように、はっきり頼まれたときだけ入れる。話に出ただけでは入れない',
+  '- 項目を並べてチェックしたいもの（買うもの・持ち物など）は add_to_list、それ以外は add_memo',
+  '- パスワード・暗証番号・カード番号などはメモしない。「それは自分で控えてね」と言う',
+  '- 「メモ何あったっけ？」「買うもの何だっけ？」は show_memos。声で言うのは新しい順に3件まで。残りは「あと〇件あるよ」と言う（カードに全部出る）',
+  '- 「牛乳買った」のように済んだと言われたら check_list_entries（聞き返さない）。チェックした項目は次の日に消える',
+  '- リストの項目だけ消すときは remove_list_entries',
+  '- メモやリストそのものを消す前に「消していい？」と1回聞く。ユーザーが「うん」などと答えてから delete_memo',
+  '- メモ帳に無いことを「メモしてある」と言わない',
+].join('\n');
+
 const PLANNER_INSTRUCTION = [
   '【予定の手帳】',
   'ライムはユーザーの予定を手帳に入れておける。入れた予定は、前の日の夜や1時間前にアプリが知らせる。',
@@ -202,8 +320,13 @@ const PLANNER_INSTRUCTION = [
 function buildPlannerContext({ items = [], now = new Date() }) {
   const events = upcomingEvents(items, now).slice(0, MAX_CONTEXT_ITEMS);
   const timers = activeTimers(items, now);
+  const memos = memosOf(items);
+  const lists = listsOf(items);
+  const shownMemos = memos.slice(0, MAX_CONTEXT_MEMOS);
   return [
     PLANNER_INSTRUCTION,
+    '',
+    MEMO_INSTRUCTION,
     '',
     '日付の表（今日から2週間）:',
     ...buildCalendarLines(now, 14),
@@ -211,6 +334,13 @@ function buildPlannerContext({ items = [], now = new Date() }) {
     '今入っている予定:',
     ...(events.length > 0 ? events.map(describeEvent) : ['- （まだ無い）']),
     ...(timers.length > 0 ? ['', '動いているタイマー:', ...timers.map((t) => describeTimer(t, now))] : []),
+    '',
+    'メモ（新しい順）:',
+    ...(shownMemos.length > 0 ? shownMemos.map(describeMemo) : ['- （まだ無い）']),
+    ...(memos.length > shownMemos.length ? [`- ほかに古いメモが${memos.length - shownMemos.length}件`] : []),
+    '',
+    'リスト:',
+    ...(lists.length > 0 ? lists.map(describeList) : ['- （まだ無い）']),
   ].join('\n');
 }
 
@@ -220,6 +350,12 @@ module.exports = {
   mentionsPlanner,
   mentionsEventDate,
   mentionsTimer,
+  mentionsMemo,
+  mentionsListAction,
+  mentionsListContent,
+  mayNeedPlanner,
+  memosOf,
+  listsOf,
   activeTimers,
   jstClock,
   previousTurnUsedPlanner,

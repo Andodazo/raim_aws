@@ -364,6 +364,12 @@ const TOOL_DESCRIPTIONS = {
   delete_schedule: () => '手帳の予定を消しています',
   set_timer: () => 'タイマーを始めています',
   cancel_timer: () => 'タイマーを止めています',
+  add_memo: () => 'メモしています',
+  add_to_list: () => 'リストに足しています',
+  check_list_entries: () => 'リストにチェックを付けています',
+  remove_list_entries: () => 'リストから消しています',
+  show_memos: () => 'メモを見ています',
+  delete_memo: () => 'メモを消しています',
 };
 
 function getToolDescription(toolName, args = {}) {
