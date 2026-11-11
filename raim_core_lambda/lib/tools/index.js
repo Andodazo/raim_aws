@@ -50,6 +50,7 @@ const {
   PLANNER_TOOL_NAMES,
   isPlannerTool,
 } = require('./planner');
+const { PAST_TALK_TOOL_NAME, PAST_TALK_TOOL_DEFINITION } = require('./past-talk');
 
 // ─────────────────────────────────────────────
 // ツール定義（Responses API 形式）
@@ -108,7 +109,7 @@ const TOOL_DEFINITIONS = [
  *
  * @param {{ features?: string[], planner?: boolean }} options
  */
-function getToolDefinitions({ features = [], planner = false } = {}) {
+function getToolDefinitions({ features = [], planner = false, pastTalk = false } = {}) {
   const list = [...TOOL_DEFINITIONS];
 
   if (Array.isArray(features) && features.includes(STATION_ALARM_FEATURE)) {
@@ -117,6 +118,11 @@ function getToolDefinitions({ features = [], planner = false } = {}) {
 
   if (planner) {
     list.push(...PLANNER_TOOL_DEFINITIONS);
+  }
+
+  // 前の話を探す道具は、前に話したことを聞いているときだけ（past-talk.js の関門）
+  if (pastTalk) {
+    list.push(PAST_TALK_TOOL_DEFINITION);
   }
 
   return list;
@@ -441,8 +447,10 @@ function makeToolCallKey(toolName, args = {}) {
 function isKnownTool(toolName) {
   // 予定の手帳のツールは、DynamoDB とアプリへの知らせが要るので
   // core-chat-service が runPlannerTool で直接実行する（TOOL_FUNCTIONS には無い）
+  // 前の話を探す道具も、会話のテーブルを読むので core-chat-service が直接実行する
   return Object.prototype.hasOwnProperty.call(TOOL_FUNCTIONS, toolName) ||
-    isPlannerTool(toolName);
+    isPlannerTool(toolName) ||
+    toolName === PAST_TALK_TOOL_NAME;
 }
 
 async function executeTool(toolName, args, secrets = {}, context = {}) {

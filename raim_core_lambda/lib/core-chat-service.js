@@ -76,6 +76,7 @@ const { resolveThread, ensureThreadTitle } = require('./thread-resolver');
 const {
   appendTurn,
   getThread,
+  listThreads,
   hasUnsummarizedUserTurn,
 } = require('./conversation-thread-store');
 const {
@@ -109,6 +110,12 @@ const { writeEventExtras, findEventCandidate } = require('./planner/planner-writ
 const { buildReminderInstruction, reminderMatchesItem } = require('./planner/planner-reminder');
 const { todaysUpcomingEvents, buildBriefInstruction, briefWeather } = require('./planner/morning-brief');
 const { isPlannerTool, runPlannerTool } = require('./tools/planner');
+const {
+  PAST_TALK_TOOL_NAME,
+  PAST_TALK_INSTRUCTION,
+  mentionsPastTalk,
+  searchPastTalk,
+} = require('./tools/past-talk');
 const {
   FOLLOW_UP_TURNS,
   dueFollowUps,
@@ -232,6 +239,8 @@ const defaultDependencies = Object.freeze({
   ensureThreadTitle,
   appendTurn,
   getThread,
+  // 前の話を探す（tools/past-talk.js）
+  listThreads: (sub) => listThreads(sub),
   shouldSummarize,
   dispatchSummarization,
   getMantleSessionState,
@@ -683,9 +692,16 @@ function createCoreChatService(dependencyOverrides = {}) {
     // つらい話のとき、事実を調べる質問、予定の手帳を使う話のときは聞かない。
     // 聞きたいことがあるときだけ指示を足す（普通の会話ではプロンプトは今と同じ）。
     let followUpContext = '';
+    // 3-h. 前に話したことを聞いているか（tools/past-talk.js の関門）。
+    // 「この前話した〜」「前に言ってた〜なんだっけ」のときだけ、探す道具と指示を渡す
+    const pastTalkOpen = Boolean(toolsEnabled) && !input.greeting && mentionsPastTalk(input.text);
+    if (pastTalkOpen) {
+      console.log('[PastTalk] opened');
+    }
     // 予定の手帳を持つアプリだけ（古いアプリでは手帳を読まない）。
+    // 前の話を探しているときも聞かない（話がそれるので）
     if (
-      !input.greeting && hasPlannerFeature && !plannerOpen && !factCheck &&
+      !input.greeting && hasPlannerFeature && !plannerOpen && !factCheck && !pastTalkOpen &&
       String(input.text || '').trim()
     ) {
       const followUpSession = followUpSessionState(threadMessages, now);
@@ -702,7 +718,9 @@ function createCoreChatService(dependencyOverrides = {}) {
       }
     }
     // 状況のルールは予定の手帳と同じ場所に入れる（手帳を開いた回は聞かないので重ならない）
-    const situationContext = [plannerContext, followUpContext].filter(Boolean).join('\n\n');
+    const situationContext = [plannerContext, followUpContext, pastTalkOpen ? PAST_TALK_INSTRUCTION : '']
+      .filter(Boolean)
+      .join('\n\n');
 
     // 話に出ただけの予定（「予定に入れる？」ボタン）を、返事と並行して探す。
     // 日付や予定の言葉が今回の発言にあるときだけ（前の返事からの続きだけでは探さない）
@@ -829,7 +847,7 @@ function createCoreChatService(dependencyOverrides = {}) {
     };
 
     const toolDefinitions = toolsEnabled
-      ? dependencies.getToolDefinitions({ features: input.features, planner: plannerOpen })
+      ? dependencies.getToolDefinitions({ features: input.features, planner: plannerOpen, pastTalk: pastTalkOpen })
       : null;
     // 今回ライムに見せたツール名。見せていないツール（アプリが対応していない
     // 駅アラームなど）を名前だけで呼ばれても実行しない。
@@ -955,6 +973,53 @@ function createCoreChatService(dependencyOverrides = {}) {
         toolExecuted = true;
         if (result?.error) toolFailed = true;
         toolLog.push({ name: toolName, query: '', ok: !result?.error });
+
+        previousResponseId = mantleResponse.responseId;
+        mantleResponse = await callMantle({
+          input: {
+            ...mantleInput,
+            messages: [
+              {
+                type: 'function_call_output',
+                call_id: toolCall.callId,
+                output: JSON.stringify(result),
+              },
+            ],
+          },
+          previousId: previousResponseId,
+          tools: dependencies.multiTurnTools ? toolDefinitions : null,
+        });
+        continue;
+      }
+
+      // 前の話を探す（tools/past-talk.js）。見つかったら、返事の下にその会話を開くカードを出す
+      if (toolName === PAST_TALK_TOOL_NAME) {
+        const { result, best, stats } = await searchPastTalk({
+          sub: input.sub,
+          keywords: toolArgs?.keywords,
+          period: toolArgs?.period,
+          userText: input.text,
+          forgotten: session.forgottenMemories || [],
+          now,
+          store: { listThreads: dependencies.listThreads, getThread: dependencies.getThread },
+        }).catch((error) => {
+          console.error(`[PastTalk] search failed: ${error.message}`);
+          return {
+            result: { error: true, message: '前の会話を読めなかった。思い出せなかったと正直に言う', tool: toolName },
+            best: null,
+            stats: null,
+          };
+        });
+        if (stats) {
+          console.log(`[PastTalk] threads=${stats.threads} read=${stats.read} hits=${stats.hits} found=${Boolean(best)} ms=${stats.ms}`);
+        }
+        if (best) {
+          await notifyClientAction({ action: 'history.found', params: best });
+        }
+
+        toolExecuted = true;
+        if (result?.error) toolFailed = true;
+        toolLog.push({ name: toolName, query: '', ok: !result?.error, found: Boolean(best) });
 
         previousResponseId = mantleResponse.responseId;
         mantleResponse = await callMantle({
