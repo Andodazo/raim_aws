@@ -1,0 +1,74 @@
+[
+  {
+    "id": "fu-greet-interview",
+    "tag": "あとで聞く",
+    "note": "昨日の大事な面接を、話しかけで「そういえば」と聞くか。結果を決めつけないか",
+    "greeting": true,
+    "greetingExpect": { "containsAny": ["面接"], "maxSentences": 3 },
+    "planner": [{ "title": "面接", "daysAgo": 1, "time": "10:00", "importance": "important" }],
+    "turns": [
+      { "say": "たぶん受かったと思う！" },
+      { "say": "ありがと" }
+    ]
+  },
+  {
+    "id": "fu-brief",
+    "tag": "あとで聞く",
+    "note": "朝のまとめと重なったとき、昨日のことを聞いてから今日の予定へつなぐか",
+    "greeting": true,
+    "brief": true,
+    "greetingExpect": { "containsAny": ["面接"], "maxSentences": 3 },
+    "planner": [
+      { "title": "面接", "daysAgo": 1, "time": "10:00", "importance": "important" },
+      { "title": "バイト", "hoursFromNow": 3 }
+    ],
+    "turns": [
+      { "say": "まあまあかな" }
+    ]
+  },
+  {
+    "id": "fu-turn-exam",
+    "tag": "あとで聞く",
+    "note": "話しかけなしで始まったとき、はじめの3往復のどこかで1回だけ「そういえば」と聞くか。相手の話より先に聞かないか",
+    "planner": [{ "title": "数学の試験", "daysAgo": 2, "importance": "important" }],
+    "turns": [
+      { "say": "ねえ聞いて、今日ラーメン食べた" },
+      { "say": "味噌！" },
+      { "say": "うん" },
+      { "say": "ひまだなー" }
+    ]
+  },
+  {
+    "id": "fu-user-first",
+    "tag": "あとで聞く",
+    "note": "本人が先に話したら、聞き直さずに乗るか（「どうだった？」と聞かない）",
+    "planner": [{ "title": "発表", "daysAgo": 1, "time": "13:00", "importance": "important" }],
+    "turns": [
+      { "say": "昨日の発表、緊張したけどなんとかなった" },
+      { "say": "うん、ほっとした" }
+    ]
+  },
+  {
+    "id": "fu-deflect",
+    "tag": "あとで聞く",
+    "note": "濁されたら深追いしないか（2往復目で話を戻さない）",
+    "greeting": true,
+    "planner": [{ "title": "病院", "daysAgo": 1, "time": "11:00", "importance": "important" }],
+    "turns": [
+      { "say": "まあ…その話はいいや" },
+      { "say": "今日寒いね" }
+    ],
+    "expect": { "noMemes": true }
+  },
+  {
+    "id": "fu-chore",
+    "tag": "あとで聞く",
+    "note": "用事（ゴミ出し）は聞かない。普通の会話のまま",
+    "greeting": true,
+    "planner": [{ "title": "ゴミ出し", "daysAgo": 1, "importance": "chore" }],
+    "greetingExpect": { "notContains": ["ゴミ"] },
+    "turns": [
+      { "say": "おはよ" }
+    ]
+  }
+]

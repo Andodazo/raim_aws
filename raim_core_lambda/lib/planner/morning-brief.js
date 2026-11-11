@@ -98,25 +98,31 @@ function weatherReasons(today, yesterday = null) {
 /**
  * 朝のまとめの指示。
  *
- * @param {{ events: object[], weather?: object[] }} params  weather は weatherReasons の結果
+ * @param {{ events: object[], weather?: object[], followUpLines?: string[] }} params
+ *   weather は weatherReasons の結果。followUpLines は終わったことを聞く行（follow-up.js）
  */
-function buildBriefInstruction({ events, weather = [] }) {
+function buildBriefInstruction({ events, weather = [], followUpLines = [] }) {
   const spoken = events.slice(0, SPOKEN_EVENTS);
   const rest = events.length - spoken.length;
   const lines = [
     '【その日はじめての話しかけ（今日の予定）】',
     'ユーザーが今日はじめてアプリを開いた。ライムから先に、今日の予定を伝える。',
     '今日の予定（時間順）:',
-    ...spoken.map((e) => `- ${e.time || '時間は決まっていない'} ${e.title}${e.note ? `（メモ: ${e.note}）` : ''}`),
+    ...spoken.map((e) => (
+      `- ${e.time || '時間は決まっていない'} ${e.title}` +
+      `${e.importance === 'important' ? '（大事な予定）' : ''}` +
+      `${e.note ? `（メモ: ${e.note}）` : ''}`
+    )),
   ];
   if (rest > 0) lines.push(`- ほかに${rest}つ（声では言わず「ほかに${rest}つあるよ」とだけ言う）`);
   if (weather.length > 0) {
     lines.push('天気（当てはまったので、ひとことだけ触れる）:', ...weather.map((w) => `- ${w.text}`));
   }
+  if (followUpLines.length > 0) lines.push(...followUpLines);
   lines.push(
     '- 2〜3文で短く。いつもの口調のまま。時間帯に合った挨拶を軽く添えてよい',
     '- 予定は上に書いたものだけ。言っていない予定を足さない',
-    '- 大事そうな予定には軽く応援を添えてよい',
+    '- 大事な予定には軽く応援を添えてよい',
     '- 「通知」「アプリ」「まとめ」「合図」という言葉は使わない',
   );
   return lines.join('\n');

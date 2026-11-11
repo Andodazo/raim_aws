@@ -156,6 +156,12 @@ function createFakeStore(initial = []) {
       items.push(item);
       return item;
     },
+    async addFollowUp(sub, candidate) {
+      n += 1;
+      const item = { itemId: `fu_${String(n).padStart(6, '0')}ee`, kind: 'followup', importance: 'normal', source: 'suggest', ...candidate };
+      items.push(item);
+      return item;
+    },
     async updateItem(sub, itemId, changes) {
       const item = items.find((i) => i.itemId === itemId);
       if (!item) return null;
@@ -258,7 +264,7 @@ test('findEventCandidate returns a future event or null', async () => {
 
 const { normalizeReminder, buildReminderInstruction, reminderMatchesItem } = require('../lib/planner/planner-reminder');
 
-function buildService({ text, features = ['planner'], mantleResponses, store, helperResponses = {}, request = {} }) {
+function buildService({ text, features = ['planner'], mantleResponses, store, helperResponses = {}, request = {}, thread = null }) {
   const mainCalls = [];
   const helperCalls = [];
   const actions = [];
@@ -281,7 +287,7 @@ function buildService({ text, features = ['planner'], mantleResponses, store, he
     isMantleResponseExpiredError: () => false,
     clearMantleResponseState: async () => {},
     updateMantleResponseState: async () => {},
-    resolveThread: async () => ({ threadId: 't1', thread: null, isNew: false }),
+    resolveThread: async () => ({ threadId: 't1', thread, isNew: false }),
     ensureThreadTitle: async () => {},
     appendTurn: async (turn) => { appended.push(turn); return {}; },
     shouldSummarize: () => ({ shouldSummarize: false }),
@@ -308,7 +314,15 @@ const replyText = (text) => ({ responseId: `resp-${text.length}`, rawText: JSON.
 test('flow: a normal chat does not open the planner or read the table', async () => {
   let listed = 0;
   const store = { ...createFakeStore(), listItems: async () => { listed += 1; return []; } };
-  const svc = buildService({ text: 'ゲームしてた', mantleResponses: [replyText('いいね')], store });
+  // 会話のはじめの3往復を過ぎたあと（あとで聞くことを探すのは、はじめの3往復だけ）
+  const recent = (min) => new Date(NOW.getTime() - min * 60000).toISOString();
+  const thread = {
+    messages: [1, 2, 3].flatMap((n) => [
+      { role: 'user', text: `話${n}`, createdAt: recent(10 - n) },
+      { role: 'assistant', text: 'うん', createdAt: recent(10 - n) },
+    ]),
+  };
+  const svc = buildService({ text: 'ゲームしてた', mantleResponses: [replyText('いいね')], store, thread });
   const result = await svc.run();
   assert.equal(result.ok, true);
   assert.equal(listed, 0);
@@ -353,8 +367,16 @@ test('flow: a passing mention sends a suggestion instead of saving', async () =>
     helperResponses: { planner_candidate: '{"title":"テスト","date":"2026-11-12","time":""}' },
   });
   await svc.run();
-  assert.equal(store.items.length, 0);
-  assert.deepEqual(svc.actions, [{ action: 'planner.suggest', params: { candidate: { title: 'テスト', date: '2026-11-12', time: '' } } }]);
+  // 予定には入れない（押されなかったら、あとで聞くこととして持つ）
+  assert.deepEqual(store.items.map((i) => i.kind), ['followup']);
+  const followUp = store.items[0];
+  assert.deepEqual(svc.actions, [{
+    action: 'planner.suggest',
+    params: {
+      candidate: { title: 'テスト', date: '2026-11-12', time: '', followUpId: followUp.itemId },
+      item: followUp,
+    },
+  }]);
 });
 
 test('flow: apps without the planner feature never see planner tools', async () => {
@@ -817,4 +839,200 @@ test('flow: a brief greeting with plans today uses the brief and sends the card;
   await empty.run();
   assert.doesNotMatch(JSON.stringify(empty.mainCalls[0].mantleInput || empty.mainCalls[0]), /その日はじめて/);
   assert.equal(empty.actions.length, 0);
+});
+
+// ─────────────────────────────────────────────
+// 言ってたことを後で聞く（follow-up.js）
+// ─────────────────────────────────────────────
+
+const followUps = require('../lib/planner/follow-up');
+
+/** 3回に1回の判定で「聞く」「聞かない」になる itemId を探す */
+function idThat(asks, prefix = 'ev_') {
+  for (let i = 0; i < 1000; i += 1) {
+    const id = `${prefix}${String(i).padStart(6, '0')}-dice`;
+    if (followUps.rollsToAsk(id) === asks) return id;
+  }
+  throw new Error('no id');
+}
+
+test('follow-up: asks only after it is over (timed 2h after start, date-only the next day)', () => {
+  // NOW = 11/11 11:30 JST
+  assert.equal(followUps.isOver({ date: '2026-11-11', time: '09:30' }, NOW), true);
+  assert.equal(followUps.isOver({ date: '2026-11-11', time: '09:31' }, NOW), false);
+  assert.equal(followUps.isOver({ date: '2026-11-11', time: '' }, NOW), false);
+  assert.equal(followUps.isOver({ date: '2026-11-10', time: '' }, NOW), true);
+  assert.equal(followUps.isOver({ date: '2026-11-12', time: '' }, NOW), false);
+});
+
+test('follow-up: importance decides (important always, normal about 1 in 3, chore never)', () => {
+  const askId = idThat(true);
+  const skipId = idThat(false);
+  const base = { kind: 'event', title: '面接', date: '2026-11-10', time: '' };
+  const due = (items) => followUps.dueFollowUps(items, NOW).map((i) => i.itemId);
+  assert.deepEqual(due([{ ...base, itemId: skipId, importance: 'important' }]), [skipId]);
+  assert.deepEqual(due([{ ...base, itemId: askId, importance: 'normal' }]), [askId]);
+  assert.deepEqual(due([{ ...base, itemId: skipId, importance: 'normal' }]), []);
+  assert.deepEqual(due([{ ...base, itemId: askId, importance: 'chore' }]), []);
+  // 一度聞いたら聞かない
+  assert.deepEqual(due([{ ...base, itemId: askId, importance: 'important', askedAt: NOW.toISOString() }]), []);
+  // ふつうは3日目まで、大事なものは7日目まで
+  assert.deepEqual(due([{ ...base, date: '2026-11-07', itemId: askId, importance: 'normal' }]), []);
+  assert.deepEqual(due([{ ...base, date: '2026-11-07', itemId: askId, importance: 'important' }]), [askId]);
+  // 大事なものを先に、同じなら古いものから
+  const order = due([
+    { ...base, itemId: askId, importance: 'normal', date: '2026-11-09' },
+    { ...base, itemId: 'ev_b', importance: 'important', date: '2026-11-10' },
+    { ...base, itemId: 'ev_a', importance: 'important', date: '2026-11-09' },
+  ]);
+  assert.deepEqual(order, ['ev_a', 'ev_b', askId]);
+});
+
+test('follow-up: an unpressed suggestion is asked unless the same thing became an event', () => {
+  const fuId = idThat(true, 'fu_');
+  const followUp = { itemId: fuId, kind: 'followup', title: 'テスト', date: '2026-11-10', time: '' };
+  assert.deepEqual(followUps.dueFollowUps([followUp], NOW).map((i) => i.itemId), [fuId]);
+  const event = { itemId: 'ev_x', kind: 'event', title: '数学のテスト', date: '2026-11-10', time: '', importance: 'important' };
+  assert.deepEqual(followUps.dueFollowUps([followUp, event], NOW).map((i) => i.itemId), ['ev_x']);
+});
+
+test('follow-up: session start is after a greeting or a 1h gap; one ask per session', () => {
+  const at = (min) => new Date(NOW.getTime() - min * 60000).toISOString();
+  assert.deepEqual(followUps.sessionState([], NOW), { turns: 0, asked: false });
+  const messages = [
+    { role: 'user', text: 'a', createdAt: at(200) },
+    { role: 'assistant', text: 'b', createdAt: at(200) },
+    { role: 'assistant', text: 'やっほー', createdAt: at(30), meta: { greeting: true } },
+    { role: 'user', text: 'c', createdAt: at(20) },
+    { role: 'assistant', text: 'd', createdAt: at(20) },
+  ];
+  assert.deepEqual(followUps.sessionState(messages, NOW), { turns: 1, asked: false });
+  // 1時間あいたら新しい区切り
+  assert.deepEqual(followUps.sessionState(messages.slice(0, 2), NOW), { turns: 0, asked: false });
+  // その区切りでもう聞いていた
+  const asked = [...messages, { role: 'assistant', text: 'そういえば', createdAt: at(10), meta: { followUp: { itemId: 'ev_1' } } }];
+  assert.equal(followUps.sessionState(asked, NOW).asked, true);
+});
+
+test('follow-up: mentions and replies are matched by the words of the title', () => {
+  const item = { title: 'A社の面接', date: '2026-11-10', time: '' };
+  assert.equal(followUps.mentionsItem('面接だめだったかも', item), true);
+  assert.equal(followUps.mentionsItem('ゲームしてた', item), false);
+  assert.equal(followUps.replyAskedAbout('そういえば、昨日のあれどうだった？', item), true);
+  assert.equal(followUps.replyAskedAbout('いいね、楽しそう', item), false);
+  const messages = [
+    { role: 'user', text: '明日面接なんだよね', createdAt: '2026-11-09T12:00:00Z' },
+  ];
+  // 予定の前に話していたのは数えない
+  assert.equal(followUps.talkedAboutSince(item, messages), false);
+  assert.equal(followUps.talkedAboutSince(item, [{ role: 'user', text: '面接おわった', createdAt: '2026-11-10T05:00:00Z' }]), true);
+});
+
+test('follow-up: instructions say when, what, and not to push', () => {
+  const item = { kind: 'event', title: '面接', date: '2026-11-10', time: '10:00', importance: 'important' };
+  const greeting = followUps.buildFollowUpGreetingInstruction({ item, now: NOW });
+  assert.match(greeting, /昨日の10:00：面接（大事な予定）/);
+  assert.match(greeting, /深追いせず/);
+  const turn = followUps.buildFollowUpTurnInstruction({ item: { ...item, kind: 'followup', time: '' }, now: NOW });
+  assert.match(turn, /昨日：面接（ユーザーが前に話していたこと/);
+  assert.match(turn, /そういえば/);
+  const brief = require('../lib/planner/morning-brief').buildBriefInstruction({
+    events: [{ kind: 'event', title: 'バイト', date: '2026-11-11', time: '15:00' }],
+    followUpLines: followUps.buildFollowUpBriefLines({ item, now: NOW }),
+  });
+  assert.match(brief, /今日の予定より先に/);
+  assert.match(brief, /面接/);
+});
+
+const yesterdayInterview = (extra = {}) => ({
+  itemId: 'ev_000001aa-0000', kind: 'event', title: '面接', date: '2026-11-10', time: '10:00', importance: 'important', ...extra,
+});
+
+test('flow: a greeting asks about a finished important event and marks it asked', async () => {
+  const store = createFakeStore([yesterdayInterview()]);
+  const svc = buildService({
+    text: '', store, mantleResponses: [replyText('そういえば昨日の面接どうだった？')],
+    request: { greeting: true },
+  });
+  await svc.run();
+  const prompt = JSON.stringify(svc.mainCalls[0].mantleInput || svc.mainCalls[0]);
+  assert.match(prompt, /そういえばの話しかけ/);
+  assert.equal(store.items[0].askedAt, NOW.toISOString());
+  assert.deepEqual(svc.appended[0].assistantMessage.meta.followUp, { itemId: 'ev_000001aa-0000', by: 'raim' });
+
+  // もう聞いたので、次の話しかけは普段どおり
+  const again = buildService({ text: '', store, mantleResponses: [replyText('やっほー')], request: { greeting: true } });
+  await again.run();
+  assert.doesNotMatch(JSON.stringify(again.mainCalls[0].mantleInput || again.mainCalls[0]), /そういえばの話しかけ/);
+});
+
+test('flow: a brief greeting folds the follow-up in', async () => {
+  const store = createFakeStore([
+    yesterdayInterview(),
+    { itemId: 'ev_000002aa-0000', kind: 'event', title: 'バイト', date: '2026-11-11', time: '15:00' },
+  ]);
+  const svc = buildService({
+    text: '', store, mantleResponses: [replyText('昨日の面接どうだった？今日は15時からバイトだね')],
+    request: { greeting: true, brief: true },
+  });
+  await svc.run();
+  const prompt = JSON.stringify(svc.mainCalls[0].mantleInput || svc.mainCalls[0]);
+  assert.match(prompt, /その日はじめての話しかけ/);
+  assert.match(prompt, /終わったことを1つだけ聞く/);
+  assert.equal(store.items[0].askedAt, NOW.toISOString());
+});
+
+test('flow: a care greeting or reminder never asks', async () => {
+  const store = createFakeStore([yesterdayInterview()]);
+  const at = new Date(NOW.getTime() - 30 * 60000).toISOString();
+  const svc = buildService({
+    text: '', store, mantleResponses: [replyText('大丈夫？')],
+    request: { greeting: true },
+    thread: { messages: [{ role: 'user', text: 'もう消えたい', createdAt: at }] },
+  });
+  await svc.run();
+  assert.doesNotMatch(JSON.stringify(svc.mainCalls[0].mantleInput || svc.mainCalls[0]), /そういえば/);
+  assert.equal(store.items[0].askedAt, undefined);
+});
+
+test('flow: early in a conversation the reply may ask; it is marked only when it did', async () => {
+  const store = createFakeStore([yesterdayInterview()]);
+  const quiet = buildService({ text: 'ゲームしてた', store, mantleResponses: [replyText('いいね')] });
+  await quiet.run();
+  assert.match(JSON.stringify(quiet.mainCalls[0].mantleInput || quiet.mainCalls[0]), /そういえば（終わったことを聞く）/);
+  assert.equal(store.items[0].askedAt, undefined);
+  assert.equal(quiet.appended[0].assistantMessage.meta.followUp, undefined);
+
+  const asks = buildService({ text: 'ゲームしてた', store, mantleResponses: [replyText('いいね。そういえば面接どうだった？')] });
+  await asks.run();
+  assert.equal(store.items[0].askedAt, NOW.toISOString());
+  assert.deepEqual(asks.appended[0].assistantMessage.meta.followUp, { itemId: 'ev_000001aa-0000', by: 'raim' });
+});
+
+test('flow: when the user brings it up first, it is marked without adding the instruction', async () => {
+  const store = createFakeStore([yesterdayInterview()]);
+  const svc = buildService({ text: '面接たぶん受かった！', store, mantleResponses: [replyText('すごい！')] });
+  await svc.run();
+  assert.doesNotMatch(JSON.stringify(svc.mainCalls[0].mantleInput || svc.mainCalls[0]), /終わったことを聞く/);
+  assert.equal(store.items[0].askedAt, NOW.toISOString());
+  assert.deepEqual(svc.appended[0].assistantMessage.meta.followUp, { itemId: 'ev_000001aa-0000', by: 'user' });
+});
+
+test('flow: an old app without the planner feature never reads for follow-ups mid-chat', async () => {
+  let listed = 0;
+  const store = { ...createFakeStore([yesterdayInterview()]), listItems: async () => { listed += 1; return []; } };
+  const svc = buildService({ text: 'ゲームしてた', features: [], store, mantleResponses: [replyText('いいね')] });
+  await svc.run();
+  assert.equal(listed, 0);
+});
+
+test('tool: add_schedule drops the matching unpressed suggestion', async () => {
+  const store = createFakeStore([
+    { itemId: 'fu_000009ee', kind: 'followup', title: 'テスト', date: '2026-11-12', time: '' },
+  ]);
+  const { change } = await runPlannerTool('add_schedule', { title: '数学のテスト', date: '2026-11-12' }, {
+    sub: 'u1', store, items: [...store.items], now: NOW,
+  });
+  assert.deepEqual(change.params, { removedIds: ['fu_000009ee'] });
+  assert.deepEqual(store.items.map((i) => i.kind), ['event']);
 });

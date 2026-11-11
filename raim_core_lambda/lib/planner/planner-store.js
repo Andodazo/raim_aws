@@ -15,7 +15,10 @@
 //   memo    普通のメモ（「駐輪場は3階」）。自動では消さない
 //   list    チェックできるリスト（「買うもの」）。チェックした項目は次の日に消す（planner-memo.js）
 //   weather その日の気温の控え（朝のまとめで「昨日より寒い」を言うため。itemId は wx_YYYY-MM-DD、3日で消える）
-//   ※ あとで聞くことは、あとから同じテーブルに足す
+//   followup あとで聞くこと（「予定に入れる？」ボタンが押されなかったもの。follow-up.js）。
+//           予定の一覧には出さない。予定の日の7日後に消える
+//
+// 予定とあとで聞くことは、終わったあと一度聞いたら askedAt を付ける（もう聞かない）。
 //
 // Edge Lambda 側にも同じテーブルを読み書きする planner-store.js がある
 // （一覧・手で直す・消す）。各 Lambda が独立したパッケージなので実装は分かれている。
@@ -245,6 +248,29 @@ function createPlannerStore({ docClient, tableName = TABLE_NAME, now = () => new
   }
 
   /**
+   * あとで聞くことを足す（「予定に入れる？」ボタンを出したもの）。
+   *
+   * @param {string} sub
+   * @param {{ title, date, time? }} candidate  findEventCandidate の結果
+   */
+  async function addFollowUp(sub, candidate) {
+    const timestamp = now().toISOString();
+    return putNew({
+      sub,
+      itemId: `fu_${randomUUID()}`,
+      kind: 'followup',
+      title: cleanText(candidate.title, MAX_TITLE_LENGTH),
+      date: candidate.date,
+      time: candidate.time || '',
+      importance: 'normal',
+      source: 'suggest',
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      expiresAt: expiresAtForEvent(candidate.date),
+    });
+  }
+
+  /**
    * 項目を一部だけ直す。無ければ null。
    *
    * 日付を直したら、消す日（expiresAt）も合わせて直す。
@@ -272,6 +298,8 @@ function createPlannerStore({ docClient, tableName = TABLE_NAME, now = () => new
     }
     if (changes.lines !== undefined) put('lines', cleanLines(changes.lines));
     if (changes.enriched !== undefined) put('enriched', Boolean(changes.enriched));
+    // 終わったあと聞いた（または本人が先に話した）時刻
+    if (changes.askedAt !== undefined) put('askedAt', String(changes.askedAt));
     // メモの文、リストの名前と項目（項目は全部入れ替える）
     if (changes.text !== undefined) put('text', cleanText(changes.text, MAX_MEMO_LENGTH));
     if (changes.listTitle !== undefined) put('title', cleanText(changes.listTitle, MAX_LIST_TITLE_LENGTH));
@@ -329,7 +357,9 @@ function createPlannerStore({ docClient, tableName = TABLE_NAME, now = () => new
     }));
   }
 
-  return { listItems, getItem, addEvent, addTimer, addMemo, addList, updateItem, deleteItem, saveWeather };
+  return {
+    listItems, getItem, addEvent, addTimer, addMemo, addList, addFollowUp, updateItem, deleteItem, saveWeather,
+  };
 }
 
 const defaultPlannerStore = createPlannerStore();
