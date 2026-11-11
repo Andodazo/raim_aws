@@ -6,6 +6,7 @@
 //
 // 「金曜10時に面接、入れといて」と頼まれたら、ライムが add_schedule を呼ぶ。
 // 「3分計って」なら set_timer（タイマーも同じ手帳に入れて、全部の端末で鳴らす）。
+// 「メモして」「買うものに牛乳足して」なら add_memo / add_to_list（メモ帳も同じ手帳）。
 //
 // 【駅アラームとの違い】
 // 駅アラームはアプリが動かすので、サーバーは「アプリにやって」と伝えるだけだった。
@@ -29,7 +30,26 @@ const {
   normalizeTime,
   formatDateLabel,
 } = require('../planner/planner-dates');
-const { findItemByShortId, activeTimers, jstClock } = require('../planner/planner-context');
+const {
+  findItemByShortId,
+  activeTimers,
+  jstClock,
+  memosOf,
+  listsOf,
+  shortIdOf,
+} = require('../planner/planner-context');
+const {
+  MAX_MEMO_LENGTH,
+  MAX_LIST_TITLE_LENGTH,
+  MAX_ENTRY_LENGTH,
+  MAX_ENTRIES_PER_LIST,
+  MAX_LISTS_PER_USER,
+  looksSecret,
+  findListByName,
+  matchEntries,
+  keyOf,
+  newEntryId,
+} = require('../planner/planner-memo');
 const {
   MAX_ITEMS_PER_USER,
   MAX_TITLE_LENGTH,
@@ -118,6 +138,97 @@ const PLANNER_TOOL_DEFINITIONS = Object.freeze([
       },
     },
   },
+  {
+    type: 'function',
+    name: 'add_memo',
+    description: 'ユーザーのメモを1つ残します（例: 駐輪場は3階）。「メモして」「控えといて」とはっきり頼まれたときだけ使ってください。買うものなど、チェックしたい項目の並びは add_to_list を使ってください。パスワードや暗証番号はメモしないでください。',
+    parameters: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: 'メモする内容。短く' },
+      },
+      required: ['text'],
+    },
+  },
+  {
+    type: 'function',
+    name: 'add_to_list',
+    description: 'チェックできるリスト（買うもの・持ち物など）に項目を足します。リストが無ければ作ります。「買うものに牛乳足して」のように頼まれたときに使ってください。',
+    parameters: {
+      type: 'object',
+      properties: {
+        list: { type: 'string', description: 'リストの名前（例: 買うもの、持ち物）。「リスト」の id でもよい' },
+        entries: {
+          type: 'array',
+          items: { type: 'string' },
+          description: '足す項目（例: ["牛乳", "卵"]）',
+        },
+      },
+      required: ['list', 'entries'],
+    },
+  },
+  {
+    type: 'function',
+    name: 'check_list_entries',
+    description: 'リストの項目にチェックを付けます。「牛乳買った」「レポート終わった」のように済んだと言われたら、聞き返さずに使ってください。チェックした項目は次の日に消えます。',
+    parameters: {
+      type: 'object',
+      properties: {
+        list: { type: 'string', description: 'リストの名前か id。分からなければ空' },
+        entries: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'チェックする項目（例: ["牛乳"]）',
+        },
+      },
+      required: ['entries'],
+    },
+  },
+  {
+    type: 'function',
+    name: 'remove_list_entries',
+    description: 'リストから項目を消します（「卵はもういらない」のように頼まれたとき）。',
+    parameters: {
+      type: 'object',
+      properties: {
+        list: { type: 'string', description: 'リストの名前か id。分からなければ空' },
+        entries: {
+          type: 'array',
+          items: { type: 'string' },
+          description: '消す項目',
+        },
+      },
+      required: ['entries'],
+    },
+  },
+  {
+    type: 'function',
+    name: 'show_memos',
+    description: 'メモやリストをカードで見せます。「メモ何あったっけ？」なら id を空に、「買うもの何だっけ？」ならそのリストの id を入れてください。',
+    parameters: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: '見せるメモかリストの id。メモ全部なら空' },
+      },
+    },
+  },
+  {
+    type: 'function',
+    name: 'delete_memo',
+    description: 'メモかリストを丸ごと消します。「〇〇、消していい？」と聞いて、ユーザーが「うん」などと答えたあとにだけ使ってください。',
+    parameters: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: '「メモ」か「リスト」の id' },
+      },
+      required: ['id'],
+    },
+  },
+]);
+
+const TIMER_TOOL_NAMES = Object.freeze(['set_timer', 'cancel_timer']);
+const MEMO_TOOL_NAMES = Object.freeze([
+  'add_memo', 'add_to_list', 'check_list_entries', 'remove_list_entries', 'show_memos', 'delete_memo',
 ]);
 
 const PLANNER_TOOL_NAMES = Object.freeze(PLANNER_TOOL_DEFINITIONS.map((tool) => tool.name));
@@ -208,6 +319,184 @@ async function runTimerTool(toolName, args, { sub, store, items, now }) {
   };
 }
 
+/** 声で言うのは新しい順に3件まで（安藤さんと決めた） */
+const SPOKEN_MEMOS = 3;
+
+function describeListForRaim(item) {
+  const entries = item.entries || [];
+  return {
+    id: shortIdOf(item.itemId),
+    list: item.title,
+    notYet: entries.filter((e) => !e.checked).map((e) => e.text),
+    checked: entries.filter((e) => e.checked).map((e) => e.text),
+  };
+}
+
+/** 引数の項目を、文字の並びにそろえる（"牛乳、卵" のような1つの文字も分ける） */
+function toEntryTexts(value) {
+  const raw = Array.isArray(value) ? value : [value];
+  return raw
+    .flatMap((v) => String(v ?? '').split(/[、,，]/))
+    .map((v) => v.replace(/\s+/g, ' ').trim().slice(0, MAX_ENTRY_LENGTH))
+    .filter(Boolean);
+}
+
+/** リストを id か名前で探す。指定が無ければ、リストが1つだけのときそれ */
+function pickList(lists, ref) {
+  const key = String(ref || '').trim();
+  if (!key) return lists.length === 1 ? lists[0] : null;
+  return findItemByShortId(lists, key) || findListByName(lists, key);
+}
+
+async function runMemoTool(toolName, args, { sub, store, items, userText, now }) {
+  const lists = listsOf(items);
+
+  if (toolName === 'add_memo') {
+    const text = String(args.text || '').replace(/\s+/g, ' ').trim().slice(0, MAX_MEMO_LENGTH);
+    if (!text) return failure(toolName, '何をメモするか分からなかった。聞く');
+    if (looksSecret(text) || looksSecret(userText)) {
+      return failure(toolName, 'パスワードや暗証番号のようなものなのでメモしていない。「それは自分で控えてね」と伝える');
+    }
+    if (items.length >= MAX_ITEMS_PER_USER) {
+      return failure(toolName, 'メモ帳がいっぱいで入れられなかった。古いメモを消してもらう');
+    }
+    const item = await store.addMemo(sub, { text, source: 'raim' });
+    console.log('[Planner] memo added');
+    return {
+      result: { ok: true, memo: { id: shortIdOf(item.itemId), text: item.text }, note: '何をメモしたか短く言う' },
+      change: { type: 'added', item },
+    };
+  }
+
+  if (toolName === 'add_to_list') {
+    const texts = toEntryTexts(args.entries);
+    if (texts.length === 0) return failure(toolName, '何を足すか分からなかった。聞く');
+    if (texts.some(looksSecret) || looksSecret(userText)) {
+      return failure(toolName, 'パスワードや暗証番号のようなものなので入れていない。「それは自分で控えてね」と伝える');
+    }
+    const name = String(args.list || '').replace(/\s+/g, ' ').trim().slice(0, MAX_LIST_TITLE_LENGTH);
+    const existing = pickList(lists, name);
+    if (!existing) {
+      if (!name) return failure(toolName, 'どのリストか分からなかった。何のリストか聞く');
+      if (lists.length >= MAX_LISTS_PER_USER || items.length >= MAX_ITEMS_PER_USER) {
+        return failure(toolName, 'リストが多すぎて作れなかった。いらないリストを消してもらう');
+      }
+      const item = await store.addList(sub, { title: name, entries: texts, source: 'raim' });
+      console.log(`[Planner] list created: entries=${item.entries.length}`);
+      return {
+        result: { ok: true, created: describeListForRaim(item), note: '何をどのリストに入れたか短く言う' },
+        change: { type: 'added', item, params: { addedEntryIds: item.entries.map((e) => e.id) } },
+      };
+    }
+
+    // 同じ項目がまだ残っていれば足さない。チェック済みなら、チェックを外して戻す
+    const entries = (existing.entries || []).map((e) => ({ ...e }));
+    const touched = [];
+    for (const text of texts) {
+      const same = entries.find((e) => keyOf(e.text) === keyOf(text));
+      if (same) {
+        if (same.checked) {
+          same.checked = false;
+          delete same.checkedAt;
+          touched.push(same.id);
+        }
+        continue;
+      }
+      if (entries.length >= MAX_ENTRIES_PER_LIST) break;
+      const entry = { id: newEntryId(), text, checked: false };
+      entries.push(entry);
+      touched.push(entry.id);
+    }
+    if (touched.length === 0) {
+      return { result: { ok: true, alreadyThere: describeListForRaim(existing), note: 'もう入っていたと短く言う' }, change: null };
+    }
+    const item = await store.updateItem(sub, existing.itemId, { entries });
+    if (!item) return failure(toolName, 'そのリストはもう無かった');
+    console.log(`[Planner] list entries added: count=${touched.length}`);
+    return {
+      result: { ok: true, updated: describeListForRaim(item), note: '何を足したか短く言う' },
+      change: { type: 'updated', item, params: { addedEntryIds: touched } },
+    };
+  }
+
+  if (toolName === 'check_list_entries' || toolName === 'remove_list_entries') {
+    const texts = toEntryTexts(args.entries);
+    if (texts.length === 0) return failure(toolName, 'どの項目か分からなかった。聞く');
+    // リストの指定が無ければ、項目が当たるリストを探す（1つに決まるときだけ）
+    let target = pickList(lists, args.list);
+    if (!target && !String(args.list || '').trim()) {
+      const hits = lists.filter((list) => matchEntries(list.entries || [], texts).length > 0);
+      if (hits.length === 1) [target] = hits;
+    }
+    if (!target) return failure(toolName, 'どのリストか分からなかった。どのリストか聞く');
+    const hits = new Set(matchEntries(
+      (target.entries || []).filter((e) => toolName === 'remove_list_entries' || !e.checked),
+      texts,
+    ).map((e) => e.id));
+    if (hits.size === 0) {
+      return failure(toolName, `「${target.title}」にその項目は無かった。そう伝える`);
+    }
+    const at = now.toISOString();
+    const entries = toolName === 'check_list_entries'
+      ? (target.entries || []).map((e) => (hits.has(e.id) ? { ...e, checked: true, checkedAt: at } : e))
+      : (target.entries || []).filter((e) => !hits.has(e.id));
+    const item = await store.updateItem(sub, target.itemId, { entries });
+    if (!item) return failure(toolName, 'そのリストはもう無かった');
+    console.log(`[Planner] list entries ${toolName === 'check_list_entries' ? 'checked' : 'removed'}: count=${hits.size}`);
+    return {
+      result: {
+        ok: true,
+        list: describeListForRaim(item),
+        note: toolName === 'check_list_entries' ? 'チェックしたと短く言う' : '消したと短く言う',
+      },
+      change: { type: 'updated', item },
+    };
+  }
+
+  if (toolName === 'show_memos') {
+    const memos = memosOf(items);
+    const ref = String(args.id || '').trim();
+    if (ref) {
+      const target = findItemByShortId([...memos, ...lists], ref) || findListByName(lists, ref);
+      if (!target) return failure(toolName, 'その id のメモは無かった');
+      return {
+        result: target.kind === 'list'
+          ? { ok: true, ...describeListForRaim(target), note: 'カードで見せている。まだの項目を短く言う' }
+          : { ok: true, memo: target.text, note: 'カードで見せている。短く言う' },
+        change: { type: 'show', items: [target] },
+      };
+    }
+    if (memos.length === 0 && lists.length === 0) {
+      return failure(toolName, 'メモはまだ1つも無い。そう伝える');
+    }
+    const spoken = memos.slice(0, SPOKEN_MEMOS).map((m) => m.text);
+    return {
+      result: {
+        ok: true,
+        newestMemos: spoken,
+        moreMemos: Math.max(0, memos.length - spoken.length),
+        lists: lists.map((l) => l.title),
+        note: 'カードで全部見せている。声で言うのは newestMemos だけ。moreMemos があれば「あと〇件あるよ」と言う',
+      },
+      change: { type: 'show', items: memos.length > 0 ? memos : lists },
+    };
+  }
+
+  // delete_memo
+  const target = findItemByShortId([...memosOf(items), ...lists], args.id);
+  if (!target) return failure(toolName, 'その id のメモは無かった。どれか聞く');
+  if (!DELETE_CONFIRM_WORDS.some((word) => String(userText || '').includes(word))) {
+    return failure(toolName, 'まだ消していない。先に「消していい？」と聞いて、ユーザーの答えを待つ');
+  }
+  const item = await store.deleteItem(sub, target.itemId);
+  if (!item) return failure(toolName, 'そのメモはもう無かった');
+  console.log(`[Planner] ${item.kind} deleted`);
+  return {
+    result: { ok: true, deleted: item.kind === 'list' ? `リスト「${item.title}」` : `メモ「${item.text}」` },
+    change: { type: 'deleted', item },
+  };
+}
+
 function describeForRaim(item) {
   return {
     id: item.itemId.replace(/^[a-z]+_/, '').slice(0, 6),
@@ -229,8 +518,11 @@ function describeForRaim(item) {
  *   result はライムに返す結果、change はアプリに知らせる変更
  */
 async function runPlannerTool(toolName, args = {}, { sub, store, items = [], userText = '', now = new Date() } = {}) {
-  if (toolName === 'set_timer' || toolName === 'cancel_timer') {
+  if (TIMER_TOOL_NAMES.includes(toolName)) {
     return runTimerTool(toolName, args || {}, { sub, store, items, now });
+  }
+  if (MEMO_TOOL_NAMES.includes(toolName)) {
+    return runMemoTool(toolName, args || {}, { sub, store, items, userText, now });
   }
   if (toolName === 'add_schedule') {
     const title = String(args.title || '').replace(/\s+/g, ' ').trim().slice(0, MAX_TITLE_LENGTH);

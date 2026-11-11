@@ -143,6 +143,19 @@ function createFakeStore(initial = []) {
       items.push(item);
       return item;
     },
+    async addMemo(sub, input) {
+      n += 1;
+      const item = { itemId: `mm_${String(n).padStart(6, '0')}cc`, kind: 'memo', text: input.text, createdAt: NOW.toISOString() };
+      items.push(item);
+      return item;
+    },
+    async addList(sub, input) {
+      n += 1;
+      const entries = input.entries.map((text, i) => ({ id: `e0000000${i}`, text, checked: false }));
+      const item = { itemId: `ls_${String(n).padStart(6, '0')}dd`, kind: 'list', title: input.title, entries, createdAt: NOW.toISOString() };
+      items.push(item);
+      return item;
+    },
     async updateItem(sub, itemId, changes) {
       const item = items.find((i) => i.itemId === itemId);
       if (!item) return null;
@@ -568,4 +581,148 @@ test('flow: set_timer saves, notifies the app, and writes no extra lines or sugg
   assert.equal(svc.actions[0].params.item.kind, 'timer');
   assert.equal(svc.helperCalls.length, 0);
   assert.ok(svc.mainCalls[0].tools.some((t) => t.name === 'set_timer'));
+});
+
+// ─────────────────────────────────────────────
+// メモ帳（機能2）
+// ─────────────────────────────────────────────
+
+const memoLib = require('../lib/planner/planner-memo');
+const plannerContext = require('../lib/planner/planner-context');
+const { createPlannerStore } = require('../lib/planner/planner-store');
+
+const shopping = () => ({
+  itemId: 'ls_aaaaaa00-0000', kind: 'list', title: '買うもの', createdAt: '2026-11-01T00:00:00Z',
+  entries: [
+    { id: 'e00000001', text: '牛乳', checked: false },
+    { id: 'e00000002', text: '卵', checked: false },
+  ],
+});
+
+test('memo: secrets are refused; checked entries drop off the next day (JST)', () => {
+  assert.equal(memoLib.looksSecret('Wi-Fi のパスワードは abc123'), true);
+  assert.equal(memoLib.looksSecret('暗証番号 1234'), true);
+  assert.equal(memoLib.looksSecret('4980 1234 5678 9012'), true);
+  assert.equal(memoLib.looksSecret('駐輪場は3階'), false);
+  assert.equal(memoLib.looksSecret('電話 090-1234-5678'), false);
+  const entries = [
+    { id: 'e1', text: 'a', checked: true, checkedAt: '2026-11-10T14:00:00Z' }, // 11/10 23:00 JST → 消す
+    { id: 'e2', text: 'b', checked: true, checkedAt: '2026-11-10T16:00:00Z' }, // 11/11 01:00 JST → 残す
+    { id: 'e3', text: 'c', checked: false },
+  ];
+  assert.deepEqual(memoLib.pruneCheckedEntries(entries, NOW).map((e) => e.id), ['e2', 'e3']);
+  assert.equal(memoLib.findListByName([shopping()], '買うものリスト').title, '買うもの');
+  assert.deepEqual(memoLib.matchEntries(shopping().entries, ['牛乳']).map((e) => e.id), ['e00000001']);
+});
+
+test('memo gate: memo words open it; list content opens it only with an action word', () => {
+  const items = [shopping()];
+  const open = (userText) => plannerContext.shouldOpenPlanner({ features: ['planner'], userText, items });
+  assert.equal(open('駐輪場は3階ってメモして'), true);
+  assert.equal(open('牛乳買った'), true);
+  assert.equal(open('牛乳おいしいよね'), false);
+  assert.equal(open('ゲームやった'), false);
+  assert.equal(open('おすすめの映画ある？'), false);
+  assert.equal(plannerContext.mayNeedPlanner('ゲームしてた'), false);
+  const context = buildPlannerContext({ items: [...items, { itemId: 'mm_bbbbbb00', kind: 'memo', text: '駐輪場は3階', createdAt: NOW.toISOString() }], now: NOW });
+  assert.match(context, /メモ帳/);
+  assert.match(context, /メモ「駐輪場は3階」（11\/11）/);
+  assert.match(context, /リスト「買うもの」: 牛乳、卵/);
+});
+
+test('add_memo saves; passwords are refused', async () => {
+  const store = createFakeStore();
+  const ok = await runPlannerTool('add_memo', { text: '駐輪場は3階' }, { sub: 'u', store, userText: '駐輪場は3階ってメモして', now: NOW });
+  assert.equal(ok.change.type, 'added');
+  assert.equal(store.items[0].kind, 'memo');
+  const secret = await runPlannerTool('add_memo', { text: 'Wi-Fi abc123' }, { sub: 'u', store, userText: 'Wi-Fiのパスワードabc123メモして', now: NOW });
+  assert.equal(secret.result.error, true);
+  assert.match(secret.result.message, /自分で控えて/);
+  assert.equal(store.items.length, 1);
+});
+
+test('add_to_list creates a list, adds new entries, revives checked ones, skips duplicates', async () => {
+  const store = createFakeStore();
+  const ctx = () => ({ sub: 'u', store, items: [...store.items], userText: '', now: NOW });
+  const created = await runPlannerTool('add_to_list', { list: '買うもの', entries: ['牛乳', '卵'] }, ctx());
+  assert.equal(created.change.type, 'added');
+  assert.equal(created.change.params.addedEntryIds.length, 2);
+  store.items[0].entries[0].checked = true;
+  const added = await runPlannerTool('add_to_list', { list: '買い物リスト', entries: ['牛乳、パン', '卵'] }, ctx());
+  assert.equal(added.change.type, 'updated');
+  assert.equal(added.change.params.addedEntryIds.length, 2); // 牛乳を戻して、パンを足す
+  assert.deepEqual(store.items[0].entries.map((e) => [e.text, e.checked]), [['牛乳', false], ['卵', false], ['パン', false]]);
+  const same = await runPlannerTool('add_to_list', { list: '買うもの', entries: ['卵'] }, ctx());
+  assert.equal(same.change, null);
+  assert.ok(same.result.alreadyThere);
+});
+
+test('check_list_entries checks without asking; remove_list_entries removes; finds the list from the entry', async () => {
+  const store = createFakeStore([shopping()]);
+  const ctx = () => ({ sub: 'u', store, items: [...store.items], userText: '牛乳買った', now: NOW });
+  const checked = await runPlannerTool('check_list_entries', { entries: ['牛乳'] }, ctx());
+  assert.equal(checked.change.type, 'updated');
+  assert.equal(store.items[0].entries[0].checked, true);
+  assert.equal(store.items[0].entries[0].checkedAt, NOW.toISOString());
+  const none = await runPlannerTool('check_list_entries', { entries: ['りんご'] }, ctx());
+  assert.equal(none.result.error, true);
+  await runPlannerTool('remove_list_entries', { list: '買うもの', entries: ['卵'] }, ctx());
+  assert.deepEqual(store.items[0].entries.map((e) => e.text), ['牛乳']);
+});
+
+test('show_memos speaks 3 newest and shows all in a card; delete_memo needs agreement', async () => {
+  const memos = [1, 2, 3, 4, 5].map((i) => ({
+    itemId: `mm_00000${i}aa-0000`, kind: 'memo', text: `メモ${i}`, createdAt: `2026-11-0${i}T00:00:00Z`,
+  }));
+  const store = createFakeStore([...memos, shopping()]);
+  const ctx = (userText = '') => ({ sub: 'u', store, items: [...store.items], userText, now: NOW });
+  const all = await runPlannerTool('show_memos', {}, ctx());
+  assert.deepEqual(all.result.newestMemos, ['メモ5', 'メモ4', 'メモ3']);
+  assert.equal(all.result.moreMemos, 2);
+  assert.equal(all.change.type, 'show');
+  assert.equal(all.change.items.length, 5);
+  const list = await runPlannerTool('show_memos', { id: 'aaaaaa' }, ctx());
+  assert.deepEqual(list.result.notYet, ['牛乳', '卵']);
+  assert.equal(list.change.items[0].kind, 'list');
+  const refused = await runPlannerTool('delete_memo', { id: '000001' }, ctx('メモ1ってなんだっけ'));
+  assert.equal(refused.result.error, true);
+  const ok = await runPlannerTool('delete_memo', { id: '000001' }, ctx('うん、消して'));
+  assert.equal(ok.change.type, 'deleted');
+});
+
+test('flow: show_memos sends planner.show with the items', async () => {
+  const store = createFakeStore([shopping()]);
+  const svc = buildService({
+    text: '買うもの何だっけ',
+    store,
+    mantleResponses: [
+      { responseId: 'r-m', rawText: '', toolCalls: [{ name: 'show_memos', callId: 'c1', arguments: JSON.stringify({ id: 'aaaaaa' }) }] },
+      replyText('牛乳と卵だよ'),
+    ],
+  });
+  await svc.run();
+  assert.deepEqual(svc.actions.map((a) => a.action), ['planner.show']);
+  assert.equal(svc.actions[0].params.items[0].title, '買うもの');
+});
+
+test('store: memos have no expiry; list updates drop old checked entries', async () => {
+  const sent = [];
+  const docClient = {
+    async send(command) {
+      sent.push(command);
+      if (command.constructor.name === 'UpdateCommand') return { Attributes: { sub: 'u', itemId: 'ls_1', kind: 'list', entries: command.input.ExpressionAttributeValues[':entries'] } };
+      return {};
+    },
+  };
+  const store = createPlannerStore({ docClient, now: () => NOW });
+  const memo = await store.addMemo('u', { text: '駐輪場は3階' });
+  assert.equal(memo.kind, 'memo');
+  assert.equal(sent[0].input.Item.expiresAt, undefined);
+  const list = await store.addList('u', { title: '買うもの', entries: ['牛乳'] });
+  assert.match(list.entries[0].id, /^e[0-9a-f]{8}$/);
+  const updated = await store.updateItem('u', 'ls_1', { entries: [
+    { id: 'e00000001', text: '古い', checked: true, checkedAt: '2026-11-09T00:00:00Z' },
+    { id: 'e00000002', text: '今日', checked: true, checkedAt: NOW.toISOString() },
+  ] });
+  assert.deepEqual(updated.entries.map((e) => e.text), ['今日']);
 });

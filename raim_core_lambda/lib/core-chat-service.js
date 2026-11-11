@@ -99,10 +99,9 @@ const {
 const { defaultPlannerStore } = require('./planner/planner-store');
 const {
   PLANNER_FEATURE,
-  mentionsPlanner,
   mentionsEventDate,
   mentionsTimer,
-  previousTurnUsedPlanner,
+  mayNeedPlanner,
   shouldOpenPlanner,
   buildPlannerContext,
 } = require('./planner/planner-context');
@@ -552,7 +551,7 @@ function createCoreChatService(dependencyOverrides = {}) {
     const plannerHistory = threadContext.thread?.messages || [];
     if (
       hasPlannerFeature && toolsEnabled &&
-      (mentionsPlanner(input.text, { hasItems: true }) || previousTurnUsedPlanner(plannerHistory))
+      mayNeedPlanner(input.text, plannerHistory)
     ) {
       try {
         plannerItems = await dependencies.plannerStore.listItems(input.sub);
@@ -795,8 +794,14 @@ function createCoreChatService(dependencyOverrides = {}) {
           };
         });
 
-        if (change) {
-          await notifyClientAction({ action: `planner.${change.type}`, params: { item: change.item } });
+        if (change?.type === 'show') {
+          // 「メモ何あったっけ？」: 返事の下にメモやリストのカードを出す（手帳は変えない）
+          await notifyClientAction({ action: 'planner.show', params: { items: change.items } });
+        } else if (change) {
+          await notifyClientAction({
+            action: `planner.${change.type}`,
+            params: { item: change.item, ...(change.params || {}) },
+          });
           if (change.type === 'added') plannerAddedThisTurn = true;
           // 名前か日時が変わったら、知らせる文と大事さを作り直す
           // タイマーは知らせる文を作らない（鳴ったときの文は決まり文句）

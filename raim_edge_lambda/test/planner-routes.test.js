@@ -36,6 +36,10 @@ function fakePlannerDynamo() {
       if (name === 'QueryCommand') {
         return { Items: [...rows.values()].filter((r) => r.sub === input.ExpressionAttributeValues[':sub']) };
       }
+      if (name === 'GetCommand') {
+        const row = rows.get(input.Key.itemId);
+        return { Item: row ? { ...row } : undefined };
+      }
       if (name === 'PutCommand') {
         rows.set(input.Item.itemId, { ...input.Item });
         return {};
@@ -197,4 +201,63 @@ test('response queue: a planner client_action from Raim is also announced to oth
   });
   assert.equal(posted[0].payload.type, 'client_action');
   assert.deepEqual(posted[1], { connectionId: 'conn-2', payload: { type: 'planner.changed' } });
+});
+
+// ─────────────────────────────────────────────
+// メモ帳（機能2）
+// ─────────────────────────────────────────────
+
+test('planner.add makes a memo or a list without asking Core for lines', async () => {
+  const { handler, posted, enriched, db } = setup();
+  await handler(event({ type: 'planner.add', requestId: 'm1', item: { kind: 'memo', text: '駐輪場は3階' } }));
+  await handler(event({ type: 'planner.add', requestId: 'm2', item: { kind: 'list', title: '買うもの', entries: ['牛乳', { text: '卵' }] } }));
+  const rows = [...db.rows.values()];
+  assert.equal(rows.find((r) => r.kind === 'memo').text, '駐輪場は3階');
+  assert.equal(rows.find((r) => r.kind === 'memo').expiresAt, undefined);
+  const list = rows.find((r) => r.kind === 'list');
+  assert.deepEqual(list.entries.map((e) => e.text), ['牛乳', '卵']);
+  assert.match(list.entries[0].id, /^e[0-9a-f]{8}$/);
+  assert.equal(enriched.length, 0);
+  // 足した端末に一覧、もう1台に planner.changed
+  assert.ok(posted.some((p) => p.connectionId === 'conn-2' && p.payload.type === 'planner.changed'));
+  const bad = await handler(event({ type: 'planner.add', item: { kind: 'memo', text: ' ' } }));
+  assert.equal(bad.statusCode, 400);
+});
+
+test('planner.update edits memo text and list entries; a new check gets a time; timers cannot be changed', async () => {
+  const { handler, db } = setup();
+  await handler(event({ type: 'planner.add', item: { kind: 'list', title: '買うもの', entries: ['牛乳', '卵'] } }));
+  const list = [...db.rows.values()].find((r) => r.kind === 'list');
+  const [milk, egg] = list.entries;
+  await handler(event({ type: 'planner.update', itemId: list.itemId, changes: {
+    entries: [{ ...milk, checked: true }, egg, { text: 'パン' }],
+  } }));
+  const after = db.rows.get(list.itemId);
+  assert.equal(after.entries[0].checked, true);
+  assert.equal(after.entries[0].checkedAt, NOW.toISOString());
+  assert.equal(after.entries[2].text, 'パン');
+
+  await handler(event({ type: 'planner.add', item: { kind: 'memo', text: 'a' } }));
+  const memo = [...db.rows.values()].find((r) => r.kind === 'memo');
+  await handler(event({ type: 'planner.update', itemId: memo.itemId, changes: { text: '駐輪場は4階' } }));
+  assert.equal(db.rows.get(memo.itemId).text, '駐輪場は4階');
+
+  db.rows.set('tm_1', { sub: 'user-1', itemId: 'tm_1', kind: 'timer', title: 'タイマー' });
+  const timer = await handler(event({ type: 'planner.update', itemId: 'tm_1', changes: { title: 'x' } }));
+  assert.equal(timer.statusCode, 400);
+});
+
+test('list: entries checked before today (JST) are hidden and dropped on the next write', async () => {
+  const { handler, posted, db } = setup();
+  db.rows.set('ls_1', {
+    sub: 'user-1', itemId: 'ls_1', kind: 'list', title: '買うもの',
+    entries: [
+      { id: 'e00000001', text: '昨日の', checked: true, checkedAt: '2026-11-10T10:00:00Z' },
+      { id: 'e00000002', text: '今日の', checked: true, checkedAt: '2026-11-11T01:00:00Z' },
+      { id: 'e00000003', text: 'まだ', checked: false },
+    ],
+  });
+  await handler(event({ type: 'planner.list', requestId: 'l1' }));
+  const listed = posted.find((p) => p.payload.type === 'planner').payload.items.find((i) => i.itemId === 'ls_1');
+  assert.deepEqual(listed.entries.map((e) => e.text), ['今日の', 'まだ']);
 });

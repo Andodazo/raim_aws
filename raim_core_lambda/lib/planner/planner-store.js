@@ -11,8 +11,10 @@
 //
 // 【項目の種類（kind）】
 //   event   予定（「金曜10時に面接」）
-//   timer   タイマー（「3分計って」）。endsAt に鳴る時刻、鳴って10分たつと一覧から消える
-//   ※ メモ・あとで聞くことは、あとから同じテーブルに足す
+//   timer   タイマー（「3分計って」）。endsAt に鳴る時刻、鳴って3時間たつと一覧から消える
+//   memo    普通のメモ（「駐輪場は3階」）。自動では消さない
+//   list    チェックできるリスト（「買うもの」）。チェックした項目は次の日に消す（planner-memo.js）
+//   ※ あとで聞くことは、あとから同じテーブルに足す
 //
 // Edge Lambda 側にも同じテーブルを読み書きする planner-store.js がある
 // （一覧・手で直す・消す）。各 Lambda が独立したパッケージなので実装は分かれている。
@@ -32,6 +34,12 @@ const {
 } = require('@aws-sdk/lib-dynamodb');
 const { randomUUID } = require('node:crypto');
 const { expiresAtForEvent } = require('./planner-dates');
+const {
+  MAX_MEMO_LENGTH,
+  MAX_LIST_TITLE_LENGTH,
+  normalizeEntries,
+  pruneCheckedEntries,
+} = require('./planner-memo');
 
 const TABLE_NAME = process.env.PLANNER_TABLE_NAME || 'RAiM-Planner-dev';
 const REGION = process.env.AWS_REGION || 'ap-northeast-1';
@@ -84,6 +92,22 @@ function toPublicItem(item) {
 function createPlannerStore({ docClient, tableName = TABLE_NAME, now = () => new Date() } = {}) {
   const client = () => docClient || defaultDocClient();
 
+  /** リストは、前の日までにチェックした項目を外して返す */
+  const visible = (item) => {
+    const out = toPublicItem(item);
+    if (out?.kind === 'list') out.entries = pruneCheckedEntries(out.entries, now());
+    return out;
+  };
+
+  async function putNew(item) {
+    await client().send(new PutCommand({
+      TableName: tableName,
+      Item: item,
+      ConditionExpression: 'attribute_not_exists(itemId)',
+    }));
+    return visible(item);
+  }
+
   /**
    * その人の項目を全部返す（予定・あとでほかの種類も）。古いもの（TTL 待ち）も含む。
    */
@@ -101,7 +125,7 @@ function createPlannerStore({ docClient, tableName = TABLE_NAME, now = () => new
       items.push(...(result.Items || []));
       startKey = result.LastEvaluatedKey;
     } while (startKey && items.length < MAX_ITEMS_PER_USER * 2);
-    return items.map(toPublicItem);
+    return items.map(visible);
   }
 
   /**
@@ -112,7 +136,7 @@ function createPlannerStore({ docClient, tableName = TABLE_NAME, now = () => new
       TableName: tableName,
       Key: { sub, itemId },
     }));
-    return toPublicItem(result.Item);
+    return visible(result.Item);
   }
 
   /**
@@ -181,6 +205,45 @@ function createPlannerStore({ docClient, tableName = TABLE_NAME, now = () => new
   }
 
   /**
+   * 普通のメモを足す。
+   *
+   * @param {string} sub
+   * @param {{ text, source? }} input  検証済みのもの
+   */
+  async function addMemo(sub, input) {
+    const timestamp = now().toISOString();
+    return putNew({
+      sub,
+      itemId: `mm_${randomUUID()}`,
+      kind: 'memo',
+      text: cleanText(input.text, MAX_MEMO_LENGTH),
+      source: ['raim', 'manual'].includes(input.source) ? input.source : 'raim',
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
+  }
+
+  /**
+   * リストを作る。
+   *
+   * @param {string} sub
+   * @param {{ title, entries?: (string|object)[], source? }} input
+   */
+  async function addList(sub, input) {
+    const timestamp = now().toISOString();
+    return putNew({
+      sub,
+      itemId: `ls_${randomUUID()}`,
+      kind: 'list',
+      title: cleanText(input.title, MAX_LIST_TITLE_LENGTH),
+      entries: normalizeEntries(input.entries),
+      source: ['raim', 'manual'].includes(input.source) ? input.source : 'raim',
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
+  }
+
+  /**
    * 項目を一部だけ直す。無ければ null。
    *
    * 日付を直したら、消す日（expiresAt）も合わせて直す。
@@ -208,6 +271,12 @@ function createPlannerStore({ docClient, tableName = TABLE_NAME, now = () => new
     }
     if (changes.lines !== undefined) put('lines', cleanLines(changes.lines));
     if (changes.enriched !== undefined) put('enriched', Boolean(changes.enriched));
+    // メモの文、リストの名前と項目（項目は全部入れ替える）
+    if (changes.text !== undefined) put('text', cleanText(changes.text, MAX_MEMO_LENGTH));
+    if (changes.listTitle !== undefined) put('title', cleanText(changes.listTitle, MAX_LIST_TITLE_LENGTH));
+    if (changes.entries !== undefined) {
+      put('entries', normalizeEntries(pruneCheckedEntries(changes.entries, now())));
+    }
 
     try {
       const result = await client().send(new UpdateCommand({
@@ -219,7 +288,7 @@ function createPlannerStore({ docClient, tableName = TABLE_NAME, now = () => new
         ExpressionAttributeValues: values,
         ReturnValues: 'ALL_NEW',
       }));
-      return toPublicItem(result.Attributes);
+      return visible(result.Attributes);
     } catch (error) {
       if (error?.name === 'ConditionalCheckFailedException') return null;
       throw error;
@@ -238,7 +307,7 @@ function createPlannerStore({ docClient, tableName = TABLE_NAME, now = () => new
     return toPublicItem(result.Attributes);
   }
 
-  return { listItems, getItem, addEvent, addTimer, updateItem, deleteItem };
+  return { listItems, getItem, addEvent, addTimer, addMemo, addList, updateItem, deleteItem };
 }
 
 const defaultPlannerStore = createPlannerStore();

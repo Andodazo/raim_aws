@@ -363,14 +363,22 @@ function createWebSocketHandler({
     try {
       if (normalized.action === 'planner.add') {
         const current = await store.listItems(sub);
-        const item = await store.addEvent(sub, { ...(raw.item || {}), source: raw.source }, {
-          count: current.filter((i) => i.kind === 'event').length,
-        });
-        changed = { type: 'added', item, enrich: true };
-        console.log(`[Planner] added by hand: source=${item.source}`);
+        const kind = raw.item?.kind;
+        if (kind === 'memo' || kind === 'list') {
+          // メモ帳（知らせる文は要らない）
+          const item = await store.addMemoOrList(sub, raw.item, { items: current });
+          changed = { type: 'added', item, enrich: false };
+          console.log(`[Planner] ${item.kind} added by hand`);
+        } else {
+          const item = await store.addEvent(sub, { ...(raw.item || {}), source: raw.source }, {
+            count: current.filter((i) => i.kind === 'event').length,
+          });
+          changed = { type: 'added', item, enrich: true };
+          console.log(`[Planner] added by hand: source=${item.source}`);
+        }
       } else if (normalized.action === 'planner.update') {
         if (!itemId) throw new PlannerInputError('itemId is required');
-        const { item, needsEnrich } = await store.updateEvent(sub, itemId, raw.changes || {});
+        const { item, needsEnrich } = await store.updateItem(sub, itemId, raw.changes || {});
         if (!item) {
           return createHttpResponse(404, { code: 'NOT_FOUND', message: 'Planner item not found' });
         }
