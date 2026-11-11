@@ -243,9 +243,58 @@ async function forgetMemory(sub, { items = [], all = false } = {}, deps = {}) {
   throw new Error('userMemory kept changing while forgetting');
 }
 
+// ==============================================================================
+// その人がつないでいる端末（接続）の一覧
+// ==============================================================================
+//
+// 予定を足したり消したりしたとき、同じ人がつないでいるほかの端末（スマホと PC）にも
+// すぐ知らせるために使う。接続テーブルは connectionId がキーで、人から接続を
+// 探せないので、UserSession に接続 ID の集合（connectionIds）を持たせる。
+// 切れたのに残った ID は、送ったときに gone になったら消す。
+
+/** 1人が持てる接続の数。これを超えたら古いものは送るときに gone で消える想定 */
+const MAX_CONNECTIONS = 10;
+
+async function addConnection(sub, connectionId, deps = {}) {
+  if (!sub || !connectionId) return;
+  const client = deps.docClient || getDocClient();
+  await client.send(new UpdateCommand({
+    TableName: deps.tableName || TABLE_NAME,
+    Key: { sub },
+    UpdateExpression: 'ADD connectionIds :ids',
+    ExpressionAttributeValues: { ':ids': new Set([connectionId]) },
+  }));
+}
+
+async function removeConnection(sub, connectionId, deps = {}) {
+  if (!sub || !connectionId) return;
+  const client = deps.docClient || getDocClient();
+  await client.send(new UpdateCommand({
+    TableName: deps.tableName || TABLE_NAME,
+    Key: { sub },
+    UpdateExpression: 'DELETE connectionIds :ids',
+    ExpressionAttributeValues: { ':ids': new Set([connectionId]) },
+  }));
+}
+
+async function listConnections(sub, deps = {}) {
+  if (!sub) return [];
+  const client = deps.docClient || getDocClient();
+  const result = await client.send(new GetCommand({
+    TableName: deps.tableName || TABLE_NAME,
+    Key: { sub },
+    ProjectionExpression: 'connectionIds',
+  }));
+  const ids = result?.Item?.connectionIds;
+  return Array.from(ids instanceof Set ? ids : (Array.isArray(ids) ? ids : [])).slice(0, MAX_CONNECTIONS * 2);
+}
+
 module.exports = {
   TABLE_NAME,
   MAX_FORGOTTEN,
+  addConnection,
+  removeConnection,
+  listConnections,
   clearMemoryForDeletion,
   parseMemory,
   formatMemory,

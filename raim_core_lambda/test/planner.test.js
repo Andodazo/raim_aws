@@ -342,3 +342,51 @@ test('flow: apps without the planner feature never see planner tools', async () 
   assert.equal(svc.helperCalls.length, 0);
   assert.equal(svc.mainCalls[0].tools.some((t) => t.name === 'add_schedule'), false);
 });
+
+// ─────────────────────────────────────────────
+// 手で足した予定の仕上げ
+// ─────────────────────────────────────────────
+
+const { parsePlannerEnrichMessage, enrichPlannerItem } = require('../lib/planner/planner-enrich');
+const { createSqsCoreHandler } = require('../lib/sqs-core-handler');
+
+test('enrich: parses only planner.enrich messages', () => {
+  assert.equal(parsePlannerEnrichMessage('{"type":"chat.request"}'), null);
+  assert.equal(parsePlannerEnrichMessage('壊れた'), null);
+  assert.deepEqual(
+    parsePlannerEnrichMessage('{"type":"planner.enrich","sub":"u","itemId":"ev_1","connectionId":"c","requestId":"r"}'),
+    { sub: 'u', itemId: 'ev_1', connectionId: 'c', requestId: 'r' }
+  );
+});
+
+test('enrich: writes lines once and notifies the app', async () => {
+  const store = createFakeStore([{ itemId: 'ev_1', kind: 'event', title: '歯医者', date: '2026-11-14', time: '', enriched: false }]);
+  store.getItem = async (sub, id) => store.items.find((i) => i.itemId === id) || null;
+  const notified = [];
+  const deps = {
+    store,
+    writeEventExtras: async () => ({ lines: { eve: 'a', before: 'b', morning: 'c' }, importance: 'normal', fromLlm: true }),
+    createResponse: null,
+    notify: async (a) => notified.push(a),
+  };
+  assert.equal(await enrichPlannerItem({ sub: 'u', itemId: 'ev_1' }, deps), true);
+  assert.equal(notified[0].action, 'planner.updated');
+  // 2回目は作り直さない
+  assert.equal(await enrichPlannerItem({ sub: 'u', itemId: 'ev_1' }, deps), false);
+});
+
+test('sqs: planner.enrich messages skip the chat flow', async () => {
+  let chats = 0;
+  const jobs = [];
+  const handler = createSqsCoreHandler({
+    handleCoreChat: async () => { chats += 1; return { ok: true }; },
+    enrichPlannerItem: async (job) => { jobs.push(job); return true; },
+    createResponseQueuePublisher: () => ({ clientAction: async () => {} }),
+  });
+  const result = await handler({
+    Records: [{ eventSource: 'aws:sqs', messageId: 'm1', body: JSON.stringify({ type: 'planner.enrich', sub: 'u', itemId: 'ev_1', connectionId: 'c1' }) }],
+  });
+  assert.deepEqual(result.batchItemFailures, []);
+  assert.equal(chats, 0);
+  assert.equal(jobs[0].itemId, 'ev_1');
+});
