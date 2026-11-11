@@ -374,7 +374,18 @@ function createWebSocketHandler({
             count: current.filter((i) => i.kind === 'event').length,
           });
           changed = { type: 'added', item, enrich: true };
-          console.log(`[Planner] added by hand: source=${item.source}`);
+          // 「予定に入れる？」で入れたら、ボタンを出したときに持った「あとで聞くこと」は要らない
+          // （終わったあとは予定のほうで聞く）
+          const followUpId = String(raw.followUpId || '');
+          let droppedFollowUp = false;
+          if (/^fu_[0-9a-f-]{36}$/.test(followUpId)) {
+            try {
+              droppedFollowUp = Boolean(await store.deleteItem(sub, followUpId));
+            } catch (error) {
+              console.warn(`[Planner] follow-up delete failed (non-fatal): ${error.message}`);
+            }
+          }
+          console.log(`[Planner] added by hand: source=${item.source} droppedFollowUp=${droppedFollowUp}`);
         }
       } else if (normalized.action === 'planner.update') {
         if (!itemId) throw new PlannerInputError('itemId is required');

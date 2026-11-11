@@ -50,6 +50,7 @@ const {
   keyOf,
   newEntryId,
 } = require('../planner/planner-memo');
+const { sameThing } = require('../planner/follow-up');
 const {
   MAX_ITEMS_PER_USER,
   MAX_TITLE_LENGTH,
@@ -547,13 +548,23 @@ async function runPlannerTool(toolName, args = {}, { sub, store, items = [], use
       source: 'raim',
     });
     console.log(`[Planner] added: hasTime=${Boolean(time)}`);
+    // 「予定に入れる？」で持っていた同じこと（あとで聞くこと）は、予定のほうで聞くので消す
+    const removedIds = [];
+    for (const followUp of items.filter((other) => other?.kind === 'followup' && sameThing(other, item))) {
+      try {
+        await store.deleteItem(sub, followUp.itemId);
+        removedIds.push(followUp.itemId);
+      } catch (error) {
+        console.warn(`[FollowUp] remove failed (non-fatal): ${error.message}`);
+      }
+    }
     return {
       result: {
         ok: true,
         added: describeForRaim(item),
         note: 'アプリが前の日の夜と1時間前（時間が無ければ当日の朝）に知らせる。何をいつ入れたか短く言う',
       },
-      change: { type: 'added', item },
+      change: { type: 'added', item, ...(removedIds.length > 0 ? { params: { removedIds } } : {}) },
     };
   }
 

@@ -261,3 +261,28 @@ test('list: entries checked before today (JST) are hidden and dropped on the nex
   const listed = posted.find((p) => p.payload.type === 'planner').payload.items.find((i) => i.itemId === 'ls_1');
   assert.deepEqual(listed.entries.map((e) => e.text), ['今日の', 'まだ']);
 });
+
+test('planner.add from the suggestion button drops the kept follow-up; follow-ups cannot be edited', async () => {
+  const { handler, posted, db } = setup({ connections: ['conn-1'] });
+  const followUpId = 'fu_0b6f5b2e-3c4d-4e5f-8a9b-0c1d2e3f4a5b';
+  db.rows.set(followUpId, {
+    sub: 'user-1', itemId: followUpId, kind: 'followup', title: 'テスト', date: '2026-11-12', time: '',
+  });
+  // 手では直せない
+  const edit = await handler(event({ type: 'planner.update', itemId: followUpId, changes: { title: 'x' } }));
+  assert.equal(edit.statusCode, 400);
+  posted.length = 0;
+
+  await handler(event({
+    type: 'planner.add', source: 'suggest', followUpId, item: { title: 'テスト', date: '2026-11-12' },
+  }));
+  const reply = posted.find((p) => p.payload.type === 'planner').payload;
+  assert.deepEqual(reply.items.map((i) => i.kind), ['event']);
+  assert.equal(reply.items[0].source, 'suggest');
+  assert.equal(db.rows.has(followUpId), false);
+
+  // ほかの形の id は消さない
+  db.rows.set('ev_keep', { sub: 'user-1', itemId: 'ev_keep', kind: 'event', title: '歯医者', date: '2026-11-14', time: '' });
+  await handler(event({ type: 'planner.add', followUpId: 'ev_keep', item: { title: '散歩', date: '2026-11-14' } }));
+  assert.equal(db.rows.has('ev_keep'), true);
+});

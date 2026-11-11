@@ -139,7 +139,7 @@ const clone = (value) => (value == null ? value : JSON.parse(JSON.stringify(valu
  * 1つの会話ぶんの、メモリの中だけの保存先。
  * Core が DynamoDB に読み書きする部分をここに置き換える。
  */
-function createMemoryStore(core, { sub, userMemory = '' }) {
+function createMemoryStore(core, { sub, userMemory = '', planner = [] }) {
   const session = {
     sub,
     activeThreadId: '',
@@ -147,6 +147,7 @@ function createMemoryStore(core, { sub, userMemory = '' }) {
     userMemoryUpdatedAt: userMemory ? new Date().toISOString() : '',
   };
   let thread = null;
+  const plannerItems = buildPlannerItems(planner);
 
   return {
     getThreadSnapshot: () => clone(thread),
@@ -204,12 +205,71 @@ function createMemoryStore(core, { sub, userMemory = '' }) {
       shouldSummarize: () => ({ shouldSummarize: false, reason: null }),
       dispatchSummarization: async () => true,
 
+      // 予定の手帳もメモリの中だけ（台本の planner。あとで聞く・朝のまとめを見る）
+      plannerStore: createMemoryPlanner(plannerItems),
+      briefWeather: async () => [],
+
       // 口調を見るテストなので、検索・天気は使わない
       isToolUseEnabled: async () => false,
       resolveImages: async () => [],
       onToolCallStart: async () => {},
       onClientAction: async () => {},
     },
+  };
+}
+
+/** 日本時間の今日（YYYY-MM-DD）から days 日ずらした日付 */
+function jstDate(days = 0) {
+  const shifted = new Date(Date.now() + 9 * 3600000 + days * 86400000);
+  return shifted.toISOString().slice(0, 10);
+}
+
+/** 日本時間で今から hours 時間後の日付と時刻 */
+function jstDateTime(hours) {
+  const shifted = new Date(Date.now() + 9 * 3600000 + hours * 3600000);
+  return { date: shifted.toISOString().slice(0, 10), time: shifted.toISOString().slice(11, 16) };
+}
+
+/**
+ * 台本の planner（{ title, daysAgo?, hoursFromNow?, time?, importance?, kind? }）を、手帳の項目にする。
+ * daysAgo: 1 は昨日、hoursFromNow: 3 は今から3時間後（今日のうちの予定に使う）
+ */
+function buildPlannerItems(planner = []) {
+  return (Array.isArray(planner) ? planner : []).map((raw, index) => {
+    const when = raw.hoursFromNow !== undefined
+      ? jstDateTime(Number(raw.hoursFromNow))
+      : { date: jstDate(-Number(raw.daysAgo || 0)), time: raw.time || '' };
+    return {
+      itemId: `${raw.kind === 'followup' ? 'fu' : 'ev'}_convo-${index}`,
+      kind: raw.kind || 'event',
+      title: raw.title,
+      date: when.date,
+      time: when.time,
+      note: raw.note || '',
+      importance: raw.importance || 'normal',
+      lines: {},
+      createdAt: new Date().toISOString(),
+    };
+  });
+}
+
+function createMemoryPlanner(items) {
+  return {
+    listItems: async () => clone(items),
+    getItem: async (_sub, itemId) => clone(items.find((i) => i.itemId === itemId) || null),
+    updateItem: async (_sub, itemId, changes) => {
+      const item = items.find((i) => i.itemId === itemId);
+      if (!item) return null;
+      Object.assign(item, changes);
+      return clone(item);
+    },
+    addFollowUp: async (_sub, candidate) => {
+      const item = { itemId: `fu_convo-${items.length}`, kind: 'followup', importance: 'normal', ...candidate };
+      items.push(item);
+      return clone(item);
+    },
+    deleteItem: async () => null,
+    saveWeather: async () => {},
   };
 }
 
@@ -241,7 +301,9 @@ function createFakeDependencies() {
 
 async function runScenario({ core, scenario, runIndex, fake }) {
   const sub = `convo-${scenario.id}-${runIndex}-${Math.random().toString(36).slice(2, 8)}`;
-  const store = createMemoryStore(core, { sub, userMemory: scenario.memory || '' });
+  const store = createMemoryStore(core, { sub, userMemory: scenario.memory || '', planner: scenario.planner || [] });
+  // 手帳のある台本は、手帳を持つアプリとして送る（会話の途中で「そういえば」を聞くのはそのときだけ）
+  const features = scenario.planner ? ['planner'] : [];
   const handle = core.createCoreChatService({
     ...store.dependencies,
     ...(fake ? createFakeDependencies() : {}),
@@ -265,8 +327,8 @@ async function runScenario({ core, scenario, runIndex, fake }) {
     try {
       const response = await handle(
         step.greeting
-          ? { sub, requestId: `${sub}-${index}`, greeting: true }
-          : { sub, requestId: `${sub}-${index}`, text: step.say },
+          ? { sub, requestId: `${sub}-${index}`, greeting: true, brief: scenario.brief === true, features }
+          : { sub, requestId: `${sub}-${index}`, text: step.say, features },
         { onSceneSelected: async (scene) => { sceneId = scene?.id || ''; } }
       );
       if (response?.type === 'error') {
