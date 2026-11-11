@@ -136,7 +136,7 @@ function normalizeThreadId(value) {
  * 機能を持たないクライアント（Windows 版など）にツールを見せると、
  * ライムが「起こすね」と言ったのに何も起きない状態になるため。
  */
-const KNOWN_FEATURES = Object.freeze(['station_alarm']);
+const KNOWN_FEATURES = Object.freeze(['station_alarm', 'planner']);
 
 function normalizeFeatures(value) {
   if (!Array.isArray(value)) {

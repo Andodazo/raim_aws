@@ -294,7 +294,7 @@ function normalizeLocation(value) {
  * 知っている名前だけを通す。Edge でも同じ絞り込みをしているが、
  * Lambda コンソールからの直接実行でも同じ結果になるよう Core でも行う。
  */
-const KNOWN_FEATURES = Object.freeze(['station_alarm']);
+const KNOWN_FEATURES = Object.freeze(['station_alarm', 'planner']);
 
 function normalizeFeatures(value) {
   if (!Array.isArray(value)) {

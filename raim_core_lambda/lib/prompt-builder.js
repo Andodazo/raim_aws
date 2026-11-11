@@ -649,6 +649,8 @@ function buildInitialMantleInput({
   repeatNote = '',
   greeting = false,
   greetingInstruction = '',
+  // 予定の手帳（指示・今の予定・日付の表）。日付や予定の言葉があるときだけ入る
+  plannerContext = '',
 }) {
   const messages = [];
 
@@ -683,6 +685,8 @@ function buildInitialMantleInput({
       ...(factCheck ? ['', '---', '', FACT_CHECK_INSTRUCTION] : []),
       // アプリを開いたときは、ライムから話しかける
       ...(greeting ? ['', '---', '', greetingInstruction || GREETING_INSTRUCTION] : []),
+      // 予定の手帳（planner-context.js）。普通の会話では空なので何も変わらない
+      ...(plannerContext ? ['', '---', '', plannerContext] : []),
     ].join('\n'),
   });
 
@@ -752,6 +756,7 @@ function buildFollowupMantleInput({
   greetingInstruction = '',
   // 前に渡したときより新しくなった記憶。空なら渡さない
   userMemoryUpdate = '',
+  plannerContext = '',
   now = new Date(),
 }) {
   const messages = [];
@@ -816,6 +821,11 @@ function buildFollowupMantleInput({
       }
     }
 
+    // 予定の手帳。日付や予定の言葉があるときだけ入る（planner-context.js）
+    if (plannerContext) {
+      situational.push(plannerContext);
+    }
+
     // 駅アラームが無いアプリでは、頼まれてもできたふりをしないよう毎回伝える
     if (!hasStationAlarm(features)) {
       situational.push(STATION_ALARM_UNAVAILABLE_DIGEST);
@@ -831,7 +841,7 @@ function buildFollowupMantleInput({
       role: 'system',
       content: situational.join('\n\n'),
     });
-  } else if (conversationGap || factCheck || greeting) {
+  } else if (conversationGap || factCheck || greeting || plannerContext) {
     // full モードでも経過時間・事実確認・話しかけの指示は別に渡す（全文プロンプトには含まれないため）
     messages.push({
       role: 'system',
@@ -839,6 +849,7 @@ function buildFollowupMantleInput({
         conversationGap,
         factCheck ? FACT_CHECK_INSTRUCTION : '',
         greeting ? (greetingInstruction || GREETING_INSTRUCTION) : '',
+        plannerContext,
       ]
         .filter(Boolean)
         .join('\n\n'),
@@ -934,6 +945,7 @@ function buildMantleInput({
   greetingInstruction = '',
   // 続きの会話で記憶を渡し直すか（記憶が前に渡したときより新しいとき true）
   resendUserMemory = false,
+  plannerContext = '',
 }) {
   // アプリを開いたときは、利用者の発話の代わりに合図の文を置く。
   // 同じ合図は毎回なので、「前にも同じことを言われた」の添え書きは付けない
@@ -964,6 +976,7 @@ function buildMantleInput({
       repeatNote,
       greeting,
       greetingInstruction,
+      plannerContext,
     });
   }
 
@@ -980,6 +993,7 @@ function buildMantleInput({
     repeatNote,
     greeting,
     greetingInstruction,
+    plannerContext,
   });
 }
 
