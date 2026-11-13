@@ -473,6 +473,9 @@ test('flow: a reminder greeting reads the item and uses the reminder instruction
   assert.match(prompt, /予定を知らせる話しかけ/);
   assert.match(prompt, /歯医者/);
   assert.deepEqual(svc.appended[0].assistantMessage.meta.reminder, { itemId: 'ev_000001aa-0000', slot: 'before' });
+  // ユーザーの発言の位置も「知らせる合図」にする（「アプリが開かれた合図」だと呼ばれたと受け取る）
+  assert.match(prompt, /予定を知らせる時間になった合図/);
+  assert.doesNotMatch(prompt, /アプリが開かれた合図/);
 
   // 予定が消えていたら、普段の話しかけにする
   const gone = buildService({
@@ -481,6 +484,7 @@ test('flow: a reminder greeting reads the item and uses the reminder instruction
   });
   await gone.run();
   assert.doesNotMatch(JSON.stringify(gone.mainCalls[0].mantleInput || gone.mainCalls[0]), /予定を知らせる話しかけ/);
+  assert.match(JSON.stringify(gone.mainCalls[0].mantleInput || gone.mainCalls[0]), /アプリが開かれた合図/);
   assert.equal(gone.appended[0].assistantMessage.meta.reminder, undefined);
 });
 
@@ -516,6 +520,9 @@ test('flow: a timer reminder greeting reads the timer', async () => {
   const prompt = JSON.stringify(svc.mainCalls[0].mantleInput || svc.mainCalls[0]);
   assert.match(prompt, /タイマーを知らせる話しかけ/);
   assert.match(prompt, /洗濯物/);
+  // Windows で開いたまま鳴ったときに「どうしたの？」と返していた（2026-11-13）
+  assert.match(prompt, /タイマーの時間になった合図/);
+  assert.doesNotMatch(prompt, /アプリが開かれた合図/);
   assert.deepEqual(svc.appended[0].assistantMessage.meta.reminder, { itemId: 'tm_000001aa-0000', slot: 'timer' });
 });
 

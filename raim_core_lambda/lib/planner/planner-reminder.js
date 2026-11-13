@@ -93,6 +93,19 @@ function buildTimerReminderInstruction({ item, now = new Date() }) {
 }
 
 /**
+ * 知らせる話しかけで、ユーザーの発言の位置に置く合図。
+ *
+ * 以前は普段の話しかけと同じ「アプリが開かれた合図」を置いていた。Windows ではアプリを
+ * 開いたままタイマーが鳴るので、ライムが呼ばれたと受け取り、指示を無視して
+ * 「やっほー！どうしたの、何かあった？」と返していた（2026-11-13 のテスト）。
+ * 何の合図かを合図の文そのものに書く。
+ */
+function buildReminderCue(item) {
+  const what = item?.kind === 'timer' ? 'タイマーの時間になった' : '予定を知らせる時間になった';
+  return `（${what}合図。ユーザーはまだ何も話していない。ライムから先に知らせる）`;
+}
+
+/**
  * 予定を知らせる話しかけの指示。
  *
  * @param {{ item: object, slot: string, now?: Date }} params
@@ -132,4 +145,5 @@ module.exports = {
   normalizeReminder,
   reminderMatchesItem,
   buildReminderInstruction,
+  buildReminderCue,
 };

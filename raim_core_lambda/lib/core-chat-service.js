@@ -107,7 +107,7 @@ const {
   buildPlannerContext,
 } = require('./planner/planner-context');
 const { writeEventExtras, findEventCandidate } = require('./planner/planner-writer');
-const { buildReminderInstruction, reminderMatchesItem } = require('./planner/planner-reminder');
+const { buildReminderInstruction, buildReminderCue, reminderMatchesItem } = require('./planner/planner-reminder');
 const { todaysUpcomingEvents, buildBriefInstruction, briefWeather } = require('./planner/morning-brief');
 const { isPlannerTool, runPlannerTool } = require('./tools/planner');
 const {
@@ -760,6 +760,8 @@ function createCoreChatService(dependencyOverrides = {}) {
       // アプリを開いたときは、ライムから話しかける
       greeting: input.greeting,
       greetingInstruction,
+      // 知らせる話しかけは、何の合図かを合図の文に書く（planner-reminder.js）
+      greetingCue: reminderItem ? buildReminderCue(reminderItem) : '',
       plannerContext: situationContext,
     });
     // policyが期限・存在状態を確認済みの時だけprevious_response_idを送る。
@@ -835,6 +837,7 @@ function createCoreChatService(dependencyOverrides = {}) {
           history: threadContext.thread?.messages || [],
           greeting: input.greeting,
           greetingInstruction,
+          greetingCue: reminderItem ? buildReminderCue(reminderItem) : '',
           plannerContext: situationContext,
         });
 

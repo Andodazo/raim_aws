@@ -943,6 +943,8 @@ function buildMantleInput({
   history = [],
   greeting = false,
   greetingInstruction = '',
+  // 話しかけでユーザーの発言の位置に置く合図。空なら普段の「アプリが開かれた合図」
+  greetingCue = '',
   // 続きの会話で記憶を渡し直すか（記憶が前に渡したときより新しいとき true）
   resendUserMemory = false,
   plannerContext = '',
@@ -950,7 +952,7 @@ function buildMantleInput({
   // アプリを開いたときは、利用者の発話の代わりに合図の文を置く。
   // 同じ合図は毎回なので、「前にも同じことを言われた」の添え書きは付けない
   if (greeting) {
-    userText = GREETING_USER_TEXT;
+    userText = greetingCue || GREETING_USER_TEXT;
     images = [];
   }
   // 同じ発言の繰り返しと、会話例の返事の丸写しを防ぐ添え書き（話しかけには付けない）
