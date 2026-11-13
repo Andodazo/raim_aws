@@ -876,6 +876,69 @@ test('flow: a brief greeting with plans today uses the brief and sends the card;
   assert.equal(empty.actions.length, 0);
 });
 
+// スマホで聞いたあと Windows を開くと、もう1回まとめていた（2026-11-13）
+test('flow: the brief is given once a day across devices', async () => {
+  const store = createFakeStore([
+    { itemId: 'ev_000001aa-0000', kind: 'event', title: 'バイト', date: '2026-11-11', time: '15:00' },
+  ]);
+  const claimed = new Set();
+  store.claimBrief = async (sub, date) => {
+    if (claimed.has(date)) return false;
+    claimed.add(date);
+    return true;
+  };
+  const first = buildService({
+    text: '', store, mantleResponses: [replyText('今日は15時からバイトだね')],
+    request: { greeting: true, brief: true },
+  });
+  await first.run();
+  assert.match(JSON.stringify(first.mainCalls[0].mantleInput || first.mainCalls[0]), /その日はじめての話しかけ/);
+  assert.deepEqual([...claimed], ['2026-11-11']);
+
+  // 2台目：普段の話しかけ（カードも出さない）
+  const second = buildService({
+    text: '', store, mantleResponses: [replyText('おかえり')],
+    request: { greeting: true, brief: true },
+  });
+  await second.run();
+  assert.doesNotMatch(JSON.stringify(second.mainCalls[0].mantleInput || second.mainCalls[0]), /その日はじめて/);
+  assert.equal(second.actions.length, 0);
+
+  // 印を確かめられなかったら、まとめる
+  store.claimBrief = async () => { throw new Error('ddb down'); };
+  const failed = buildService({
+    text: '', store, mantleResponses: [replyText('今日は15時からバイトだね')],
+    request: { greeting: true, brief: true },
+  });
+  await failed.run();
+  assert.match(JSON.stringify(failed.mainCalls[0].mantleInput || failed.mainCalls[0]), /その日はじめての話しかけ/);
+});
+
+test('store: claimBrief writes the mark only once', async () => {
+  const { createPlannerStore } = require('../lib/planner/planner-store');
+  const sent = [];
+  let exists = false;
+  const docClient = {
+    async send(command) {
+      sent.push(command.input);
+      if (exists) {
+        const error = new Error('exists');
+        error.name = 'ConditionalCheckFailedException';
+        throw error;
+      }
+      exists = true;
+      return {};
+    },
+  };
+  const store = createPlannerStore({ docClient, now: () => NOW });
+  assert.equal(await store.claimBrief('u1', '2026-11-11'), true);
+  assert.equal(await store.claimBrief('u1', '2026-11-11'), false);
+  assert.equal(sent[0].Item.itemId, 'bf_2026-11-11');
+  assert.equal(sent[0].Item.kind, 'brief');
+  assert.equal(sent[0].ConditionExpression, 'attribute_not_exists(itemId)');
+  assert.equal(sent[0].Item.expiresAt, Date.UTC(2026, 10, 13) / 1000);
+});
+
 // ─────────────────────────────────────────────
 // 言ってたことを後で聞く（follow-up.js）
 // ─────────────────────────────────────────────

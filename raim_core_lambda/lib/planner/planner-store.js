@@ -15,6 +15,7 @@
 //   memo    普通のメモ（「駐輪場は3階」）。自動では消さない
 //   list    チェックできるリスト（「買うもの」）。チェックした項目は次の日に消す（planner-memo.js）
 //   weather その日の気温の控え（朝のまとめで「昨日より寒い」を言うため。itemId は wx_YYYY-MM-DD、3日で消える）
+//   brief   その日の朝のまとめを言った印（全部の端末で1日1回にするため。itemId は bf_YYYY-MM-DD、2日で消える）
 //   followup あとで聞くこと（「予定に入れる？」ボタンが押されなかったもの。follow-up.js）。
 //           予定の一覧には出さない。予定の日の7日後に消える
 //
@@ -357,8 +358,38 @@ function createPlannerStore({ docClient, tableName = TABLE_NAME, now = () => new
     }));
   }
 
+  /**
+   * 今日の朝のまとめを言ったことにする。もう言っていたら false。
+   *
+   * 以前は「その日はじめて」を端末ごとに覚えていたので、スマホで聞いたあと Windows を開くと
+   * もう1回まとめていた。サーバーに印（bf_YYYY-MM-DD、2日で消える）を置き、全部の端末で1日1回にする。
+   * 2台同時に開いても1回になるよう、無いときだけ書く。
+   */
+  async function claimBrief(sub, date) {
+    const [y, m, d] = String(date).split('-').map(Number);
+    try {
+      await client().send(new PutCommand({
+        TableName: tableName,
+        Item: {
+          sub,
+          itemId: `bf_${date}`,
+          kind: 'brief',
+          date,
+          createdAt: now().toISOString(),
+          expiresAt: Math.floor(Date.UTC(y, m - 1, d + 2) / 1000),
+        },
+        ConditionExpression: 'attribute_not_exists(itemId)',
+      }));
+      return true;
+    } catch (error) {
+      if (error?.name === 'ConditionalCheckFailedException') return false;
+      throw error;
+    }
+  }
+
   return {
     listItems, getItem, addEvent, addTimer, addMemo, addList, addFollowUp, updateItem, deleteItem, saveWeather,
+    claimBrief,
   };
 }
 
