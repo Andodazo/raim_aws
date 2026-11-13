@@ -398,6 +398,10 @@ function createCoreChatService(dependencyOverrides = {}) {
     onToolCallStart,
     // SQS経路ではsqs-core-handlerが渡す。アプリへ操作を頼むときに呼ぶ。
     onClientAction,
+    // SQS経路ではsqs-core-handlerが渡す。返事の終わり（stream.completed）を送ったあとに
+    // 回してよい仕事（予定の知らせる文・「予定に入れる？」）を預ける。
+    // 未指定なら、これまでどおり返す前に待つ。
+    deferAfterReply,
   } = {}) {
     const notifyToolCall = typeof onToolCallStart === 'function'
       ? onToolCallStart
@@ -1336,7 +1340,11 @@ function createCoreChatService(dependencyOverrides = {}) {
 
     // 7-b. 予定の知らせる文・「予定に入れる？」ボタンを仕上げる。
     // 返事はもう出ているので、待つのは上限まで（過ぎたら決まり文句のまま）。
-    await finishPlannerJobs({
+    //
+    // 以前はここで待ってから返していたので、返事の終わり（stream.completed）が最大8秒遅れ、
+    // そのあいだアプリの入力欄が「考えているよ」のままだった（2026-11-13 のテスト）。
+    // SQS経路では、返事の終わりを送ったあとに回す（sqs-core-handler.js）。
+    const plannerJobs = () => finishPlannerJobs({
       sub: input.sub,
       jobs: plannerExtrasJobs,
       candidatePromise: plannerAddedThisTurn ? null : candidatePromise,
@@ -1344,6 +1352,12 @@ function createCoreChatService(dependencyOverrides = {}) {
       dependencies,
       notifyClientAction,
     });
+    const hasPlannerJobs = plannerExtrasJobs.length > 0 || Boolean(candidatePromise && !plannerAddedThisTurn);
+    if (hasPlannerJobs && typeof deferAfterReply === 'function') {
+      deferAfterReply(plannerJobs);
+    } else if (hasPlannerJobs) {
+      await plannerJobs();
+    }
 
     // 8-b. 会話を切り替えたら、前のスレッドの要約を頼む。
     //

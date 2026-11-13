@@ -302,10 +302,10 @@ function buildService({ text, features = ['planner'], mantleResponses, store, he
     now: () => NOW,
     plannerHelperTimeoutMs: 1000,
   });
-  const run = () => service({
+  const run = (options = {}) => service({
     schemaVersion: 1, type: 'chat.request', requestId: 'r1', sub: 'u1', source: 'websocket',
     text, images: [], features, ...request,
-  }, { onClientAction: async (a) => { actions.push(a); } });
+  }, { onClientAction: async (a) => { actions.push(a); }, ...options });
   return { run, mainCalls, helperCalls, actions, appended };
 }
 
@@ -377,6 +377,32 @@ test('flow: a passing mention sends a suggestion instead of saving', async () =>
       item: followUp,
     },
   }]);
+});
+
+// 返事の終わりを先に送り、「予定に入れる？」はそのあとに届ける（2026-11-13）
+test('flow: with deferAfterReply the suggestion is sent after the reply returns', async () => {
+  const store = createFakeStore();
+  const svc = buildService({
+    text: '明日テストなんだよね',
+    store,
+    mantleResponses: [replyText('がんばってね')],
+    helperResponses: { planner_candidate: '{"title":"テスト","date":"2026-11-12","time":""}' },
+  });
+  const deferred = [];
+  const result = await svc.run({ deferAfterReply: (task) => deferred.push(task) });
+  assert.equal(result.ok, true);
+  assert.equal(svc.actions.length, 0);
+  assert.equal(deferred.length, 1);
+  await deferred[0]();
+  assert.equal(svc.actions[0].action, 'planner.suggest');
+});
+
+// 予定の仕事が無い普通の会話では、何も預けない
+test('flow: plain chat defers nothing', async () => {
+  const svc = buildService({ text: 'ゲームしてた', store: createFakeStore(), mantleResponses: [replyText('いいね')] });
+  const deferred = [];
+  await svc.run({ deferAfterReply: (task) => deferred.push(task) });
+  assert.equal(deferred.length, 0);
 });
 
 test('flow: apps without the planner feature never see planner tools', async () => {
