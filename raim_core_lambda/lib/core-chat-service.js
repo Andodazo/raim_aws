@@ -113,7 +113,29 @@ const { writeEventExtras, findEventCandidate } = require('./planner/planner-writ
 const { buildReminderInstruction, buildReminderCue, reminderMatchesItem } = require('./planner/planner-reminder');
 const { todaysUpcomingEvents, buildBriefInstruction, briefWeather } = require('./planner/morning-brief');
 const { todayJst } = require('./planner/planner-dates');
-const { isPlannerTool, runPlannerTool } = require('./tools/planner');
+const { QUICK_REPLY_TOOL_NAMES, isPlannerTool, quickReplyOf, runPlannerTool } = require('./tools/planner');
+
+const QUICK_REPLY_LOG_TOOLS = new Set(QUICK_REPLY_TOOL_NAMES);
+
+/** ツールと一緒に書いた返事の表情。選んだ Scene のいつもの表情、無ければ少しうれしい */
+function quickReplyEmotions(scene) {
+  const emotions = scene?.default_emotions;
+  if (emotions && typeof emotions === 'object' && !Array.isArray(emotions) && Object.keys(emotions).length > 0) {
+    return emotions;
+  }
+  return { happy: 0.6 };
+}
+
+/**
+ * 前の回で2回目を呼ばずに終えたときの、ツールの結果（スレッドに残してある）。
+ * 今回その response_id から続けるときだけ返す。要約で response_id が消えていたら使わない
+ */
+function pendingToolOutputFor(thread, previousResponseId) {
+  const pending = thread?.pendingToolOutput;
+  if (!previousResponseId || !pending || pending.responseId !== previousResponseId) return null;
+  if (!pending.callId || typeof pending.output !== 'string' || typeof pending.assistantText !== 'string') return null;
+  return pending;
+}
 const {
   PAST_TALK_TOOL_NAME,
   PAST_TALK_INSTRUCTION,
@@ -845,8 +867,14 @@ function createCoreChatService(dependencyOverrides = {}) {
       try {
         return await callMantle({ input: currentInput, previousId, tools });
       } catch (error) {
+        // 前の回の「ツールの結果」を頭に足して断られたときも、履歴から作り直す（pendingFromLastTurn）
+        const rejectedPending = pendingInjected && previousId === pendingInjected &&
+          [400, 404, 422].includes(Number(error?.statusCode || error?.status));
+        if (rejectedPending) {
+          console.warn(`[Mantle] pending tool output rejected: status=${error.statusCode || error.status}`);
+        }
         const canRecover = Boolean(previousId) &&
-          dependencies.isMantleResponseExpiredError(error);
+          (dependencies.isMantleResponseExpiredError(error) || rejectedPending);
 
         if (!canRecover) {
           throw error;
@@ -894,6 +922,10 @@ function createCoreChatService(dependencyOverrides = {}) {
     const seenToolCalls = new Set();
 
     let toolTurn = 0;
+    // 前の回のツールの結果を頭に足した response_id（足していなければ ''）
+    let pendingInjected = '';
+    // 今回、ツールと一緒に書いた返事で終えたなら、次の回に渡すツールの結果
+    let pendingToolOutput = null;
     // 会話の記録に残す、このターンで使ったツール（分析用）
     const toolLog = [];
     let toolExecuted = false;
@@ -901,8 +933,24 @@ function createCoreChatService(dependencyOverrides = {}) {
     let exitedDueToDuplicate = false;
     let exitedDueToUnknownTool = false;
 
+    // 前の回で、ツールと一緒に書いた返事で終えていたら（2回目を呼んでいない）、
+    // AI の会話はツールの呼び出しで止まっている。今回の頭で、その結果と言った返事を渡してから続ける。
+    // 渡さないと「ツールの結果が無い」と断られる。断られたら履歴から作り直す（callMantleWithRecovery）
+    const pendingFromLastTurn = pendingToolOutputFor(threadContext.thread, previousResponseId);
+    pendingInjected = pendingFromLastTurn ? previousResponseId : '';
+    const firstInput = pendingFromLastTurn
+      ? {
+        ...mantleInput,
+        messages: [
+          { type: 'function_call_output', call_id: pendingFromLastTurn.callId, output: pendingFromLastTurn.output },
+          { role: 'assistant', content: pendingFromLastTurn.assistantText },
+          ...(mantleInput.messages || []),
+        ],
+      }
+      : mantleInput;
+
     mantleResponse = await callMantleWithRecovery({
-      input: mantleInput,
+      input: firstInput,
       previousId: previousResponseId,
       tools: toolDefinitions,
     });
@@ -1009,6 +1057,29 @@ function createCoreChatService(dependencyOverrides = {}) {
 
         toolExecuted = true;
         if (result?.error) toolFailed = true;
+
+        // うまくいったら、ツールと一緒に書いた返事をそのまま言って終える（AI の2回目を呼ばない）
+        const quickReply = quickReplyOf(toolName, toolArgs, { result, change });
+        if (quickReply) {
+          const assistantText = JSON.stringify({
+            emotions: quickReplyEmotions(selectedScene),
+            text: quickReply,
+          });
+          toolLog.push({ name: toolName, query: '', ok: true, quick: true });
+          console.log(`[Planner] quick reply: tool=${toolName}`);
+          pendingToolOutput = {
+            responseId: mantleResponse.responseId,
+            callId: toolCall.callId,
+            output: JSON.stringify(result),
+            assistantText,
+          };
+          if (typeof onMantleTextDelta === 'function') await onMantleTextDelta(assistantText);
+          mantleResponse = { ...mantleResponse, rawText: assistantText, toolCalls: [] };
+          break;
+        }
+        if (QUICK_REPLY_LOG_TOOLS.has(toolName) && !result?.error && change && change.type !== 'show') {
+          console.log(`[Planner] quick reply missing: tool=${toolName}`);
+        }
         toolLog.push({ name: toolName, query: '', ok: !result?.error });
 
         previousResponseId = mantleResponse.responseId;
@@ -1316,6 +1387,8 @@ function createCoreChatService(dependencyOverrides = {}) {
           : 0,
         responseId: mantleResponse.responseId,
         responseCreatedAt: mantleResponse.createdAt,
+        // 2回目を呼ばずに終えたら、次の回の頭で渡すツールの結果（無ければ消す）
+        pendingToolOutput,
         // 今回記憶を渡したら、その版を残す（次から同じ版は渡し直さない）
         memoryInjectedAt: memorySent ? memoryVersion : '',
       });
