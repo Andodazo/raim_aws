@@ -112,6 +112,7 @@ const {
 const { writeEventExtras, findEventCandidate } = require('./planner/planner-writer');
 const { buildReminderInstruction, buildReminderCue, reminderMatchesItem } = require('./planner/planner-reminder');
 const { todaysUpcomingEvents, buildBriefInstruction, briefWeather } = require('./planner/morning-brief');
+const { todayJst } = require('./planner/planner-dates');
 const { isPlannerTool, runPlannerTool } = require('./tools/planner');
 const {
   PAST_TALK_TOOL_NAME,
@@ -560,6 +561,19 @@ function createCoreChatService(dependencyOverrides = {}) {
       return plannerRead;
     };
     const readBriefEvents = async () => todaysUpcomingEvents(await readPlannerItems(), now);
+    // 今日のまとめをほかの端末でもう言っていないか。言っていなければ、言ったことにする。
+    // 確かめられなければ、まとめる（端末ごとの1日1回は残っている）
+    const claimTodayBrief = async () => {
+      if (typeof dependencies.plannerStore.claimBrief !== 'function') return true;
+      try {
+        const claimed = await dependencies.plannerStore.claimBrief(input.sub, todayJst(now));
+        if (!claimed) console.log('[Greeting] brief already given today on another device');
+        return claimed;
+      } catch (error) {
+        console.error(`[Planner] brief mark failed (non-fatal): ${error.message}`);
+        return true;
+      }
+    };
 
     // 終わったことを「そういえば」で聞く（follow-up.js）。
     // by: 'raim' はライムから聞く、'user' は本人が先に話した（聞いた扱いにして乗るだけ）
@@ -603,7 +617,10 @@ function createCoreChatService(dependencyOverrides = {}) {
     } else if (input.greeting && isAfterHardTalk(threadContext.thread, now)) {
       greetingInstruction = buildCareGreetingInstruction();
       console.log('[Greeting] angle=care');
-    } else if (input.greeting && input.brief && (briefEvents = await readBriefEvents()).length > 0) {
+    } else if (
+      input.greeting && input.brief && (briefEvents = await readBriefEvents()).length > 0 &&
+      await claimTodayBrief()
+    ) {
       // その日はじめての話しかけ（morning-brief.js）。今日これからの予定が無ければ普段の話しかけ
       // 終わったことがあれば、まとめの中で一緒に聞く（「昨日の面接どうだった？今日は15時からバイトだね」）
       followUp = await pickFollowUp();
