@@ -139,11 +139,13 @@ const clone = (value) => (value == null ? value : JSON.parse(JSON.stringify(valu
  * 1つの会話ぶんの、メモリの中だけの保存先。
  * Core が DynamoDB に読み書きする部分をここに置き換える。
  */
-function createMemoryStore(core, { sub, userMemory = '', planner = [] }) {
+function createMemoryStore(core, { sub, userMemory = '', planner = [], recentGreetings = [] }) {
   const session = {
     sub,
     activeThreadId: '',
     userMemory,
+    // 前の会話でした話しかけ（新しい順）。台本の recentGreetings で入れられる
+    recentGreetings: [...recentGreetings],
     userMemoryUpdatedAt: userMemory ? new Date().toISOString() : '',
   };
   let thread = null;
@@ -154,6 +156,9 @@ function createMemoryStore(core, { sub, userMemory = '', planner = [] }) {
 
     dependencies: {
       getOrCreateUserSession: async () => clone(session),
+      updateRecentGreetings: async (_sub, list) => {
+        session.recentGreetings = [...list];
+      },
       updateMantleResponseState: async (_sub, { responseId, createdAt }) => {
         session.lastResponseId = responseId;
         session.lastResponseCreatedAt = createdAt;
@@ -320,7 +325,12 @@ function createFakeDependencies() {
 
 async function runScenario({ core, scenario, runIndex, fake }) {
   const sub = `convo-${scenario.id}-${runIndex}-${Math.random().toString(36).slice(2, 8)}`;
-  const store = createMemoryStore(core, { sub, userMemory: scenario.memory || '', planner: scenario.planner || [] });
+  const store = createMemoryStore(core, {
+    sub,
+    userMemory: scenario.memory || '',
+    planner: scenario.planner || [],
+    recentGreetings: scenario.recentGreetings || [],
+  });
   // 手帳のある台本は、手帳を持つアプリとして送る（会話の途中で「そういえば」を聞くのはそのときだけ）
   const features = scenario.planner ? ['planner'] : [];
   const handle = core.createCoreChatService({

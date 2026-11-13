@@ -8,6 +8,15 @@
     "turns": []
   },
   {
+    "id": "gr-new-conversation",
+    "tag": "話しかけ",
+    "note": "前の会話で2回話しかけたあと、新しい会話の1回目。前と同じ話題（待ってた、ゲームの攻略法）や出だしにならないか",
+    "greeting": true,
+    "recentGreetings": ["やっほー！私のこと待ってたでしょ", "お、また来た。ちょうどゲームの攻略法を考えてたとこ"],
+    "greetingExpect": { "maxSentences": 3, "notContains": ["待ってた", "攻略"] },
+    "turns": []
+  },
+  {
     "id": "gr-repeat",
     "tag": "話しかけ",
     "note": "同じ会話で5回続けて話しかける。出だしが前回と同じにならないか、半分くらいは挨拶なしで始まるか",
@@ -71,6 +80,19 @@
     "turns": [
       { "reminder": { "item": 0, "slot": "before" }, "expect": { "containsAny": ["歯医者"], "maxSentences": 3 } },
       { "say": "そうだった、行ってくる" }
+    ]
+  },
+  {
+    "id": "gr-thanks",
+    "tag": "話しかけ",
+    "note": "お礼を何回か言う。「もっと褒めていいよ」を繰り返さないか、「正解」を的外れに使わないか",
+    "planner": [{ "kind": "timer", "title": "タイマー", "seconds": 180 }],
+    "expect": { "notContains": ["よな", "だぜ"] },
+    "turns": [
+      { "reminder": { "item": 0, "slot": "timer" } },
+      { "say": "ありがと" },
+      { "say": "助かった" },
+      { "say": "そろそろ行ってくる" }
     ]
   },
   {

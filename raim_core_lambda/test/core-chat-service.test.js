@@ -616,6 +616,40 @@ test('greeting decides the opening in code and passes the last opening to avoid'
   assert.match(await run(0.9), /出だし「やっほー」とは違う/);
 });
 
+// 2026-11-13: 新しい会話の1回目は前の出だしが無く、ほぼ毎回「やっほー」だった。
+// 「私のこと待ってた？」「ゲームの攻略法」を会話をまたいで繰り返していた
+test('greeting remembers recent greetings per user and passes them to a new conversation', async () => {
+  const run = async ({ recent }) => {
+    const calls = [];
+    const saved = [];
+    const dependencies = createDependencies(calls);
+    dependencies.random = () => 0.9;
+    dependencies.getOrCreateUserSession = async () => ({ lastResponseId: '', recentGreetings: recent });
+    dependencies.updateRecentGreetings = async (sub, list) => saved.push([sub, list]);
+    dependencies.resolveThread = async () => ({ threadId: 'thread-new', isNew: true, thread: { messages: [] } });
+    dependencies.buildMantleInput = (input) => {
+      calls.push(['build', input]);
+      return input;
+    };
+    await createCoreChatService(dependencies)({
+      sub: 'user-1', requestId: 'req-recent', text: '', images: [], greeting: true,
+    });
+    return { instruction: calls.find(([name]) => name === 'build')[1].greetingInstruction, saved };
+  };
+
+  // 一度も話しかけていない人は「やっほー」を前回の出だしとして渡す
+  const first = await run({ recent: [] });
+  assert.match(first.instruction, /出だし「やっほー」とは違う/);
+  assert.doesNotMatch(first.instruction, /最近の話しかけ/);
+  assert.deepEqual(first.saved, [['user-1', ['やあ']]]);
+
+  // 前の会話の話しかけを渡す（出だしも、話題も）
+  const next = await run({ recent: ['お、また来た！ゲームの攻略法考えてた', 'やっほー！今日どうだった？'] });
+  assert.match(next.instruction, /出だし「お」とは違う/);
+  assert.match(next.instruction, /最近の話しかけ：「お、また来た！ゲームの攻略法考えてた」「やっほー！今日どうだった？」/);
+  assert.deepEqual(next.saved[0][1], ['やあ', 'お、また来た！ゲームの攻略法考えてた', 'やっほー！今日どうだった？']);
+});
+
 // ── 会話の切り替えと記憶 ─────────────────────────
 
 function runChat(overrides = {}, event = {}) {
