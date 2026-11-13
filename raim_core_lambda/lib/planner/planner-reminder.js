@@ -22,7 +22,12 @@ const {
   relativeDateLabel,
 } = require('./planner-dates');
 
-const REMINDER_SLOTS = Object.freeze(['eve', 'before', 'morning', 'timer']);
+// snooze はタイマーの「5分後にもう一回」の通知を押したとき（2026-11-13）
+const REMINDER_SLOTS = Object.freeze(['eve', 'before', 'morning', 'timer', 'snooze']);
+
+// 同じ知らせを2回話さない（Windows が時刻に話したあと、スマホの通知を押した など）。
+// 「もう一回」は本人が頼んだので、何回でも話す
+const REPEATABLE_SLOTS = Object.freeze(['snooze']);
 
 // 予定の知らせの種類（タイマーは 'timer' だけ）
 const EVENT_SLOTS = Object.freeze(['eve', 'before', 'morning']);
@@ -52,8 +57,33 @@ function normalizeReminder(value) {
 function reminderMatchesItem(item, slot) {
   if (!item) return false;
   if (item.kind === 'event') return EVENT_SLOTS.includes(slot);
-  if (item.kind === 'timer') return slot === 'timer';
+  if (item.kind === 'timer') return slot === 'timer' || slot === 'snooze';
   return false;
+}
+
+/** この知らせを「もう話した」と覚えるか */
+function reminderNeedsClaim(slot) {
+  return !REPEATABLE_SLOTS.includes(slot);
+}
+
+/** 予定に付いている印の名前（planner-store.js の markReminderSpoken と同じ） */
+function spokenAttributeOf(slot) {
+  return `spoken_${slot}`;
+}
+
+/** 読んだ予定に、今の日時で「もう話した」の印が付いているか */
+function reminderAlreadySpoken(item, slot) {
+  const mark = item?.[spokenAttributeOf(slot)];
+  return typeof mark === 'string' && mark === reminderSpokenKey(item);
+}
+
+/**
+ * 「もう話した」の印に書く値。予定の日時やタイマーの終わる時刻が変わったら別の値になるので、
+ * 予定を動かしたあとの知らせは、また話す
+ */
+function reminderSpokenKey(item) {
+  if (item?.kind === 'timer') return String(item.endsAt || '');
+  return `${item?.date || ''} ${item?.time || ''}`.trim();
 }
 
 /** 「1時間30分」「3分」「45秒」 */
@@ -144,6 +174,10 @@ module.exports = {
   REMINDER_SLOTS,
   normalizeReminder,
   reminderMatchesItem,
+  reminderNeedsClaim,
+  reminderAlreadySpoken,
+  reminderSpokenKey,
+  spokenAttributeOf,
   buildReminderInstruction,
   buildReminderCue,
 };

@@ -39,6 +39,7 @@ const {
 } = require('@aws-sdk/lib-dynamodb');
 const { randomUUID } = require('node:crypto');
 const { expiresAtForEvent } = require('./planner-dates');
+const { spokenAttributeOf } = require('./planner-reminder');
 const {
   MAX_MEMO_LENGTH,
   MAX_LIST_TITLE_LENGTH,
@@ -388,9 +389,32 @@ function createPlannerStore({ docClient, tableName = TABLE_NAME, now = () => new
     }
   }
 
+  /**
+   * 予定の知らせを話したことを印として残す（2026-11-13）。
+   * Windows が時刻に話したあとスマホの通知を押すと、同じタイマーの話を2回していた。
+   * 印は spoken_<slot> に、そのときの日時（key）を書く。予定を動かせば key が変わるので、また話せる。
+   * もう消えた項目には書かない（作り直さない）。
+   */
+  async function markReminderSpoken(sub, itemId, slot, key) {
+    try {
+      await client().send(new UpdateCommand({
+        TableName: tableName,
+        Key: { sub, itemId },
+        UpdateExpression: 'SET #spoken = :key',
+        ConditionExpression: 'attribute_exists(itemId)',
+        ExpressionAttributeNames: { '#spoken': spokenAttributeOf(slot) },
+        ExpressionAttributeValues: { ':key': String(key || '') },
+      }));
+      return true;
+    } catch (error) {
+      if (error?.name === 'ConditionalCheckFailedException') return false;
+      throw error;
+    }
+  }
+
   return {
     listItems, getItem, addEvent, addTimer, addMemo, addList, addFollowUp, updateItem, deleteItem, saveWeather,
-    claimBrief,
+    claimBrief, markReminderSpoken,
   };
 }
 
