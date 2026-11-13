@@ -1,0 +1,118 @@
+[
+  {
+    "id": "gr-first",
+    "tag": "話しかけ",
+    "note": "はじめての話しかけ。--runs 5 で出だしがばらけるか",
+    "greeting": true,
+    "greetingExpect": { "maxSentences": 3 },
+    "turns": []
+  },
+  {
+    "id": "gr-repeat",
+    "tag": "話しかけ",
+    "note": "同じ会話で5回続けて話しかける。出だしが前回と同じにならないか、半分くらいは挨拶なしで始まるか",
+    "greeting": true,
+    "turns": [
+      { "greeting": true },
+      { "greeting": true },
+      { "greeting": true },
+      { "greeting": true }
+    ]
+  },
+  {
+    "id": "gr-repeat-chat",
+    "tag": "話しかけ",
+    "note": "話しかけとユーザーの返事を交互に。やっほーばかりにならないか",
+    "greeting": true,
+    "turns": [
+      { "say": "ちょっと休憩" },
+      { "greeting": true },
+      { "say": "うん" },
+      { "greeting": true },
+      { "say": "ねむい" },
+      { "greeting": true }
+    ]
+  },
+  {
+    "id": "gr-timer",
+    "tag": "知らせ",
+    "note": "3分のタイマーが鳴った。「どうしたの？」にならず、時間になったと伝わるか",
+    "planner": [{ "kind": "timer", "title": "タイマー", "seconds": 180 }],
+    "turns": [
+      { "reminder": { "item": 0, "slot": "timer" }, "expect": { "containsAny": ["3分", "タイマー", "時間"], "maxSentences": 3 } },
+      { "say": "ありがと" }
+    ]
+  },
+  {
+    "id": "gr-timer-label",
+    "tag": "知らせ",
+    "note": "名前つきのタイマー（カップ麺）。何のタイマーか言うか",
+    "planner": [{ "kind": "timer", "title": "カップ麺", "seconds": 180 }],
+    "turns": [
+      { "reminder": { "item": 0, "slot": "timer" }, "expect": { "containsAny": ["カップ麺", "麺", "ラーメン"], "maxSentences": 3 } }
+    ]
+  },
+  {
+    "id": "gr-timer-after-chat",
+    "tag": "知らせ",
+    "note": "話している途中でタイマーが鳴った。挨拶から始めず、中身から言うか",
+    "planner": [{ "kind": "timer", "title": "洗濯", "seconds": 1800 }],
+    "turns": [
+      { "say": "洗濯機回してきた" },
+      { "say": "終わるまでひま" },
+      { "reminder": { "item": 0, "slot": "timer" }, "expect": { "containsAny": ["洗濯", "30分", "時間"], "notContains": ["やっほ", "おかえり", "どうしたの", "何かあった"] } }
+    ]
+  },
+  {
+    "id": "gr-before",
+    "tag": "知らせ",
+    "note": "1時間後の歯医者。何の予定か、もうすぐだと伝わるか",
+    "planner": [{ "title": "歯医者", "hoursFromNow": 1 }],
+    "turns": [
+      { "reminder": { "item": 0, "slot": "before" }, "expect": { "containsAny": ["歯医者"], "maxSentences": 3 } },
+      { "say": "そうだった、行ってくる" }
+    ]
+  },
+  {
+    "id": "gr-eve",
+    "tag": "知らせ",
+    "note": "明日10時の面接の前の晩。明日のことだと伝わるか",
+    "planner": [{ "title": "面接", "daysAgo": -1, "time": "10:00", "importance": "important" }],
+    "turns": [
+      { "reminder": { "item": 0, "slot": "eve" }, "expect": { "containsAny": ["面接"], "maxSentences": 3 } },
+      { "say": "緊張してきた" }
+    ]
+  },
+  {
+    "id": "gr-morning",
+    "tag": "知らせ",
+    "note": "時間の決まっていない今日の予定（ゴミ出し）の朝",
+    "planner": [{ "title": "ゴミ出し", "daysAgo": 0, "importance": "chore" }],
+    "turns": [
+      { "reminder": { "item": 0, "slot": "morning" }, "expect": { "containsAny": ["ゴミ"], "maxSentences": 3 } }
+    ]
+  },
+  {
+    "id": "gr-reminder-then-greeting",
+    "tag": "知らせ",
+    "note": "タイマーの知らせのあとで、ふつうの話しかけ。前の出だしをまねしないか",
+    "planner": [{ "kind": "timer", "title": "タイマー", "seconds": 300 }],
+    "turns": [
+      { "reminder": { "item": 0, "slot": "timer" } },
+      { "say": "ありがと、食べる" },
+      { "greeting": true }
+    ]
+  },
+  {
+    "id": "gr-brief",
+    "tag": "話しかけ",
+    "note": "朝のまとめ。今日の予定（バイト）を言うか",
+    "greeting": true,
+    "brief": true,
+    "greetingExpect": { "containsAny": ["バイト"], "maxSentences": 4 },
+    "planner": [{ "title": "バイト", "hoursFromNow": 3 }],
+    "turns": [
+      { "say": "そうだった、ありがと" }
+    ]
+  }
+]

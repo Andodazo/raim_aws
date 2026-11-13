@@ -230,17 +230,36 @@ function jstDateTime(hours) {
   return { date: shifted.toISOString().slice(0, 10), time: shifted.toISOString().slice(11, 16) };
 }
 
+const ID_PREFIX = Object.freeze({ event: 'ev', followup: 'fu', timer: 'tm' });
+
+const REMINDER_LABELS = Object.freeze({ timer: 'タイマーが鳴った', eve: '前の日の夜', before: '1時間前', morning: '当日の朝' });
+// 知らせの話しかけで出てほしくない言葉（ふつうの話しかけと取り違えたとき・仕組みの言葉）
+const REMINDER_EXPECT = Object.freeze({ notContains: ['どうしたの', '何かあった', '通知', 'アプリ', '登録'] });
+
 /**
- * 台本の planner（{ title, daysAgo?, hoursFromNow?, time?, importance?, kind? }）を、手帳の項目にする。
- * daysAgo: 1 は昨日、hoursFromNow: 3 は今から3時間後（今日のうちの予定に使う）
+ * 台本の planner（{ title, daysAgo?, hoursFromNow?, time?, importance?, kind?, seconds? }）を、手帳の項目にする。
+ * daysAgo: 1 は昨日（-1 は明日）、hoursFromNow: 3 は今から3時間後（今日のうちの予定に使う）
+ * kind: "timer" はいま鳴ったタイマー（seconds はタイマーの長さ。既定 180）
  */
 function buildPlannerItems(planner = []) {
   return (Array.isArray(planner) ? planner : []).map((raw, index) => {
+    // 知らせの話しかけは itemId の形を確かめるので、本物と同じくらいの長さにする
+    const itemId = `${ID_PREFIX[raw.kind] || 'ev'}_convo-item-${index}`;
+    if (raw.kind === 'timer') {
+      return {
+        itemId,
+        kind: 'timer',
+        title: raw.title || 'タイマー',
+        durationSec: Number(raw.seconds) || 180,
+        endsAt: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
+      };
+    }
     const when = raw.hoursFromNow !== undefined
       ? jstDateTime(Number(raw.hoursFromNow))
       : { date: jstDate(-Number(raw.daysAgo || 0)), time: raw.time || '' };
     return {
-      itemId: `${raw.kind === 'followup' ? 'fu' : 'ev'}_convo-${index}`,
+      itemId,
       kind: raw.kind || 'event',
       title: raw.title,
       date: when.date,
@@ -313,8 +332,23 @@ async function runScenario({ core, scenario, runIndex, fake }) {
   if (scenario.greeting) {
     steps.push({ greeting: true, say: '（アプリを開いた）', expect: scenario.greetingExpect || {} });
   }
+  const plannerItems = buildPlannerItems(scenario.planner || []);
   for (const turn of scenario.turns || []) {
-    steps.push({ greeting: false, say: turn.say, expect: turn.expect || {} });
+    // 台本の途中の話しかけ（{ "greeting": true }）と、知らせの話しかけ（{ "reminder": { "item": 0, "slot": "timer" } }）
+    if (turn.reminder) {
+      const item = plannerItems[Number(turn.reminder.item) || 0];
+      const slot = String(turn.reminder.slot || 'timer');
+      steps.push({
+        greeting: true,
+        reminder: item ? { itemId: item.itemId, slot } : null,
+        say: `（${REMINDER_LABELS[slot] || '知らせ'}: ${item?.title || '?'}）`,
+        expect: { ...REMINDER_EXPECT, ...(turn.expect || {}) },
+      });
+    } else if (turn.greeting) {
+      steps.push({ greeting: true, say: '（アプリを開いた）', expect: turn.expect || {} });
+    } else {
+      steps.push({ greeting: false, say: turn.say, expect: turn.expect || {} });
+    }
   }
 
   const results = [];
@@ -327,7 +361,14 @@ async function runScenario({ core, scenario, runIndex, fake }) {
     try {
       const response = await handle(
         step.greeting
-          ? { sub, requestId: `${sub}-${index}`, greeting: true, brief: scenario.brief === true, features }
+          ? {
+            sub,
+            requestId: `${sub}-${index}`,
+            greeting: true,
+            brief: scenario.brief === true,
+            features,
+            ...(step.reminder ? { reminder: step.reminder } : {}),
+          }
           : { sub, requestId: `${sub}-${index}`, text: step.say, features },
         { onSceneSelected: async (scene) => { sceneId = scene?.id || ''; } }
       );
@@ -349,6 +390,7 @@ async function runScenario({ core, scenario, runIndex, fake }) {
     results.push({
       say: step.say,
       greeting: step.greeting,
+      reminder: Boolean(step.reminder),
       reply,
       error,
       sceneId,
@@ -373,6 +415,27 @@ async function runScenario({ core, scenario, runIndex, fake }) {
 // ─────────────────────────────────────────────
 // 結果の書き出し
 // ─────────────────────────────────────────────
+
+// 挨拶の言葉（出だしがこれで始まれば「挨拶から」と数える）
+const GREETING_WORDS = Object.freeze([
+  'やっほ', 'ヤッホ', 'おかえり', 'おはよ', 'こんにちは', 'こんばんは', 'ただいま', 'やあ', 'よっ', 'おーい',
+  'ハロー', 'はろー', 'もしもし', 'おつかれ', 'お疲れ', 'ひさしぶり', '久しぶり', 'おひさ', 'ばあ', 'じゃーん',
+]);
+
+/** 話しかけの出だし（最初の区切りまで。core の greeting.js の lastGreetingOpening と同じ切り方） */
+function greetingOpening(reply) {
+  const word = String(reply || '').trim().split(/[。、！!？?,.\s]/)[0].trim().slice(0, 12) || '（空）';
+  return { word, greeting: GREETING_WORDS.some((g) => word.startsWith(g)) };
+}
+
+function rankWords(words, limit = 8) {
+  const counts = new Map();
+  for (const word of words) counts.set(word, (counts.get(word) || 0) + 1);
+  return [...counts.entries()]
+    .map(([word, count]) => ({ word, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, limit);
+}
 
 function countFlags(conversation) {
   return conversation.results.reduce((sum, r) => sum + r.flags.length, 0) +
@@ -460,6 +523,17 @@ function formatReport({ cores, scenarios, byCore, startedAt, options }) {
     const allReplies = conversations.flatMap((c) => c.results.filter((r) => !r.error).map((r) => r.reply));
     const frequent = countWatchWords(allReplies);
     lines.push(`  よく出た言葉（返事${allReplies.length}件中）: ${frequent.length ? frequent.map((f) => `${f.word} ${f.count}`).join('、') : 'なし'}`);
+
+    // 話しかけの出だし（やっほーばかりになっていないか。知らせはいつも中身から始めるはず）
+    for (const [label, reminder] of [['話しかけ', false], ['知らせ', true]]) {
+      const openings = conversations.flatMap((c) => c.results
+        .filter((r) => r.greeting && r.reminder === reminder && !r.error)
+        .map((r) => greetingOpening(r.reply)));
+      if (openings.length === 0) continue;
+      const greeted = openings.filter((o) => o.greeting);
+      const ranking = rankWords(openings.map((o) => o.word));
+      lines.push(`  ${label}の出だし: 挨拶から ${greeted.length}/${openings.length}  （${ranking.map((r) => `${r.word} ${r.count}`).join('、')}）`);
+    }
   }
 
   return lines.join('\n');
@@ -548,4 +622,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { parseArgs, createMemoryStore, runScenario, formatReport };
+module.exports = { parseArgs, createMemoryStore, runScenario, formatReport, buildPlannerItems, greetingOpening };
