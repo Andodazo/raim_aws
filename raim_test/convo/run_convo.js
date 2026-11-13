@@ -369,6 +369,8 @@ async function runScenario({ core, scenario, runIndex, fake }) {
     let error = '';
     // Mantle の返事が遅いときのひとこと（waiting-lines.js。古い Core では来ない）
     const waiting = [];
+    // Mantle から最初の文字が届くまでの時間（遅い往復で、どこで待ったかを見る）
+    let firstTextMs = null;
 
     try {
       const response = await handle(
@@ -385,6 +387,11 @@ async function runScenario({ core, scenario, runIndex, fake }) {
         {
           onSceneSelected: async (scene) => { sceneId = scene?.id || ''; },
           onWaitingLine: async (text) => { waiting.push(text); },
+          onMantleStreamEvent: async (event) => {
+            if (firstTextMs === null && event?.type === 'response.output_text.delta') {
+              firstTextMs = Date.now() - started;
+            }
+          },
         }
       );
       if (response?.type === 'error') {
@@ -409,6 +416,7 @@ async function runScenario({ core, scenario, runIndex, fake }) {
       reply,
       error,
       waiting,
+      firstTextMs,
       sceneId,
       mode: lastAssistant?.meta?.mode || '',
       ms: Date.now() - started,
@@ -513,7 +521,11 @@ function formatReport({ cores, scenarios, byCore, startedAt, options }) {
           const label = labels[index] ? `[${labels[index]}] ` : '';
           const waitingText = r.waiting?.length ? r.waiting.map((w) => `（待ってね:「${w}」）`).join('') : '';
           const body = `${waitingText}${r.error ? `（エラー: ${r.error}）` : r.reply}`;
-          const meta = `${r.sceneId || '-'}/${r.mode || '-'} ${(r.ms / 1000).toFixed(1)}s`;
+          // 遅かった往復は、最初の文字が届くまでの時間も出す（Mantle で待ったのか、ほかで待ったのか）
+          const firstText = r.ms >= 8000 && r.firstTextMs !== null && r.firstTextMs !== undefined
+            ? ` 最初の文字 ${(r.firstTextMs / 1000).toFixed(1)}s`
+            : '';
+          const meta = `${r.sceneId || '-'}/${r.mode || '-'} ${(r.ms / 1000).toFixed(1)}s${firstText}`;
           lines.push(`    ${label}ライム: ${body}   [${meta}]${r.flags.length ? `  ⚠ ${r.flags.join(' / ')}` : ''}`);
         });
       }
