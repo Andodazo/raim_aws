@@ -210,3 +210,124 @@ test('consumeMantleStream returns null usage when absent', async () => {
   const result = await consumeMantleStream(body, {});
   assert.equal(result.usage, null);
 });
+
+// ── 返事が来ないときの頼み直し（2026-11-13: Mantle がたまに30秒黙っていた） ─────────
+
+function abortError() {
+  return Object.assign(new Error('The operation was aborted'), { name: 'AbortError' });
+}
+
+/** response.created だけ送って黙る（中断されたらエラーにする）本文 */
+function silentBody(signal) {
+  const encoder = new TextEncoder();
+  return new ReadableStream({
+    start(controller) {
+      const created = { type: 'response.created', response: { id: 'resp-hang' } };
+      controller.enqueue(encoder.encode(`event: ${created.type}\ndata: ${JSON.stringify(created)}\n\n`));
+      signal.addEventListener('abort', () => controller.error(abortError()));
+    },
+  });
+}
+
+function okResponse() {
+  return {
+    ok: true,
+    status: 200,
+    headers: { get: () => 'request-ok' },
+    body: createSseBody([
+      { type: 'response.created', response: { id: 'resp-ok', created_at: 1782259200 } },
+      { type: 'response.output_text.delta', delta: '{"text":"やあ"}' },
+      { type: 'response.completed', response: { id: 'resp-ok', created_at: 1782259200, status: 'completed' } },
+    ]),
+  };
+}
+
+const RETRY_ENV = Object.freeze({
+  ...TEST_ENV,
+  MANTLE_TIMEOUT_MS: '400',
+  MANTLE_FIRST_OUTPUT_TIMEOUT_MS: '120',
+  MANTLE_SLOW_NOTICE_MS: '50',
+});
+
+test('createMantleClient asks once more when nothing comes back in time, and says "wait"', async () => {
+  let calls = 0;
+  const stages = [];
+  const client = createMantleClient({
+    env: RETRY_ENV,
+    apiKeyProvider: TEST_API_KEY_PROVIDER,
+    fetchImpl: async (url, options) => {
+      calls += 1;
+      if (calls === 1) {
+        // 届いたことは返すが、中身を送らずに黙る
+        return { ok: true, status: 200, headers: { get: () => '' }, body: silentBody(options.signal) };
+      }
+      return okResponse();
+    },
+  });
+
+  const result = await client({
+    mantleInput: { mode: 'initial', messages: [{ role: 'user', content: 'こんにちは' }] },
+    onWaiting: ({ stage }) => stages.push(stage),
+  });
+
+  assert.equal(calls, 2);
+  assert.equal(result.responseId, 'resp-ok');
+  assert.deepEqual(stages, ['slow', 'retry']);
+});
+
+test('createMantleClient also asks again when the request itself hangs', async () => {
+  let calls = 0;
+  const client = createMantleClient({
+    env: RETRY_ENV,
+    apiKeyProvider: TEST_API_KEY_PROVIDER,
+    fetchImpl: (url, options) => {
+      calls += 1;
+      if (calls === 1) {
+        return new Promise((resolve, reject) => {
+          options.signal.addEventListener('abort', () => reject(abortError()));
+        });
+      }
+      return Promise.resolve(okResponse());
+    },
+  });
+
+  const result = await client({ mantleInput: { mode: 'initial', messages: [{ role: 'user', content: 'やあ' }] } });
+  assert.equal(calls, 2);
+  assert.equal(result.responseId, 'resp-ok');
+});
+
+test('createMantleClient asks again only once, then times out as before', async () => {
+  let calls = 0;
+  const client = createMantleClient({
+    env: RETRY_ENV,
+    apiKeyProvider: TEST_API_KEY_PROVIDER,
+    fetchImpl: async (url, options) => {
+      calls += 1;
+      return { ok: true, status: 200, headers: { get: () => '' }, body: silentBody(options.signal) };
+    },
+  });
+
+  await assert.rejects(
+    client({ mantleInput: { mode: 'initial', messages: [{ role: 'user', content: 'やあ' }] } }),
+    (error) => error.code === 'MANTLE_TIMEOUT'
+  );
+  assert.equal(calls, 2);
+});
+
+test('createMantleClient does not ask again or say "wait" when the reply starts in time', async () => {
+  let calls = 0;
+  const stages = [];
+  const client = createMantleClient({
+    env: RETRY_ENV,
+    apiKeyProvider: TEST_API_KEY_PROVIDER,
+    fetchImpl: async () => {
+      calls += 1;
+      return okResponse();
+    },
+  });
+
+  await client({ mantleInput: { mode: 'initial', messages: [{ role: 'user', content: 'やあ' }] }, onWaiting: ({ stage }) => stages.push(stage) });
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(calls, 1);
+  assert.deepEqual(stages, []);
+});

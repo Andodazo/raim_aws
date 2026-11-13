@@ -47,6 +47,7 @@ const {
 const { selectScene } = require('./scene-selector');
 const { buildMantleInput } = require('./prompt-builder');
 const { createMantleResponse } = require('./mantle-client');
+const { pickWaitingLine } = require('./waiting-lines');
 const { normalizeMantleOutput } = require('./response-validator');
 const { MESSAGE_TYPES } = require('./types');
 const {
@@ -431,6 +432,8 @@ function createCoreChatService(dependencyOverrides = {}) {
     // 回してよい仕事（予定の知らせる文・「予定に入れる？」）を預ける。
     // 未指定なら、これまでどおり返す前に待つ。
     deferAfterReply,
+    // SQS経路ではsqs-core-handlerが渡す。Mantle の返事が遅いときのひとこと（waiting-lines.js）を流す。
+    onWaitingLine,
   } = {}) {
     const notifyToolCall = typeof onToolCallStart === 'function'
       ? onToolCallStart
@@ -862,6 +865,19 @@ function createCoreChatService(dependencyOverrides = {}) {
     // ツール結果を返す2回目以降の呼出では、直前のresponse_idを使って会話を継続する。
     // これによりツール呼出のコンテキストがMantle側に保持される。
     // ツールを使わない構成では、従来どおり1回だけ呼んで終わる。
+    // Mantle の返事が遅いときのひとこと。1回の発言で、遅いとき・頼み直すときそれぞれ1回まで。
+    // 話しかけと知らせのときは言わない（ライムから先に話すのに「待って」は変なので）
+    const spokenWaiting = new Set();
+    const speakWaiting = (!input.greeting && typeof onWaitingLine === 'function')
+      ? async ({ stage }) => {
+        if (spokenWaiting.has(stage)) return;
+        const line = pickWaitingLine(stage, dependencies.random || Math.random);
+        if (!line) return;
+        spokenWaiting.add(stage);
+        console.log(`[Mantle] waiting line: stage=${stage}`);
+        await onWaitingLine(line);
+      }
+      : null;
     const callMantle = async ({ input: currentInput, previousId, tools }) => {
       return dependencies.createMantleResponse({
         mantleInput: currentInput,
@@ -871,6 +887,7 @@ function createCoreChatService(dependencyOverrides = {}) {
         onTextDelta: onMantleTextDelta,
         tools,
         reasoningEffort,
+        onWaiting: speakWaiting,
       });
     };
 

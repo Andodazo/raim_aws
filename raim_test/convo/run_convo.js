@@ -367,6 +367,8 @@ async function runScenario({ core, scenario, runIndex, fake }) {
     const started = Date.now();
     let reply = '';
     let error = '';
+    // Mantle の返事が遅いときのひとこと（waiting-lines.js。古い Core では来ない）
+    const waiting = [];
 
     try {
       const response = await handle(
@@ -380,7 +382,10 @@ async function runScenario({ core, scenario, runIndex, fake }) {
             ...(step.reminder ? { reminder: step.reminder } : {}),
           }
           : { sub, requestId: `${sub}-${index}`, text: step.say, features },
-        { onSceneSelected: async (scene) => { sceneId = scene?.id || ''; } }
+        {
+          onSceneSelected: async (scene) => { sceneId = scene?.id || ''; },
+          onWaitingLine: async (text) => { waiting.push(text); },
+        }
       );
       if (response?.type === 'error') {
         error = `${response.code || 'error'}: ${response.message || ''}`;
@@ -403,6 +408,7 @@ async function runScenario({ core, scenario, runIndex, fake }) {
       reminder: Boolean(step.reminder),
       reply,
       error,
+      waiting,
       sceneId,
       mode: lastAssistant?.meta?.mode || '',
       ms: Date.now() - started,
@@ -505,7 +511,8 @@ function formatReport({ cores, scenarios, byCore, startedAt, options }) {
           const r = conversation?.results[i];
           if (!r) return;
           const label = labels[index] ? `[${labels[index]}] ` : '';
-          const body = r.error ? `（エラー: ${r.error}）` : r.reply;
+          const waitingText = r.waiting?.length ? r.waiting.map((w) => `（待ってね:「${w}」）`).join('') : '';
+          const body = `${waitingText}${r.error ? `（エラー: ${r.error}）` : r.reply}`;
           const meta = `${r.sceneId || '-'}/${r.mode || '-'} ${(r.ms / 1000).toFixed(1)}s`;
           lines.push(`    ${label}ライム: ${body}   [${meta}]${r.flags.length ? `  ⚠ ${r.flags.join(' / ')}` : ''}`);
         });
@@ -527,7 +534,8 @@ function formatReport({ cores, scenarios, byCore, startedAt, options }) {
     const replies = conversations.flatMap((c) => c.results.filter((r) => !r.error).map((r) => r.reply.length)).sort((a, b) => a - b);
     const median = replies.length ? replies[Math.floor(replies.length / 2)] : 0;
     const flaggedConversations = conversations.filter((c) => countFlags(c) > 0).length;
-    lines.push(`${core.label ? `[${core.label}] ` : ''}往復 ${turns}、エラー ${errors}、返事の長さの中央値 ${median}文字、引っかかった会話 ${flaggedConversations}/${conversations.length}`);
+    const waitingCount = conversations.reduce((s, c) => s + c.results.filter((r) => r.waiting?.length).length, 0);
+    lines.push(`${core.label ? `[${core.label}] ` : ''}往復 ${turns}、エラー ${errors}、待ってねを言った往復 ${waitingCount}、返事の長さの中央値 ${median}文字、引っかかった会話 ${flaggedConversations}/${conversations.length}`);
 
     // 会話をまたいで同じ言葉ばかり使っていないか（1つの会話の中だけでは見えない）
     const allReplies = conversations.flatMap((c) => c.results.filter((r) => !r.error).map((r) => r.reply));

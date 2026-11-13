@@ -160,6 +160,10 @@ function createSqsCoreHandler(dependencyOverrides = {}) {
         onToolCallStart: async ({ toolName, description, introText }) => {
           await publisher.toolCall({ toolName, description, introText });
         },
+        // Mantle の返事が遅いときのひとこと（前置きと同じく、声つきで先に出す）
+        onWaitingLine: async (text) => {
+          await publisher.filler(text);
+        },
         // ライムがアプリに頼んだ操作（駅アラームを始める など）を流す。
         onClientAction: async ({ action, params }) => {
           await publisher.clientAction({ action, params });
