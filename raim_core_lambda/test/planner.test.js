@@ -833,6 +833,19 @@ test('memo gate: memo words open it; list content opens it only with an action w
   assert.equal(openEmpty('買い物行ってきた'), false);
   assert.equal(openEmpty('買い物楽しかった'), false);
   assert.equal(openEmpty('パン足して'), false);
+  // 「買い物行ってきた」：チェックしていない買い物リストがあるときだけ開く（2026-11-13）
+  const shoppingList = [{ itemId: 'ls_cccccc00', kind: 'list', title: '買い物リスト', entries: [{ text: 'パン', checked: false }] }];
+  const allChecked = [{ itemId: 'ls_cccccc00', kind: 'list', title: '買うもの', entries: [{ text: 'パン', checked: true }] }];
+  const openWith = (userText, list) => plannerContext.shouldOpenPlanner({ features: ['planner'], userText, items: list });
+  assert.equal(openWith('買い物行ってきた', shoppingList), true);
+  assert.equal(openWith('買い出し終わったよ', shoppingList), true);
+  assert.equal(openWith('買い物してきた', shoppingList), true);
+  assert.equal(openWith('買い物行ってきた', allChecked), false);
+  assert.equal(openWith('買い物楽しかった', shoppingList), false);
+  assert.equal(openWith('散歩行ってきた', shoppingList), false);
+  assert.equal(plannerContext.mayNeedPlanner('買い物行ってきた'), true);
+  assert.equal(plannerContext.hasOpenShoppingList(shoppingList), true);
+  assert.equal(plannerContext.hasOpenShoppingList(allChecked), false);
   const context = buildPlannerContext({ items: [...items, { itemId: 'mm_bbbbbb00', kind: 'memo', text: '駐輪場は3階', createdAt: NOW.toISOString() }], now: NOW });
   assert.match(context, /メモ帳/);
   assert.match(context, /メモ「駐輪場は3階」（11\/11）/);

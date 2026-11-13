@@ -25,7 +25,7 @@ const {
   todayJst,
   daysBetween,
 } = require('./planner-dates');
-const { keyOf } = require('./planner-memo');
+const { keyOf, listKeyOf } = require('./planner-memo');
 
 const PLANNER_FEATURE = 'planner';
 
@@ -76,6 +76,14 @@ const SHOPPING_ADD_WORDS = Object.freeze([
   '加えて', 'くわえて', 'も買う', 'もかう', 'も買わ', 'もかわ',
 ]);
 
+// 「買い物行ってきた」：チェックしていない買い物リストがあるときだけメモ帳を開いて、
+// 何が買えたかを聞けるようにする。どれを買えたかは分からないので、勝手にチェックはしない（2026-11-13）
+const SHOPPING_DONE_WORDS = Object.freeze([
+  '行ってきた', 'いってきた', '行ってきました', 'いってきました', '行って来た',
+  '済んだ', 'すんだ', '済ませた', 'すませた', '済ませてきた', 'すませてきた',
+  '終わった', 'おわった', '終わりました', 'おわりました', 'してきた',
+]);
+
 // リストの項目を足す・チェックする言葉。リストの名前や項目が発言にあるかは、
 // 手帳を読んでから確かめる（この言葉だけでは開かない）
 const LIST_ACTION_WORDS = Object.freeze([
@@ -121,6 +129,27 @@ function mentionsMemo(userText) {
 }
 
 /**
+ * 買い物が済んだと言っているか（「買い物行ってきた」）。リストがあるかは見ない。
+ */
+function mentionsShoppingDone(userText) {
+  const text = String(userText || '');
+  if (!text) return false;
+  return SHOPPING_WORDS.some((word) => text.includes(word)) &&
+    SHOPPING_DONE_WORDS.some((word) => text.includes(word));
+}
+
+/**
+ * チェックしていない項目のある買い物リストがあるか。
+ */
+function hasOpenShoppingList(items = []) {
+  return items.some((item) => (
+    item?.kind === 'list' &&
+    listKeyOf(item.title) === 'かいもの' &&
+    (item.entries || []).some((entry) => !entry?.checked)
+  ));
+}
+
+/**
  * リストの項目を足す・チェックしそうな言葉があるか（手帳を読むかどうかだけに使う）。
  */
 function mentionsListAction(userText) {
@@ -154,6 +183,7 @@ function mayNeedPlanner(userText, history = []) {
   return mentionsPlanner(userText, { hasItems: true }) ||
     mentionsMemo(userText) ||
     mentionsListAction(userText) ||
+    mentionsShoppingDone(userText) ||
     previousTurnUsedPlanner(history);
 }
 
@@ -201,6 +231,7 @@ function shouldOpenPlanner({ features = [], userText = '', history = [], items =
   return mentionsPlanner(userText, { hasItems }) ||
     mentionsMemo(userText) ||
     (mentionsListAction(userText) && mentionsListContent(userText, items)) ||
+    (mentionsShoppingDone(userText) && hasOpenShoppingList(items)) ||
     previousTurnUsedPlanner(history);
 }
 
@@ -307,6 +338,7 @@ const MEMO_INSTRUCTION = [
   '- パスワード・暗証番号・カード番号などはメモしない。「それは自分で控えてね」と言う',
   '- 「メモ何あったっけ？」「買うもの何だっけ？」は show_memos。声で言うのは新しい順に3件まで。残りは「あと〇件あるよ」と言う（カードに全部出る）',
   '- 「牛乳買った」のように済んだと言われたら check_list_entries（聞き返さない）。チェックした項目は次の日に消える',
+  '- 何を買ったか言わずに、買い物に行ってきた・済んだとだけ言われたら、買うもののリストでまだチェックしていない項目を3つまで挙げて、買えたか聞く。このときはまだチェックしない。買えたと言われたものだけ check_list_entries',
   '- リストの項目だけ消すときは remove_list_entries',
   '- メモやリストそのものを消す前に「消していい？」と1回聞く。ユーザーが「うん」などと答えてから delete_memo',
   '- メモ帳に無いことを「メモしてある」と言わない',
@@ -368,6 +400,8 @@ module.exports = {
   mentionsMemo,
   mentionsListAction,
   mentionsListContent,
+  mentionsShoppingDone,
+  hasOpenShoppingList,
   mayNeedPlanner,
   memosOf,
   listsOf,
