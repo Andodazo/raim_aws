@@ -266,7 +266,9 @@ test('findEventCandidate returns a future event or null', async () => {
 // 会話の流れ
 // ─────────────────────────────────────────────
 
-const { normalizeReminder, buildReminderInstruction, reminderMatchesItem } = require('../lib/planner/planner-reminder');
+const {
+  normalizeReminder, buildReminderInstruction, reminderMatchesItem, reminderNeedsClaim, reminderSpokenKey, reminderAlreadySpoken,
+} = require('../lib/planner/planner-reminder');
 
 function buildService({ text, features = ['planner'], mantleResponses, store, helperResponses = {}, request = {}, thread = null, sessionState = null }) {
   const mainCalls = [];
@@ -697,9 +699,97 @@ test('flow: a timer reminder greeting reads the timer', async () => {
   assert.deepEqual(svc.appended[0].assistantMessage.meta.reminder, { itemId: 'tm_000001aa-0000', slot: 'timer' });
 });
 
-// ─────────────────────────────────────────────
-// タイマー（機能3）
-// ─────────────────────────────────────────────
+// Windows が時刻に話したあとスマホの通知を押すと、同じタイマーの話を2回していた（2026-11-13）
+test('flow: the same reminder is spoken only once; snooze always speaks', async () => {
+  const store = createFakeStore([
+    { itemId: 'tm_000001aa-0000', kind: 'timer', title: '洗濯物', durationSec: 1800, endsAt: NOW.toISOString() },
+  ]);
+  store.getItem = async (sub, itemId) => {
+    const item = store.items.find((i) => i.itemId === itemId);
+    return item ? { ...item } : null;
+  };
+  const marks = [];
+  store.markReminderSpoken = async (sub, itemId, slot, key) => {
+    marks.push({ itemId, slot, key });
+    const item = store.items.find((i) => i.itemId === itemId);
+    item[`spoken_${slot}`] = key;
+    return true;
+  };
+  const request = { greeting: true, reminder: { itemId: 'tm_000001aa-0000', slot: 'timer' } };
+
+  // Mantle が失敗した回は、話していない扱い（印を付けない）
+  const mantleDown = Object.assign(new Error('Mantle request timed out'), { coreErrorCode: 'LLM_TIMEOUT' });
+  const broken = buildService({ text: '', mantleResponses: [mantleDown], store, request });
+  await broken.run().catch(() => {});
+  assert.equal(marks.length, 0);
+
+  const first = buildService({ text: '', mantleResponses: [replyText('洗濯物の時間だよ')], store, request });
+  assert.equal((await first.run()).ok, true);
+  assert.deepEqual(marks, [{ itemId: 'tm_000001aa-0000', slot: 'timer', key: NOW.toISOString() }]);
+
+  // 2回目：AIを呼ばず、会話にも残さない
+  const second = buildService({ text: '', mantleResponses: [replyText('洗濯物の時間だよ')], store, request });
+  const again = await second.run();
+  assert.equal(again.ok, false);
+  assert.equal(again.code, 'REMINDER_ALREADY_SPOKEN');
+  assert.equal(again.retriable, false);
+  assert.equal(second.mainCalls.length, 0);
+  assert.equal(second.appended.length, 0);
+
+  // 「もう一回」は何回でも話す（印も付けない）
+  const snooze = buildService({
+    text: '', mantleResponses: [replyText('洗濯物、もう一回だよ')], store,
+    request: { greeting: true, reminder: { itemId: 'tm_000001aa-0000', slot: 'snooze' } },
+  });
+  assert.equal((await snooze.run()).ok, true);
+  assert.match(JSON.stringify(snooze.mainCalls[0].mantleInput || snooze.mainCalls[0]), /タイマーを知らせる話しかけ/);
+  assert.equal(marks.length, 1);
+
+  // タイマーをかけ直して終わる時刻が変わったら、また話す
+  store.items[0].endsAt = new Date(NOW.getTime() + 60000).toISOString();
+  const moved = buildService({ text: '', mantleResponses: [replyText('洗濯物の時間だよ')], store, request });
+  assert.equal((await moved.run()).ok, true);
+});
+
+test('reminder: spoken key follows the date/time, snooze is repeatable', () => {
+  assert.equal(reminderNeedsClaim('timer'), true);
+  assert.equal(reminderNeedsClaim('before'), true);
+  assert.equal(reminderNeedsClaim('snooze'), false);
+  assert.equal(reminderMatchesItem({ kind: 'timer' }, 'snooze'), true);
+  assert.equal(reminderMatchesItem({ kind: 'event' }, 'snooze'), false);
+  assert.deepEqual(normalizeReminder({ itemId: 'tm_123e4567-e89b', slot: 'snooze' }), { itemId: 'tm_123e4567-e89b', slot: 'snooze' });
+  assert.equal(reminderSpokenKey({ kind: 'event', date: '2026-11-12', time: '10:00' }), '2026-11-12 10:00');
+  assert.equal(reminderSpokenKey({ kind: 'event', date: '2026-11-12' }), '2026-11-12');
+  assert.equal(reminderSpokenKey({ kind: 'timer', endsAt: '2026-11-11T03:00:00.000Z' }), '2026-11-11T03:00:00.000Z');
+  const event = { kind: 'event', date: '2026-11-12', time: '10:00' };
+  assert.equal(reminderAlreadySpoken({ ...event, spoken_before: '2026-11-12 10:00' }, 'before'), true);
+  assert.equal(reminderAlreadySpoken({ ...event, spoken_before: '2026-11-12 09:00' }, 'before'), false);
+  assert.equal(reminderAlreadySpoken({ ...event, spoken_eve: '2026-11-12 10:00' }, 'before'), false);
+  assert.equal(reminderAlreadySpoken(event, 'before'), false);
+});
+
+test('store: markReminderSpoken writes spoken_<slot> only on an existing item', async () => {
+  const { createPlannerStore } = require('../lib/planner/planner-store');
+  const sent = [];
+  const docClient = {
+    async send(command) {
+      sent.push(command.input);
+      if (command.input.Key.itemId === 'ev_gone') {
+        const error = new Error('gone');
+        error.name = 'ConditionalCheckFailedException';
+        throw error;
+      }
+      return {};
+    },
+  };
+  const store = createPlannerStore({ docClient, now: () => NOW });
+  assert.equal(await store.markReminderSpoken('u1', 'ev_1', 'before', '2026-11-12 10:00'), true);
+  assert.equal(await store.markReminderSpoken('u1', 'ev_gone', 'before', '2026-11-12 10:00'), false);
+  assert.deepEqual(sent[0].Key, { sub: 'u1', itemId: 'ev_1' });
+  assert.deepEqual(sent[0].ExpressionAttributeNames, { '#spoken': 'spoken_before' });
+  assert.deepEqual(sent[0].ExpressionAttributeValues, { ':key': '2026-11-12 10:00' });
+  assert.equal(sent[0].ConditionExpression, 'attribute_exists(itemId)');
+});
 
 test('timer gate: timer words open the planner but do not look for an event suggestion', () => {
   const { mentionsTimer, mentionsEventDate } = require('../lib/planner/planner-context');

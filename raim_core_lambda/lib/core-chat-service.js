@@ -115,7 +115,17 @@ const {
   buildPlannerContext,
 } = require('./planner/planner-context');
 const { writeEventExtras, findEventCandidate } = require('./planner/planner-writer');
-const { buildReminderInstruction, buildReminderCue, reminderMatchesItem } = require('./planner/planner-reminder');
+const {
+  buildReminderInstruction,
+  buildReminderCue,
+  reminderMatchesItem,
+  reminderNeedsClaim,
+  reminderAlreadySpoken,
+  reminderSpokenKey,
+} = require('./planner/planner-reminder');
+
+// 同じ予定の知らせを、もう話していたときのエラーコード。アプリは何も出さずに会話を開くだけにする
+const REMINDER_ALREADY_SPOKEN = 'REMINDER_ALREADY_SPOKEN';
 const { todaysUpcomingEvents, buildBriefInstruction, briefWeather } = require('./planner/morning-brief');
 const { todayJst } = require('./planner/planner-dates');
 const { QUICK_REPLY_TOOL_NAMES, isPlannerTool, quickReplyOf, runPlannerTool } = require('./tools/planner');
@@ -641,6 +651,19 @@ function createCoreChatService(dependencyOverrides = {}) {
         console.error(`[Planner] reminder item read failed (non-fatal): ${error.message}`);
       }
       if (!reminderItem) console.warn('[Greeting] reminder item not found; using a normal greeting');
+    }
+    // 同じ知らせはもう話していたら、2回目は話さない（2026-11-13）。
+    // Windows が時刻に話したあとスマホの通知を押すと、同じタイマーの話をもう一度していた。
+    // 印は話し終えたあと（7-a）に付けるので、Mantle が失敗した回は話していない扱いのまま
+    if (reminderItem && reminderNeedsClaim(input.reminder.slot) &&
+        reminderAlreadySpoken(reminderItem, input.reminder.slot)) {
+      console.log(`[Greeting] reminder already spoken; skipping slot=${input.reminder.slot}`);
+      return createCoreError({
+        requestId: input.requestId,
+        code: REMINDER_ALREADY_SPOKEN,
+        message: 'This reminder was already spoken',
+        retriable: false,
+      });
     }
     if (reminderItem) {
       greetingInstruction = buildReminderInstruction({ item: reminderItem, slot: input.reminder.slot, now });
@@ -1470,6 +1493,21 @@ function createCoreChatService(dependencyOverrides = {}) {
       }
     }
 
+    // 7-a2. 知らせを話したことを予定に印として残す（同じ知らせを2回話さないように）
+    if (reminderItem && reminderNeedsClaim(input.reminder.slot) && output.text &&
+        typeof dependencies.plannerStore.markReminderSpoken === 'function') {
+      try {
+        await dependencies.plannerStore.markReminderSpoken(
+          input.sub,
+          reminderItem.itemId,
+          input.reminder.slot,
+          reminderSpokenKey(reminderItem)
+        );
+      } catch (error) {
+        console.error(`[Planner] reminder mark failed (non-fatal): ${error.message}`);
+      }
+    }
+
     // 7-b. 予定の知らせる文・「予定に入れる？」ボタンを仕上げる。
     // 返事はもう出ているので、待つのは上限まで（過ぎたら決まり文句のまま）。
     //
@@ -1517,6 +1555,7 @@ function createCoreChatService(dependencyOverrides = {}) {
 const handleCoreChat = createCoreChatService();
 
 module.exports = {
+  REMINDER_ALREADY_SPOKEN,
   createCoreChatService,
   handleCoreChat,
 };
