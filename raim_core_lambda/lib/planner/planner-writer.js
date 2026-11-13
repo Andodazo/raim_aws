@@ -167,9 +167,10 @@ function buildCandidateMessages({ userText, now }) {
       role: 'system',
       content: [
         '次のユーザーの発言に、ユーザー本人のこれから先の予定（いつか分かるもの）が出ているかを見る。',
-        '出ていれば JSON で返す: {"title":"予定の短い名前（12字まで）","date":"YYYY-MM-DD","time":"HH:mm か 空"}',
+        '出ていれば JSON で返す: {"title":"予定の短い名前（12字まで）","date":"YYYY-MM-DD","time":"HH:mm か 空","importance":"important か normal か chore"}',
         '出ていなければ {"none":true} を返す。',
         '- 過去のこと、もしもの話、ほかの人の予定、毎日のこと（「毎朝」など）、ただの話題は none',
+        '- importance は、終わったあとに「どうだった？」と聞く価値で決める。important: 面接・試験・テスト・発表・試合・病院など本人にとって大きいこと。normal: 遊び・映画・買い物・食事など。chore: ゴミ出し・振込・支払い・返却などの用事',
         '- 日付は下の表から選ぶ。決められなければ none',
         '- JSON だけを返す',
         '',
@@ -184,7 +185,9 @@ function buildCandidateMessages({ userText, now }) {
 /**
  * 話に出ただけの予定（「予定に入れる？」ボタンの中身）を探す。無ければ null。
  *
- * @returns {Promise<{ title: string, date: string, time: string } | null>}
+ * importance は「あとで聞くこと」の聞き方に使う（押されなかったボタンも、大事なものは必ず聞く）。
+ *
+ * @returns {Promise<{ title: string, date: string, time: string, importance: string } | null>}
  */
 async function findEventCandidate({ userText, now = new Date(), createResponse }) {
   try {
@@ -202,7 +205,8 @@ async function findEventCandidate({ userText, now = new Date(), createResponse }
     // 今日より前は予定ではない
     if (daysBetween(todayJst(now), date) < 0) return null;
 
-    return { title, date, time };
+    const importance = IMPORTANCE.includes(parsed.importance) ? parsed.importance : 'normal';
+    return { title, date, time, importance };
   } catch (error) {
     console.warn(`[Planner] candidate failed (non-fatal): ${error.message}`);
     return null;

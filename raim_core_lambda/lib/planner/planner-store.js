@@ -263,7 +263,8 @@ function createPlannerStore({ docClient, tableName = TABLE_NAME, now = () => new
       title: cleanText(candidate.title, MAX_TITLE_LENGTH),
       date: candidate.date,
       time: candidate.time || '',
-      importance: 'normal',
+      // 押されなかったボタンも、大事なもの（面接など）は必ず聞く（follow-up.js）
+      importance: IMPORTANCE.includes(candidate.importance) ? candidate.importance : 'normal',
       source: 'suggest',
       createdAt: timestamp,
       updatedAt: timestamp,

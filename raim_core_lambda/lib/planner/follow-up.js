@@ -8,7 +8,9 @@
 //   - 聞くのは、予定に入っているものと、「予定に入れる？」ボタンが押されなかったもの
 //   - 大事さ（予定を入れるときに LLM が決める）で聞き方を変える
 //       大事（面接・試験・発表・試合・病院） 前日・当日の知らせで応援（planner-reminder.js）、終わったら必ず聞く
-//       ふつう（遊び・映画・買い物、押されなかったボタンのもの） 3回に1回くらい、数日以内に聞く
+//       ふつう（遊び・映画・買い物） 3回に1回くらい、数日以内に聞く
+//     押されなかったボタンのものも、ボタンを出すときに LLM が大事さを決める（2026-11-13 に変更。
+//     以前はいつも「ふつう」で、面接でも3回に1回だった）
 //       用事（ゴミ出し・振込） 聞かない
 //   - 押されなかったボタンのものは「あとで聞くこと」（kind followup, itemId fu_…）として持つ。
 //     予定の一覧には出さず、「予定とメモ」画面の下に小さく出して消せるようにする
@@ -75,15 +77,14 @@ function rollsToAsk(itemId) {
 
 /** 大事さに合わせて、聞く対象か */
 function wantsToAsk(item) {
-  if (item.kind === 'followup') return rollsToAsk(item.itemId);
-  if (item.kind !== 'event') return false;
+  if (item.kind !== 'event' && item.kind !== 'followup') return false;
   if (item.importance === 'important') return true;
   if (item.importance === 'chore') return false;
   return rollsToAsk(item.itemId);
 }
 
 function windowDaysOf(item) {
-  return item.kind === 'event' && item.importance === 'important' ? IMPORTANT_WINDOW_DAYS : NORMAL_WINDOW_DAYS;
+  return item.importance === 'important' ? IMPORTANT_WINDOW_DAYS : NORMAL_WINDOW_DAYS;
 }
 
 /**
@@ -183,7 +184,7 @@ function whenText(item, now = new Date()) {
 
 function describe(item, now) {
   const kind = item.kind === 'followup'
-    ? 'ユーザーが前に話していたこと（予定には入っていない）'
+    ? `ユーザーが前に話していた${item.importance === 'important' ? '大事な' : ''}こと（予定には入っていない）`
     : item.importance === 'important' ? '大事な予定' : '予定';
   return `- ${whenText(item, now)}：${item.title}（${kind}）`;
 }
