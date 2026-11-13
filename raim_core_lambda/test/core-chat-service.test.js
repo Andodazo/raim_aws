@@ -780,3 +780,33 @@ test('the first turn of a thread records the memory version it sent', async () =
 
   assert.equal(appended[0].memoryInjectedAt, '2026-11-06T03:00:00.000Z');
 });
+
+// 2026-11-13: Mantle が黙っている間、アプリは「考えているよ」のままだった
+test('a slow Mantle makes ライム say a waiting line once per stage, but not for greetings', async () => {
+  const run = async (event) => {
+    const calls = [];
+    const lines = [];
+    const dependencies = createDependencies(calls);
+    dependencies.random = () => 0;
+    const original = dependencies.createMantleResponse;
+    dependencies.createMantleResponse = async (params) => {
+      if (typeof params.onWaiting === 'function') {
+        await params.onWaiting({ stage: 'slow' });
+        await params.onWaiting({ stage: 'slow' });
+        await params.onWaiting({ stage: 'retry' });
+      }
+      return original(params);
+    };
+    await createCoreChatService(dependencies)(
+      { sub: 'user-1', requestId: 'req-wait', text: 'こんにちは', images: [], ...event },
+      { onWaitingLine: async (text) => lines.push(text) }
+    );
+    return lines;
+  };
+
+  assert.deepEqual(await run({}), [
+    'ちょっと待ってね、いま考えてる',
+    'ごめん、頭が固まってた。もうちょっとだけ待って',
+  ]);
+  assert.deepEqual(await run({ text: '', greeting: true }), []);
+});

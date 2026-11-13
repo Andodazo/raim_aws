@@ -385,6 +385,22 @@ function createResponseQueuePublisher({
     //
     // 前置きセリフを通常のtextとして流すことで、
     // クライアントは特別な処理をしなくても発話として表示できる。
+    // 返事の前に出すひとこと（Mantle の返事が遅いとき。waiting-lines.js）。
+    // ツールの前置きと同じく、本文より先に声つきで出し、本文の前で吹き出しを分ける。
+    async filler(text) {
+      const line = String(text || '').trim();
+      if (!line) return;
+      await flushText();
+      const chunkId = nextChunkId();
+      await send('stream.delta', {
+        textDelta: line,
+        chunkId,
+        isFiller: true,
+      });
+      enqueueAudio({ chunkId, text: line });
+      bubbleBreakPending = true;
+    },
+
     async toolCall({ toolName, description, introText }) {
       if (introText) {
         // バッファを経由せず即時に送る。ツール実行の待ち時間より先に届かせたい。

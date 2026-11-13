@@ -29,6 +29,9 @@
 // - MANTLE_API_KEY_HEADER: APIキーを入れるヘッダー。既定値 Authorization
 // - MANTLE_API_KEY_PREFIX: APIキーのprefix。既定値 Bearer
 // - MANTLE_TIMEOUT_MS: HTTPタイムアウト。既定値 30000ms
+// - MANTLE_FIRST_OUTPUT_TIMEOUT_MS: この間に返事が1文字も来なければ、打ち切って1回だけ頼み直す。
+//   既定値 15000ms（0 で頼み直さない）
+// - MANTLE_SLOW_NOTICE_MS: この間に返事が来なければ「待ってね」のひとことを頼む（onWaiting）。既定値 8000ms
 // - MANTLE_MAX_OUTPUT_TOKENS: 最大出力token数。既定値 1024
 //
 // APIキーはログやエラーdetailsへ出さないこと。
@@ -553,7 +556,11 @@ function createMantleClient({
     throw new Error('Mantle API key provider is required');
   }
 
-  return async function createMantleResponse({
+  /**
+   * 1回分の呼び出し。[firstOutputMs] が 0 より大きければ、その間に返事が1文字も来ないとき
+   * 打ち切って MANTLE_NO_OUTPUT を投げる（呼び出し側が頼み直す）。
+   */
+  const sendOnce = async function sendOnce({
     mantleInput,
     previousResponseId = '',
     store = true,
@@ -564,6 +571,9 @@ function createMantleClient({
     tools = null,
     // このターンだけ reasoning effort を変えるとき（空なら環境変数どおり）
     reasoningEffort = '',
+    firstOutputMs = 0,
+    slowNoticeMs = 0,
+    onSlow = null,
   }) {
     if (!mantleInput || typeof mantleInput !== 'object') {
       throw new Error('mantleInput is required');
@@ -588,6 +598,25 @@ function createMantleClient({
     // AbortControllerでHTTP通信単体のタイムアウトを設ける。
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    // 返事が来始めたか。来始めるまでの待ちだけを見張る（来始めたあとは MANTLE_TIMEOUT_MS まで待つ）
+    let gotOutput = false;
+    let noOutput = false;
+    const firstOutputTimer = firstOutputMs > 0
+      ? setTimeout(() => {
+        if (gotOutput) return;
+        noOutput = true;
+        controller.abort();
+      }, firstOutputMs)
+      : null;
+    const slowTimer = slowNoticeMs > 0 && typeof onSlow === 'function'
+      ? setTimeout(() => {
+        if (!gotOutput) onSlow();
+      }, slowNoticeMs)
+      : null;
+    const watchOutput = async (event) => {
+      if (!gotOutput && isOutputEvent(event)) gotOutput = true;
+      if (typeof onStreamEvent === 'function') await onStreamEvent(event);
+    };
     // 3. 認証headerはMantle環境差を吸収できるよう、header名とprefixも設定可能にする。
     // 既定値は Authorization: Bearer <API_KEY>。
     const headers = {
@@ -638,7 +667,7 @@ function createMantleClient({
 
       // 6. SSEを逐次読み、delta callbackを呼びながら最終responseも組み立てる。
       const streamed = await consumeMantleStream(response.body, {
-        onStreamEvent,
+        onStreamEvent: watchOutput,
         onTextDelta,
       });
       const responseId = String(streamed.responseId || '').trim();
@@ -677,6 +706,16 @@ function createMantleClient({
         usage: streamed.usage || null,
       };
     } catch (error) {
+      // 返事が来始めないまま打ち切った（呼び出し側が頼み直す）
+      if (error.name === 'AbortError' && noOutput) {
+        const noOutputError = new Error(`Mantle sent nothing in ${firstOutputMs}ms`);
+        noOutputError.name = 'MantleNoOutputError';
+        noOutputError.code = 'MANTLE_NO_OUTPUT';
+        noOutputError.coreErrorCode = 'LLM_TIMEOUT';
+        noOutputError.retriable = true;
+        throw noOutputError;
+      }
+
       // AbortControllerによる中断だけは明示的なtimeoutエラーへ変換する。
       if (error.name === 'AbortError') {
         const timeoutError = new Error(`Mantle request timed out after ${timeoutMs}ms`);
@@ -697,8 +736,60 @@ function createMantleClient({
     } finally {
       // 正常終了・例外のどちらでもtimerを解放し、Lambdaコンテナへ不要なhandleを残さない。
       clearTimeout(timeout);
+      if (firstOutputTimer) clearTimeout(firstOutputTimer);
+      if (slowTimer) clearTimeout(slowTimer);
     }
   };
+
+  /**
+   * Mantle を呼ぶ。返事が1文字も来ないまま [MANTLE_FIRST_OUTPUT_TIMEOUT_MS] たったら、1回だけ頼み直す。
+   *
+   * Mantle はふだん1〜3秒で返すが、たまに30秒黙ってタイムアウトしていた（2026-11-13 の会話テストで
+   * 200往復に5回。本番の「processing failed」も同じ）。頼み直すと、たいてい数秒で返ってくる。
+   *
+   * onWaiting({ stage }) は、待たせているときに呼ぶ（stage: 'slow' は少し遅いとき、'retry' は頼み直すとき）。
+   * ライムに「待ってね」と言わせるのに使う。
+   */
+  return async function createMantleResponse({ onWaiting = null, ...params }) {
+    const firstOutputMs = numberSetting(env, 'MANTLE_FIRST_OUTPUT_TIMEOUT_MS', 15000);
+    const slowNoticeMs = numberSetting(env, 'MANTLE_SLOW_NOTICE_MS', 8000);
+    const notify = (stage) => {
+      if (typeof onWaiting !== 'function') return;
+      Promise.resolve()
+        .then(() => onWaiting({ stage }))
+        .catch((error) => console.warn(`[Mantle] waiting notice failed: ${error.message}`));
+    };
+
+    if (firstOutputMs <= 0) {
+      return sendOnce({ ...params, slowNoticeMs, onSlow: () => notify('slow') });
+    }
+    try {
+      return await sendOnce({
+        ...params,
+        firstOutputMs,
+        slowNoticeMs: slowNoticeMs < firstOutputMs ? slowNoticeMs : 0,
+        onSlow: () => notify('slow'),
+      });
+    } catch (error) {
+      if (error.code !== 'MANTLE_NO_OUTPUT') throw error;
+      console.warn(`[Mantle] nothing in ${firstOutputMs}ms; asking once more`);
+      notify('retry');
+      return sendOnce(params);
+    }
+  };
+}
+
+/**
+ * 返事の中身が来始めたことを示すイベントか（作成・進行中の知らせは数えない）。
+ */
+function isOutputEvent(event) {
+  const type = String(event?.type || '');
+  return type.startsWith('response.output') ||
+    type.startsWith('response.function_call') ||
+    type === 'response.completed' ||
+    type === 'response.failed' ||
+    type === 'response.incomplete' ||
+    type === 'error';
 }
 
 const createMantleResponse = createMantleClient();
