@@ -146,3 +146,19 @@ test('angles do not carry example phrases (they get copied)', () => {
     assert.doesNotMatch(angle.text, /など）|ゲーム|待ってた|寒く/);
   }
 });
+
+test('the "self" angle gets a topic chosen in code (it kept choosing games)', () => {
+  const { SELF_TOPICS } = require('../lib/greeting');
+  const selfIndex = GREETING_ANGLES.findIndex((angle) => angle.id === 'self');
+  const topics = new Set();
+  for (let i = 0; i < SELF_TOPICS.length; i += 1) {
+    const values = [(selfIndex + 0.5) / GREETING_ANGLES.length, (i + 0.5) / SELF_TOPICS.length];
+    const angle = pickGreetingAngle({ hasMemory: true, random: () => values.shift() });
+    assert.equal(angle.id, 'self');
+    assert.match(angle.text, new RegExp(`今回は「${angle.topic}」のこと`));
+    topics.add(angle.topic);
+  }
+  assert.equal(topics.size, SELF_TOPICS.length);
+  // 選ぶたびに元の一覧を書き換えない
+  assert.doesNotMatch(GREETING_ANGLES[selfIndex].text, /今回は/);
+});

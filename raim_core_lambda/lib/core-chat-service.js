@@ -683,7 +683,7 @@ function createCoreChatService(dependencyOverrides = {}) {
         random: dependencies.random || Math.random,
       });
       greetingInstruction = buildGreetingInstruction(angle);
-      console.log(`[Greeting] angle=${angle ? angle.id : 'long_gap'}`);
+      console.log(`[Greeting] angle=${angle ? angle.id : 'long_gap'}${angle?.topic ? ` topic=${angle.topic}` : ''}`);
     }
     // 出だしもコードで振り分ける（「やっほー」ばかりだった。greeting.js 参照）
     if (input.greeting && greetingInstruction) {
