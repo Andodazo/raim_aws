@@ -523,6 +523,8 @@ test('flow: a timer reminder greeting reads the timer', async () => {
   // Windows で開いたまま鳴ったときに「どうしたの？」と返していた（2026-11-13）
   assert.match(prompt, /タイマーの時間になった合図/);
   assert.doesNotMatch(prompt, /アプリが開かれた合図/);
+  // 知らせは挨拶の言葉を付けずに中身から（「やっほー！」で始めていた）
+  assert.match(prompt, /挨拶の言葉は付けずに/);
   assert.deepEqual(svc.appended[0].assistantMessage.meta.reminder, { itemId: 'tm_000001aa-0000', slot: 'timer' });
 });
 

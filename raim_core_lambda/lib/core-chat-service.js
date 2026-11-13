@@ -85,6 +85,9 @@ const {
   buildGreetingInstruction,
   isAfterHardTalk,
   buildCareGreetingInstruction,
+  lastGreetingOpening,
+  buildOpeningLine,
+  PLAIN_OPENING_LINE,
 } = require('./greeting');
 const { shouldSummarize } = require('./summary-trigger');
 const { dispatchSummarization } = require('./summary-dispatcher');
@@ -629,6 +632,16 @@ function createCoreChatService(dependencyOverrides = {}) {
       });
       greetingInstruction = buildGreetingInstruction(angle);
       console.log(`[Greeting] angle=${angle ? angle.id : 'long_gap'}`);
+    }
+    // 出だしもコードで振り分ける（「やっほー」ばかりだった。greeting.js 参照）
+    if (input.greeting && greetingInstruction) {
+      const openingLine = buildOpeningLine({
+        previousOpening: lastGreetingOpening(threadMessages),
+        reminder: Boolean(reminderItem),
+        random: dependencies.random || Math.random,
+      });
+      greetingInstruction = `${greetingInstruction}\n${openingLine}`;
+      console.log(`[Greeting] opening=${openingLine === PLAIN_OPENING_LINE ? 'plain' : 'greet'}`);
     }
 
     // 3-e. 記憶を渡し直すか。

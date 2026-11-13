@@ -95,3 +95,24 @@ test('care greeting has no angle and asks gently', () => {
   // ふつうの話しかけにも、つらい話のあとの保険が入っている
   assert.ok(GREETING_INSTRUCTION.includes('直前の会話がつらい話だったら'));
 });
+
+// 話しかけの16回中13回が「やっほー」で始まっていた（2026-11-13）
+test('opening: about half start without a greeting word, the rest avoid the last opening', () => {
+  const { buildOpeningLine, lastGreetingOpening, PLAIN_OPENING_LINE } = require('../lib/greeting');
+  assert.equal(buildOpeningLine({ random: () => 0.1 }), PLAIN_OPENING_LINE);
+  assert.match(buildOpeningLine({ previousOpening: 'やっほー', random: () => 0.9 }), /前回の話しかけの出だし「やっほー」とは違う/);
+  assert.match(buildOpeningLine({ random: () => 0.9 }), /決まった言い方にしない/);
+  // 知らせる話しかけは、いつも中身から
+  assert.equal(buildOpeningLine({ previousOpening: 'やっほー', reminder: true, random: () => 0.9 }), PLAIN_OPENING_LINE);
+
+  const messages = [
+    { role: 'assistant', text: 'やっほー！また来てくれたね', meta: { greeting: true } },
+    { role: 'user', text: 'ただいま' },
+    { role: 'assistant', text: 'おかえり。今日はどうだった？', meta: { greeting: true } },
+    { role: 'assistant', text: 'それはよかった', meta: {} },
+  ];
+  assert.equal(lastGreetingOpening(messages), 'おかえり');
+  assert.equal(lastGreetingOpening([{ role: 'assistant', text: 'ふつうの返事' }]), '');
+  assert.equal(lastGreetingOpening([]), '');
+  assert.equal(lastGreetingOpening([{ role: 'assistant', text: 'あいうえおかきくけこさしすせそ', meta: { greeting: true } }]).length, 12);
+});

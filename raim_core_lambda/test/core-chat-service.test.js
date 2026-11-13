@@ -587,6 +587,35 @@ test('greeting right after a hard talk gently checks in instead of using an angl
   assert.doesNotMatch(build[1].greetingInstruction, /今回の切り口/);
 });
 
+// 2026-11-13: 話しかけの16回中13回が「やっほー」で始まっていた
+test('greeting decides the opening in code and passes the last opening to avoid', async () => {
+  const run = async (randomValue) => {
+    const calls = [];
+    const dependencies = createDependencies(calls);
+    dependencies.random = () => randomValue;
+    dependencies.resolveThread = async () => ({
+      threadId: 'thread-open',
+      isNew: false,
+      thread: {
+        messages: [
+          { role: 'assistant', text: 'やっほー！また来てくれたね', meta: { greeting: true }, createdAt: '2026-11-13T01:00:00.000Z' },
+          { role: 'user', text: 'うん', createdAt: '2026-11-13T01:00:10.000Z' },
+        ],
+      },
+    });
+    dependencies.buildMantleInput = (input) => {
+      calls.push(['build', input]);
+      return input;
+    };
+    await createCoreChatService(dependencies)({
+      sub: 'user-1', requestId: `req-open-${randomValue}`, text: '', images: [], greeting: true,
+    });
+    return calls.find(([name]) => name === 'build')[1].greetingInstruction;
+  };
+  assert.match(await run(0.1), /挨拶の言葉は付けずに/);
+  assert.match(await run(0.9), /出だし「やっほー」とは違う/);
+});
+
 // ── 会話の切り替えと記憶 ─────────────────────────
 
 function runChat(overrides = {}, event = {}) {
