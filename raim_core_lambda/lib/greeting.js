@@ -151,6 +151,51 @@ function buildGreetingInstruction(angle) {
   return [GREETING_INSTRUCTION, ...extra].join('\n');
 }
 
+// ------------------------------------------------------------------------------
+// 出だし
+// ------------------------------------------------------------------------------
+//
+// 話しかけ16回のうち13回が「やっほー」で始まっていた（2026-11-13、知らせる話しかけも含む）。
+// 切り口を変えても、Gemma は温度を指定できないので、出だしの挨拶は同じ言葉に寄る。
+// 出だしもコードで振り分ける（安藤さんと決めた）。
+//   - 半分くらいは、挨拶の言葉を付けずに中身から話しはじめる
+//   - 残りは挨拶してよいが、前回の話しかけの出だしとは違う言い方にする（前回の出だしを渡す）
+//   - 予定・タイマーを知らせるときは、いつも中身から（何の知らせかを先に）
+// 例の言葉は足さない（例に挙げた言葉は丸写しされる。raim-system-prompt.js の v6.5 参照）。
+
+/** 挨拶の言葉を付けずに話しはじめる割合 */
+const PLAIN_OPENING_RATE = 0.5;
+
+const PLAIN_OPENING_LINE = '- 挨拶の言葉は付けずに、いきなり中身から話しはじめる';
+
+/**
+ * この会話で最後にした話しかけの出だし（最初の区切りまで。長ければ12文字まで）。無ければ ''。
+ *
+ * @param {Array} messages 今の会話（appendTurn の前の状態）
+ */
+function lastGreetingOpening(messages = []) {
+  const list = Array.isArray(messages) ? messages : [];
+  const last = [...list].reverse().find((m) => m?.role === 'assistant' && m.meta?.greeting);
+  const text = String(last?.text || '').trim();
+  if (!text) return '';
+  return text.split(/[。、！!？?,.\s]/)[0].trim().slice(0, 12);
+}
+
+/**
+ * 出だしの指示を1行。
+ *
+ * @param {Object} params
+ * @param {string} [params.previousOpening] 前回の話しかけの出だし（lastGreetingOpening）
+ * @param {boolean} [params.reminder] 予定・タイマーを知らせる話しかけか（いつも中身から）
+ * @param {Function} [params.random] テストで固定できるよう注入可能
+ */
+function buildOpeningLine({ previousOpening = '', reminder = false, random = Math.random } = {}) {
+  if (reminder || random() < PLAIN_OPENING_RATE) return PLAIN_OPENING_LINE;
+  return previousOpening
+    ? `- 挨拶から始めてよいが、前回の話しかけの出だし「${previousOpening}」とは違う言い方にする`
+    : '- 挨拶から始めてよいが、決まった言い方にしない';
+}
+
 module.exports = {
   GREETING_USER_TEXT,
   GREETING_SCENE_TEXT,
@@ -163,4 +208,8 @@ module.exports = {
   HARD_TALK_WORDS,
   isAfterHardTalk,
   buildCareGreetingInstruction,
+  PLAIN_OPENING_RATE,
+  PLAIN_OPENING_LINE,
+  lastGreetingOpening,
+  buildOpeningLine,
 };
