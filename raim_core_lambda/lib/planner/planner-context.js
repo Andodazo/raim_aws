@@ -68,6 +68,14 @@ const MEMO_WORDS = Object.freeze([
   'リスト', 'りすと', '控えて', 'ひかえて', '控えといて', '書いといて', '書いておいて',
 ]);
 
+// 「買い物にパン足して」：買い物リストがまだ無くても、足す言葉と一緒ならメモ帳を開く。
+// 「買い物行ってきた」のように足す言葉が無いときは開かない（2026-11-13）
+const SHOPPING_WORDS = Object.freeze(['買い物', 'かいもの', '買いもの', '買い出し', 'かいだし']);
+const SHOPPING_ADD_WORDS = Object.freeze([
+  '足して', 'たして', '足しといて', 'たしといて', '追加', '入れて', 'いれて', '入れといて', 'いれといて',
+  '加えて', 'くわえて', 'も買う', 'もかう', 'も買わ', 'もかわ',
+]);
+
 // リストの項目を足す・チェックする言葉。リストの名前や項目が発言にあるかは、
 // 手帳を読んでから確かめる（この言葉だけでは開かない）
 const LIST_ACTION_WORDS = Object.freeze([
@@ -102,12 +110,14 @@ function mentionsPlanner(userText, { hasItems = false } = {}) {
 }
 
 /**
- * メモ帳の言葉があるか（「メモして」「買うもの何だっけ」）。
+ * メモ帳の言葉があるか（「メモして」「買うもの何だっけ」「買い物にパン足して」）。
  */
 function mentionsMemo(userText) {
   const text = String(userText || '');
   if (!text) return false;
-  return MEMO_WORDS.some((word) => text.includes(word));
+  if (MEMO_WORDS.some((word) => text.includes(word))) return true;
+  return SHOPPING_WORDS.some((word) => text.includes(word)) &&
+    SHOPPING_ADD_WORDS.some((word) => text.includes(word));
 }
 
 /**

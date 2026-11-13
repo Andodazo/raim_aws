@@ -685,6 +685,15 @@ test('memo gate: memo words open it; list content opens it only with an action w
   assert.equal(open('ゲームやった'), false);
   assert.equal(open('おすすめの映画ある？'), false);
   assert.equal(plannerContext.mayNeedPlanner('ゲームしてた'), false);
+  // 買い物リストがまだ無くても、「買い物」と足す言葉がそろえば開く（2026-11-13）
+  const openEmpty = (userText) => plannerContext.shouldOpenPlanner({ features: ['planner'], userText, items: [] });
+  assert.equal(openEmpty('買い物にパン足して'), true);
+  assert.equal(openEmpty('買い出しのとき卵も買う'), true);
+  assert.equal(openEmpty('かいものに洗剤追加で'), true);
+  assert.equal(plannerContext.mayNeedPlanner('買い物にパン足して'), true);
+  assert.equal(openEmpty('買い物行ってきた'), false);
+  assert.equal(openEmpty('買い物楽しかった'), false);
+  assert.equal(openEmpty('パン足して'), false);
   const context = buildPlannerContext({ items: [...items, { itemId: 'mm_bbbbbb00', kind: 'memo', text: '駐輪場は3階', createdAt: NOW.toISOString() }], now: NOW });
   assert.match(context, /メモ帳/);
   assert.match(context, /メモ「駐輪場は3階」（11\/11）/);
