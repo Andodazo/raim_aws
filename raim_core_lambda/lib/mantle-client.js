@@ -780,12 +780,17 @@ function createMantleClient({
 }
 
 /**
- * 返事の中身が来始めたことを示すイベントか（作成・進行中の知らせは数えない）。
+ * 返事の中身が来始めたことを示すイベントか。
+ *
+ * 作成・進行中の知らせと、中身の入れ物ができた知らせ（output_item.added、content_part.added）は数えない。
+ * 入れ物だけ届いて文字が来ないまま黙ることがあり得るため、文字やツールの引数が届いたときだけ数える。
  */
 function isOutputEvent(event) {
   const type = String(event?.type || '');
-  return type.startsWith('response.output') ||
-    type.startsWith('response.function_call') ||
+  return type === 'response.output_text.delta' ||
+    type === 'response.output_text.done' ||
+    type.startsWith('response.function_call_arguments') ||
+    type === 'response.output_item.done' ||
     type === 'response.completed' ||
     type === 'response.failed' ||
     type === 'response.incomplete' ||
