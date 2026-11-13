@@ -37,6 +37,7 @@ const GREETING_INSTRUCTION = [
   '- 時間帯と、前回話してからの間に合わせる',
   '- 覚えていることには、切り口で言われたときだけ触れる',
   '- 「何か用？」「何でも聞いてね」のような受付っぽい言い方はしない',
+  '- 相手が自分に会いたかった、自分のことを考えていたと決めつけない',
   '- 「アプリが開かれた」「合図」には触れない',
   '- 直前の会話がつらい話だったら、明るいノリやボケはしない',
 ].join('\n');
@@ -57,13 +58,28 @@ const GREETING_INSTRUCTION = [
 // 切り口の文には例を書かない。以前は「ゲームしてた」「待ってた」「寒くなってきたね」と例を書いていて、
 // 「ゲームの攻略法を考えてた」「私のこと待ってた？」「寒くなってきたね」ばかりになった（2026-11-13 のテスト）。
 
+/**
+ * 近況の切り口で話す話題。コードで毎回1つ選ぶ。
+ *
+ * 選ばせると、好きなものに書いてあるゲームばかり選び、「ゲームの攻略法を考えてた」が続いた（2026-11-13）。
+ * 好きなもの（prompts の【性格】）と、ふだんの身の回りから選ぶ。
+ */
+const SELF_TOPICS = Object.freeze([
+  'ゲーム',
+  '食べもの',
+  '漫画や小説',
+  'ネットで見かけたもの',
+  '天気や季節',
+  'ちょっとした考えごと',
+]);
+
 /** これ以上空いていたら、切り口を使わず「久しぶり」を優先する */
 const LONG_GAP_MINUTES = 3 * 24 * 60;
 
 const GREETING_ANGLES = Object.freeze([
   { id: 'time', text: '時間帯に合わせた一言' },
   { id: 'followup', text: '覚えていることの中から、前回の話の続きが気になると軽く聞く', needsMemory: true },
-  { id: 'self', text: '自分の近況をひとこと（何をしていたかは、その場で自分で考える）' },
+  { id: 'self', text: '自分の近況をひとこと（何をしていたかは、その場で自分で考える）', topics: true },
   { id: 'welcome', text: '来てくれたことへのリアクション' },
   { id: 'question', text: '軽い質問を1つだけ' },
   { id: 'season', text: '曜日や季節に触れる' },
@@ -138,7 +154,10 @@ function pickGreetingAngle({ hasMemory = false, gapMinutes = null, random = Math
   }
   const angles = GREETING_ANGLES.filter((angle) => hasMemory || !angle.needsMemory);
   const index = Math.min(angles.length - 1, Math.floor(random() * angles.length));
-  return angles[index];
+  const angle = angles[index];
+  if (!angle.topics) return angle;
+  const topic = SELF_TOPICS[Math.min(SELF_TOPICS.length - 1, Math.floor(random() * SELF_TOPICS.length))];
+  return { ...angle, topic, text: `自分の近況をひとこと。今回は「${topic}」のこと（何をしていたかは、その場で自分で考える）` };
 }
 
 /**
@@ -287,6 +306,7 @@ module.exports = {
   GREETING_SCENE_TEXT,
   GREETING_INSTRUCTION,
   GREETING_ANGLES,
+  SELF_TOPICS,
   LONG_GAP_MINUTES,
   pickGreetingAngle,
   buildGreetingInstruction,
