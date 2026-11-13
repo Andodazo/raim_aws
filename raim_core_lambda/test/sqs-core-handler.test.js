@@ -190,3 +190,40 @@ test('アプリで声を消しているときは TTS を使わない', async () 
   assert.equal(ttsCreated, 0);
   assert.equal(publisherTts, null);
 });
+
+// 2026-11-13: 予定の知らせる文・「予定に入れる？」を待ってから返事の終わりを送っていたので、
+// 予定を入れた回は入力欄が最大8秒「考えているよ」のままだった
+test('after-reply tasks run after stream.completed and the request is marked completed', async () => {
+  const events = [];
+  const publisher = {
+    start: async () => events.push(['start']),
+    appendText: async () => {},
+    toolCall: async () => {},
+    clientAction: async ({ action }) => events.push(['action', action]),
+    completed: async () => events.push(['completed']),
+    error: async () => events.push(['error']),
+  };
+  const handler = createSqsCoreHandler({
+    normalizeCoreEvent: () => ({
+      sub: 'user-1', requestId: 'req-1', connectionId: 'connection-1', source: 'websocket',
+      text: '土曜に映画なんだ', images: [], features: ['planner'],
+    }),
+    claimRequest: async () => ({ claimed: true, requestKey: 'user-1#req-1' }),
+    createResponseQueuePublisher: () => publisher,
+    handleCoreChat: async (input, options) => {
+      options.deferAfterReply(async () => {
+        await options.onClientAction({ action: 'planner.suggest', params: {} });
+      });
+      // 失敗しても会話には響かない
+      options.deferAfterReply(async () => { throw new Error('boom'); });
+      return { ok: true, type: 'chat', requestId: input.requestId, text: 'いいね' };
+    },
+    markRequestCompleted: async () => events.push(['marked']),
+    markRequestFailed: async () => events.push(['failed']),
+  });
+
+  const result = await handler({ Records: [createRecord()] }, { awsRequestId: 'invocation-1' });
+
+  assert.deepEqual(result, { batchItemFailures: [] });
+  assert.deepEqual(events, [['start'], ['completed'], ['marked'], ['action', 'planner.suggest']]);
+});

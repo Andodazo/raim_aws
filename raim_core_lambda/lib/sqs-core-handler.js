@@ -150,6 +150,9 @@ function createSqsCoreHandler(dependencyOverrides = {}) {
 
       await publisher.start();
 
+      // 返事の終わりを送ったあとに回す仕事（core-chat-service.js の deferAfterReply）
+      const afterReply = [];
+
       // Mantleのraw JSON deltaからtext値だけを抽出し、Response Queueへ順次送る。
       const result = await dependencies.handleCoreChat(input, {
         // ツール呼出時に前置きセリフとtool通知をResponse Queueへ流す。
@@ -160,6 +163,9 @@ function createSqsCoreHandler(dependencyOverrides = {}) {
         // ライムがアプリに頼んだ操作（駅アラームを始める など）を流す。
         onClientAction: async ({ action, params }) => {
           await publisher.clientAction({ action, params });
+        },
+        deferAfterReply: (task) => {
+          afterReply.push(task);
         },
         fallbackRequestId: record.messageId,
         onMantleTextDelta: (delta) => extractor.push(delta),
@@ -188,6 +194,16 @@ function createSqsCoreHandler(dependencyOverrides = {}) {
           code: result.code || '',
         },
       });
+
+      // 予定の知らせる文・「予定に入れる？」は、返事の終わりのあとにカードとして届ける。
+      // 失敗しても会話はもう終わっているので、やり直さない（要求は COMPLETED 済み）
+      for (const task of afterReply) {
+        try {
+          await task();
+        } catch (error) {
+          console.error(`[Core] after-reply task failed (non-fatal): ${error.message}`);
+        }
+      }
 
       return result;
     } catch (error) {
