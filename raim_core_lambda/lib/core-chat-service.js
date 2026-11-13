@@ -34,6 +34,7 @@ const {
   clearMantleResponseState,
   getOrCreateUserSession,
   updateMantleResponseState,
+  updateRecentGreetings,
 } = require('./user-session-store');
 const {
   getMantleSessionState,
@@ -85,8 +86,11 @@ const {
   buildGreetingInstruction,
   isAfterHardTalk,
   buildCareGreetingInstruction,
-  lastGreetingOpening,
+  previousGreetingOpening,
   buildOpeningLine,
+  recentGreetings,
+  buildRecentGreetingsLine,
+  nextRecentGreetings,
   PLAIN_OPENING_LINE,
 } = require('./greeting');
 const { shouldSummarize } = require('./summary-trigger');
@@ -259,6 +263,8 @@ const defaultDependencies = Object.freeze({
   clearMantleResponseState,
   getOrCreateUserSession,
   updateMantleResponseState,
+  // 最近の話しかけを人ごとに覚える（greeting.js）
+  updateRecentGreetings,
 
   // 会話履歴の自前保存（案A）
   resolveThread,
@@ -678,13 +684,19 @@ function createCoreChatService(dependencyOverrides = {}) {
     }
     // 出だしもコードで振り分ける（「やっほー」ばかりだった。greeting.js 参照）
     if (input.greeting && greetingInstruction) {
+      const remembered = session.recentGreetings || [];
       const openingLine = buildOpeningLine({
-        previousOpening: lastGreetingOpening(threadMessages),
+        previousOpening: previousGreetingOpening({ messages: threadMessages, remembered }),
         reminder: Boolean(reminderItem),
         random: dependencies.random || Math.random,
       });
       greetingInstruction = `${greetingInstruction}\n${openingLine}`;
-      console.log(`[Greeting] opening=${openingLine === PLAIN_OPENING_LINE ? 'plain' : 'greet'}`);
+      // 最近の話しかけと同じ話題・言い回しにしない（知らせのときは中身が決まっているので渡さない）
+      const recentLine = reminderItem
+        ? ''
+        : buildRecentGreetingsLine(recentGreetings({ messages: threadMessages, remembered }));
+      if (recentLine) greetingInstruction = `${greetingInstruction}\n${recentLine}`;
+      console.log(`[Greeting] opening=${openingLine === PLAIN_OPENING_LINE ? 'plain' : 'greet'} recent=${recentLine ? 'yes' : 'no'}`);
     }
 
     // 3-e. 記憶を渡し直すか。
@@ -1426,6 +1438,19 @@ function createCoreChatService(dependencyOverrides = {}) {
       }
     } catch (error) {
       console.error(`[Thread] append failed (non-fatal): ${error.message}`);
+    }
+
+    // 7-a. 話しかけ（知らせ以外）を人ごとに覚える。次の会話の1回目でも同じことを言わないように
+    if (input.greeting && !reminderItem && output.text &&
+        typeof dependencies.updateRecentGreetings === 'function') {
+      try {
+        await dependencies.updateRecentGreetings(
+          input.sub,
+          nextRecentGreetings(session.recentGreetings || [], output.text)
+        );
+      } catch (error) {
+        console.warn(`[Greeting] could not remember the greeting (non-fatal): ${error.message}`);
+      }
     }
 
     // 7-b. 予定の知らせる文・「予定に入れる？」ボタンを仕上げる。

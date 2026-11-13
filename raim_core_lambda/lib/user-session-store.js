@@ -458,8 +458,35 @@ async function setActiveThreadId(sub, threadId) {
   return result.Attributes;
 }
 
+/**
+ * 最近の話しかけ（新しい順、最大3つ）を覚える。
+ *
+ * 新しい会話の1回目でも、前の会話でした話しかけと同じことを言わないように使う（greeting.js）。
+ */
+async function updateRecentGreetings(sub, recentGreetings) {
+  if (!sub) {
+    throw new Error('sub is required');
+  }
+  const list = Array.isArray(recentGreetings)
+    ? recentGreetings.filter((text) => typeof text === 'string' && text).slice(0, 3)
+    : [];
+
+  await docClient.send(
+    new UpdateCommand({
+      TableName: TABLE_NAME,
+      Key: { sub },
+      UpdateExpression: 'SET recentGreetings = :list, updatedAt = :now',
+      ExpressionAttributeValues: {
+        ':list': list,
+        ':now': new Date().toISOString(),
+      },
+    })
+  );
+}
+
 module.exports = {
   getOrCreateUserSession,
+  updateRecentGreetings,
   getActiveThreadId,
   setActiveThreadId,
   updateMantleResponseState,

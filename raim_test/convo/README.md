@@ -61,7 +61,7 @@ node ~/convo/run_convo.js --core before=~/core-old --core after=~/core --env ~/c
 - `scenarios-followup.json`: 6本。言ってたことを後で聞く（「そういえば、昨日の面接どうだった？」）。
   話しかけで聞く、朝のまとめと一緒に聞く、はじめの3往復で聞く、本人が先に話す、濁される、用事は聞かない。
   `--scenarios ~/convo/scenarios-followup.json` で使う
-- `scenarios-greeting.json`: 11本。ライムからの話しかけと、タイマー・予定の知らせ（2026-11-13）。
+- `scenarios-greeting.json`: 13本。ライムからの話しかけと、タイマー・予定の知らせ（2026-11-13）。
   同じ会話で何回も話しかける（出だしがばらけるか）、タイマーが鳴った・予定の前の晩・1時間前・当日の朝、朝のまとめ。
   `--scenarios ~/convo/scenarios-greeting.json --runs 3` で使う。まとめに「話しかけの出だし」
   （挨拶から始めた数と、出だしの言葉の多い順）が出る。知らせはいつも挨拶なしで始まるはず
@@ -84,6 +84,7 @@ node ~/convo/run_convo.js --core before=~/core-old --core after=~/core --env ~/c
 ```
 
 - `memory`: ライムの記憶（任意）。Summary が作る形（【事実】【関係性】）で書く
+- `recentGreetings`: 前の会話でした話しかけ（任意、新しい順）。新しい会話の1回目に同じことを言わないかを見る
 - `greeting`: true なら、最初にアプリを開いたときの話しかけをする
 - `brief`: true なら、その話しかけを「その日はじめて」として送る（朝のまとめ）
 - `planner`: 予定の手帳（メモリの中だけ）。`[{ "title": "面接", "daysAgo": 1, "time": "10:00", "importance": "important" }]`。

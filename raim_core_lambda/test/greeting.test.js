@@ -116,3 +116,33 @@ test('opening: about half start without a greeting word, the rest avoid the last
   assert.equal(lastGreetingOpening([]), '');
   assert.equal(lastGreetingOpening([{ role: 'assistant', text: 'あいうえおかきくけこさしすせそ', meta: { greeting: true } }]).length, 12);
 });
+
+test('recent greetings: this conversation first, then remembered ones, newest first, up to 3, no reminders', () => {
+  const { recentGreetings, buildRecentGreetingsLine, nextRecentGreetings, previousGreetingOpening } = require('../lib/greeting');
+  const messages = [
+    { role: 'assistant', text: 'やっほー！また来たね', meta: { greeting: true } },
+    { role: 'assistant', text: 'カップ麺の時間だよ', meta: { greeting: true, reminder: { itemId: 'x', slot: 'timer' } } },
+    { role: 'assistant', text: 'ふつうの返事', meta: {} },
+    { role: 'assistant', text: 'ねえ、寒くなってきたね', meta: { greeting: true } },
+  ];
+  const remembered = ['ねえ、寒くなってきたね', '私のこと待ってた？', 'ゲームしてた'];
+  assert.deepEqual(recentGreetings({ messages, remembered }), ['ねえ、寒くなってきたね', 'やっほー！また来たね', '私のこと待ってた？']);
+  assert.deepEqual(recentGreetings({}), []);
+  assert.equal(buildRecentGreetingsLine([]), '');
+  assert.match(buildRecentGreetingsLine(['a', 'b']), /「a」「b」。これと同じ話題・同じ言い回しにしない/);
+
+  assert.deepEqual(nextRecentGreetings(['b', 'c', 'd'], 'a'), ['a', 'b', 'c']);
+  assert.deepEqual(nextRecentGreetings(['a', 'b'], 'a'), ['a', 'b']);
+  assert.equal(nextRecentGreetings([], 'あ'.repeat(100))[0].length, 40);
+
+  assert.equal(previousGreetingOpening({ messages, remembered }), 'ねえ');
+  assert.equal(previousGreetingOpening({ remembered: ['こんばんは！遅いね'] }), 'こんばんは');
+  assert.equal(previousGreetingOpening({}), 'やっほー');
+});
+
+test('angles do not carry example phrases (they get copied)', () => {
+  const { GREETING_ANGLES } = require('../lib/greeting');
+  for (const angle of GREETING_ANGLES) {
+    assert.doesNotMatch(angle.text, /など）|ゲーム|待ってた|寒く/);
+  }
+});
