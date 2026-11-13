@@ -268,7 +268,7 @@ test('findEventCandidate returns a future event or null', async () => {
 
 const { normalizeReminder, buildReminderInstruction, reminderMatchesItem } = require('../lib/planner/planner-reminder');
 
-function buildService({ text, features = ['planner'], mantleResponses, store, helperResponses = {}, request = {}, thread = null }) {
+function buildService({ text, features = ['planner'], mantleResponses, store, helperResponses = {}, request = {}, thread = null, sessionState = null }) {
   const mainCalls = [];
   const helperCalls = [];
   const actions = [];
@@ -283,11 +283,12 @@ function buildService({ text, features = ['planner'], mantleResponses, store, he
     mainCalls.push(args);
     const response = mantleResponses[Math.min(index, mantleResponses.length - 1)];
     index += 1;
+    if (response instanceof Error) throw response;
     return response;
   };
   const service = createCoreChatService({
     getOrCreateUserSession: async () => ({ sessionSummary: '' }),
-    getMantleSessionState: () => ({ usePreviousResponseId: false, previousResponseId: '' }),
+    getMantleSessionState: () => sessionState || ({ usePreviousResponseId: false, previousResponseId: '' }),
     isMantleResponseExpiredError: () => false,
     clearMantleResponseState: async () => {},
     updateMantleResponseState: async () => {},
@@ -381,6 +382,144 @@ test('flow: a passing mention sends a suggestion instead of saving', async () =>
       item: followUp,
     },
   }]);
+});
+
+// ─────────────────────────────────────────────
+// 返事もツールと一緒に書かせる（2026-11-13）
+// ─────────────────────────────────────────────
+
+const toolTurn = (name, args, responseId = 'r-tool') => ({
+  responseId, rawText: '', toolCalls: [{ name, callId: 'c1', arguments: JSON.stringify(args) }],
+});
+
+test('quick reply: a timer with a reply ends after one call and keeps the tool output for next time', async () => {
+  const store = createFakeStore();
+  const svc = buildService({
+    text: '3分計って',
+    store,
+    mantleResponses: [toolTurn('set_timer', { minutes: 3, reply: 'りょーかい、3分ね' }), replyText('使われないはず')],
+  });
+  const deltas = [];
+  const result = await svc.run({ onMantleTextDelta: (d) => deltas.push(d) });
+  assert.equal(result.ok, true);
+  assert.equal(result.text, 'りょーかい、3分ね');
+  assert.equal(svc.mainCalls.length, 1);
+  // 返事はふつうの返事と同じ形で流す（吹き出しと声）
+  assert.equal(JSON.parse(deltas.join('')).text, 'りょーかい、3分ね');
+  assert.equal(svc.actions[0].action, 'planner.added');
+  const turn = svc.appended[0];
+  assert.equal(turn.responseId, 'r-tool');
+  assert.equal(turn.pendingToolOutput.responseId, 'r-tool');
+  assert.equal(turn.pendingToolOutput.callId, 'c1');
+  assert.equal(JSON.parse(turn.pendingToolOutput.output).ok, true);
+  assert.equal(JSON.parse(turn.pendingToolOutput.assistantText).text, 'りょーかい、3分ね');
+  assert.deepEqual(turn.assistantMessage.meta.tools, [{ name: 'set_timer', query: '', ok: true, quick: true }]);
+  // ツールの説明に reply がある
+  assert.ok(svc.mainCalls[0].tools.find((t) => t.name === 'set_timer').parameters.properties.reply);
+  assert.equal(svc.mainCalls[0].tools.find((t) => t.name === 'show_memos').parameters.properties.reply, undefined);
+});
+
+test('quick reply: failures, nothing changed, or no reply go through the second call as before', async () => {
+  // パスワードは断る（1回目の「メモしといたよ」は言わない）
+  const refused = buildService({
+    text: 'Wi-Fiのパスワード abc123 メモして',
+    store: createFakeStore(),
+    mantleResponses: [toolTurn('add_memo', { text: 'Wi-Fi abc123', reply: 'メモしといたよ' }), replyText('それは自分で控えてね')],
+  });
+  const r1 = await refused.run();
+  assert.equal(r1.text, 'それは自分で控えてね');
+  assert.equal(refused.mainCalls.length, 2);
+  assert.equal(refused.appended[0].pendingToolOutput, null);
+
+  // 返事を書かなかった
+  const noReply = buildService({
+    text: '3分計って',
+    store: createFakeStore(),
+    mantleResponses: [toolTurn('set_timer', { minutes: 3 }), replyText('3分ね')],
+  });
+  assert.equal((await noReply.run()).text, '3分ね');
+  assert.equal(noReply.mainCalls.length, 2);
+
+  // もう入っていた（手帳は変わらない）
+  const store = createFakeStore([{ itemId: 'ls_aaaaaa00', kind: 'list', title: '買うもの', entries: [{ id: 'e00000001', text: '牛乳', checked: false }] }]);
+  const already = buildService({
+    text: '買うものに牛乳足して',
+    store,
+    mantleResponses: [toolTurn('add_to_list', { list: '買うもの', entries: ['牛乳'], reply: '足したよ' }), replyText('もう入ってたよ')],
+  });
+  assert.equal((await already.run()).text, 'もう入ってたよ');
+  assert.equal(already.mainCalls.length, 2);
+});
+
+test('quick reply: the next turn first hands over the tool output and what was said', async () => {
+  const pendingToolOutput = { responseId: 'r-tool', callId: 'c1', output: '{"ok":true}', assistantText: '{"text":"りょーかい"}' };
+  const svc = buildService({
+    text: 'ありがとう',
+    store: createFakeStore(),
+    thread: { messages: [], pendingToolOutput },
+    sessionState: { usePreviousResponseId: true, previousResponseId: 'r-tool' },
+    mantleResponses: [replyText('どういたしまして')],
+  });
+  await svc.run();
+  const [first, second] = svc.mainCalls[0].mantleInput.messages;
+  assert.deepEqual(first, { type: 'function_call_output', call_id: 'c1', output: '{"ok":true}' });
+  assert.deepEqual(second, { role: 'assistant', content: '{"text":"りょーかい"}' });
+  assert.equal(svc.mainCalls[0].previousResponseId, 'r-tool');
+  // 続きが新しくなったので、持っていたものは消す
+  assert.equal(svc.appended[0].pendingToolOutput, null);
+
+  // 要約などで続きの id が変わっていたら渡さない
+  const other = buildService({
+    text: 'ありがとう',
+    store: createFakeStore(),
+    thread: { messages: [], pendingToolOutput },
+    sessionState: { usePreviousResponseId: true, previousResponseId: 'r-other' },
+    mantleResponses: [replyText('うん')],
+  });
+  await other.run();
+  assert.ok(!other.mainCalls[0].mantleInput.messages.some((m) => m.type === 'function_call_output'));
+});
+
+test('quick reply: if handing over the tool output is refused, the turn is rebuilt from the history', async () => {
+  const refused = Object.assign(new Error('No tool call found'), { statusCode: 400 });
+  const svc = buildService({
+    text: 'ありがとう',
+    store: createFakeStore(),
+    thread: { messages: [], pendingToolOutput: { responseId: 'r-tool', callId: 'c1', output: '{}', assistantText: '{}' } },
+    sessionState: { usePreviousResponseId: true, previousResponseId: 'r-tool' },
+    mantleResponses: [refused, replyText('どういたしまして')],
+  });
+  const result = await svc.run();
+  assert.equal(result.ok, true);
+  assert.equal(svc.mainCalls.length, 2);
+  assert.equal(svc.mainCalls[1].previousResponseId, '');
+  assert.ok(!svc.mainCalls[1].mantleInput.messages.some((m) => m.type === 'function_call_output'));
+});
+
+test('quick reply: quickReplyOf only for tools that changed the notebook', () => {
+  const { quickReplyOf } = require('../lib/tools/planner');
+  const ok = { result: { ok: true }, change: { type: 'added', item: {} } };
+  assert.equal(quickReplyOf('set_timer', { reply: ' 3分ね ' }, ok), '3分ね');
+  assert.equal(quickReplyOf('show_memos', { reply: 'これだよ' }, { result: { ok: true }, change: { type: 'show', items: [] } }), '');
+  assert.equal(quickReplyOf('add_to_list', { reply: '足したよ' }, { result: { ok: true, alreadyThere: {} }, change: null }), '');
+  assert.equal(quickReplyOf('add_memo', { reply: 'メモしたよ' }, { result: { error: true }, change: null }), '');
+  assert.equal(quickReplyOf('set_timer', { reply: 'あ'.repeat(201) }, ok), '');
+  assert.equal(quickReplyOf('web_search', { reply: 'x' }, ok), '');
+});
+
+test('store: appendTurn keeps the tool output only for a quick-reply turn', async () => {
+  const { appendTurn } = require('../lib/conversation-thread-store');
+  const sent = [];
+  const docClient = { async send(command) { sent.push(command.input); return { Attributes: {} }; } };
+  const base = { sub: 'u1', threadId: 't1', assistantMessage: { text: 'x' }, responseId: 'r1', responseCreatedAt: NOW.toISOString() };
+  await appendTurn({ ...base, pendingToolOutput: { responseId: 'r1', callId: 'c1', output: '{}', assistantText: '{}' } }, { docClient });
+  assert.match(sent[0].UpdateExpression, /pendingToolOutput = :pendingToolOutput/);
+  assert.doesNotMatch(sent[0].UpdateExpression, /REMOVE/);
+  await appendTurn(base, { docClient });
+  assert.match(sent[1].UpdateExpression, /REMOVE pendingToolOutput/);
+  // 続きの id が無い回（保存しない）は触らない
+  await appendTurn({ ...base, responseId: '' }, { docClient });
+  assert.doesNotMatch(sent[2].UpdateExpression, /pendingToolOutput/);
 });
 
 // 返事の終わりを先に送り、「予定に入れる？」はそのあとに届ける（2026-11-13）

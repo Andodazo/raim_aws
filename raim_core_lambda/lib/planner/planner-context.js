@@ -296,6 +296,9 @@ function jstDay(iso) {
   return `${d.getUTCMonth() + 1}/${d.getUTCDate()}`;
 }
 
+// 返事もツールと一緒に書かせる（tools/planner.js の quickReplyOf。2026-11-13）
+const REPLY_RULE = '- 手帳やメモ帳のツールを使うときは、reply にうまくいったときの一言も書く（いつもの話し方で短く。何時に鳴るかなど、やってみないと分からないことは書かない）';
+
 const MEMO_INSTRUCTION = [
   '【メモ帳】',
   'ライムはユーザーのメモと、項目ごとにチェックできるリスト（買うものなど）も持っておける。',
@@ -307,6 +310,7 @@ const MEMO_INSTRUCTION = [
   '- リストの項目だけ消すときは remove_list_entries',
   '- メモやリストそのものを消す前に「消していい？」と1回聞く。ユーザーが「うん」などと答えてから delete_memo',
   '- メモ帳に無いことを「メモしてある」と言わない',
+  REPLY_RULE,
 ].join('\n');
 
 const PLANNER_INSTRUCTION = [
@@ -322,6 +326,7 @@ const PLANNER_INSTRUCTION = [
   '- ツールを使っていないのに「入れた」「消した」と言わない。手帳に無い予定を「入っている」と言わない',
   '- 「3分計って」「30分たったら教えて」のようにタイマーを頼まれたら set_timer。24時間より長いときは予定に入れるか聞く',
   '- 「タイマーやめて」は cancel_timer（聞き返さずに止める）。動いているタイマーが2つ以上なら、どれか聞く',
+  REPLY_RULE,
 ].join('\n');
 
 /**

@@ -227,6 +227,43 @@ const PLANNER_TOOL_DEFINITIONS = Object.freeze([
   },
 ]);
 
+// 返事もツールと一緒に書かせるツール（2026-11-13）。
+// 以前はツールの結果を見て返事を書くために、AI をもう1回呼んでいた（タイマーで 31秒＋27秒かかった日があった）。
+// うまくいったら reply をそのまま言い、2回目は呼ばない。失敗・もう入っていた・中身を読んで答えるもの
+// （show_memos）は今までどおり2回目で返事を書く。
+const QUICK_REPLY_TOOL_NAMES = Object.freeze([
+  'add_schedule', 'update_schedule', 'delete_schedule', 'set_timer', 'cancel_timer',
+  'add_memo', 'add_to_list', 'check_list_entries', 'remove_list_entries', 'delete_memo',
+]);
+const MAX_QUICK_REPLY_LENGTH = 200;
+
+const REPLY_PARAMETER = Object.freeze({
+  type: 'string',
+  description: 'うまくいったときにユーザーへ言う一言。いつもの話し方で短く。何時に鳴るかなど、やってみないと分からないことは書かない',
+});
+
+for (const tool of PLANNER_TOOL_DEFINITIONS) {
+  if (QUICK_REPLY_TOOL_NAMES.includes(tool.name)) {
+    tool.parameters.properties.reply = REPLY_PARAMETER;
+  }
+}
+
+/**
+ * ツールと一緒に書いた返事を、そのまま言ってよいか。言ってよければその文、だめなら ''。
+ *
+ * うまくいって手帳が変わったときだけ使う。失敗したとき・何も変わらなかったとき
+ * （「もう入っていた」）・カードで見せるときは、結果を見て返事を書き直す。
+ */
+function quickReplyOf(toolName, args, outcome) {
+  if (!QUICK_REPLY_TOOL_NAMES.includes(toolName)) return '';
+  const result = outcome?.result;
+  const change = outcome?.change;
+  if (!result || result.error || !result.ok || !change || change.type === 'show') return '';
+  const reply = typeof args?.reply === 'string' ? args.reply.trim() : '';
+  if (!reply || reply.length > MAX_QUICK_REPLY_LENGTH) return '';
+  return reply;
+}
+
 const TIMER_TOOL_NAMES = Object.freeze(['set_timer', 'cancel_timer']);
 const MEMO_TOOL_NAMES = Object.freeze([
   'add_memo', 'add_to_list', 'check_list_entries', 'remove_list_entries', 'show_memos', 'delete_memo',
@@ -632,6 +669,8 @@ module.exports = {
   PLANNER_TOOL_DEFINITIONS,
   PLANNER_TOOL_NAMES,
   DELETE_CONFIRM_WORDS,
+  QUICK_REPLY_TOOL_NAMES,
   isPlannerTool,
+  quickReplyOf,
   runPlannerTool,
 };
