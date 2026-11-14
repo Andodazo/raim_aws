@@ -1,5 +1,7 @@
 'use strict';
 
+const { normalizeReminder } = require('./planner/planner-reminder');
+
 // ==============================================================================
 // Core Lambda Event Normalizer
 // ==============================================================================
@@ -29,6 +31,8 @@
 //   threadId: "thread-xxxx", // 任意
 //   features: ["station_alarm"] // 任意。アプリが使える機能
 //   greeting: true // 任意。アプリを開いたときの話しかけ（text は空）
+//   reminder: { itemId, slot } // 任意。予定を知らせる話しかけ（greeting のときだけ）
+//   brief: true // 任意。その日はじめての話しかけで、今日の予定をまとめる（greeting のときだけ）
 // }
 //
 // JSON解釈や入力検証に失敗した場合はCoreEventErrorを投げる。
@@ -256,6 +260,9 @@ function normalizeCoreEvent(event, { fallbackRequestId } = {}) {
     speech: payload.speech !== false,
     // true ならアプリを開いたときの話しかけ。text は空
     greeting,
+    // 任意。予定を知らせる話しかけ（planner-reminder.js）。話しかけのときだけ
+    reminder: greeting ? normalizeReminder(payload.reminder) : null,
+    brief: greeting && payload.brief === true,
   };
 }
 
@@ -294,7 +301,7 @@ function normalizeLocation(value) {
  * 知っている名前だけを通す。Edge でも同じ絞り込みをしているが、
  * Lambda コンソールからの直接実行でも同じ結果になるよう Core でも行う。
  */
-const KNOWN_FEATURES = Object.freeze(['station_alarm']);
+const KNOWN_FEATURES = Object.freeze(['station_alarm', 'planner']);
 
 function normalizeFeatures(value) {
   if (!Array.isArray(value)) {

@@ -91,6 +91,8 @@ test('$default publishes a chat request to Core request queue', async () => {
     location: null,
     speech: true,
     greeting: false,
+    reminder: null,
+    brief: false,
   });
 });
 
@@ -126,6 +128,35 @@ test('$default は greeting を本文なしの話しかけとして Core へ渡�
   assert.equal(published[0].greeting, true);
   assert.equal(published[0].text, '');
   assert.deepEqual(published[0].images, []);
+});
+
+test('$default は予定を知らせる話しかけの reminder を Core へ渡す（形が違えば捨てる）', async () => {
+  const published = [];
+  const handler = createWebSocketHandler({
+    rateLimiter: { consume: async () => ({ allowed: true }) },
+    connectionStore: { getConnection: async () => null },
+    requestPublisher: { publishChatRequest: async (message) => { published.push(message); return message; } },
+  });
+  const send = (body) => handler({
+    requestContext: { routeKey: '$default', connectionId: 'conn-001', authorizer: { claims: { sub: 'user-001' } } },
+    body: JSON.stringify(body),
+  });
+  const itemId = 'ev_123e4567-e89b-12d3-a456-426614174000';
+  await send({ requestId: 'req-r1', type: 'greeting', reminder: { itemId, slot: 'before' } });
+  await send({ requestId: 'req-r2', type: 'greeting', reminder: { itemId: '../x', slot: 'before' } });
+  await send({ requestId: 'req-r3', text: 'こんにちは', reminder: { itemId, slot: 'before' } });
+  await send({ requestId: 'req-r4', type: 'greeting', reminder: { itemId: 'tm_123e4567-e89b', slot: 'timer' } });
+  assert.deepEqual(published[0].reminder, { itemId, slot: 'before' });
+  assert.equal(published[1].reminder, null);
+  assert.equal(published[2].reminder, null);
+  assert.deepEqual(published[3].reminder, { itemId: 'tm_123e4567-e89b', slot: 'timer' });
+  // タイマーの「もう一回」の通知を押したとき（2026-11-13）
+  await send({ requestId: 'req-r5', type: 'greeting', reminder: { itemId: 'tm_123e4567-e89b', slot: 'snooze' } });
+  assert.deepEqual(published[4].reminder, { itemId: 'tm_123e4567-e89b', slot: 'snooze' });
+  await send({ requestId: 'req-b1', type: 'greeting', brief: true });
+  await send({ requestId: 'req-b2', text: 'こんにちは', brief: true });
+  assert.equal(published[5].brief, true);
+  assert.equal(published[6].brief, false);
 });
 
 test('$default forwards features the client supports', async () => {

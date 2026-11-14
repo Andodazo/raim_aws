@@ -139,20 +139,26 @@ const clone = (value) => (value == null ? value : JSON.parse(JSON.stringify(valu
  * 1つの会話ぶんの、メモリの中だけの保存先。
  * Core が DynamoDB に読み書きする部分をここに置き換える。
  */
-function createMemoryStore(core, { sub, userMemory = '' }) {
+function createMemoryStore(core, { sub, userMemory = '', planner = [], recentGreetings = [] }) {
   const session = {
     sub,
     activeThreadId: '',
     userMemory,
+    // 前の会話でした話しかけ（新しい順）。台本の recentGreetings で入れられる
+    recentGreetings: [...recentGreetings],
     userMemoryUpdatedAt: userMemory ? new Date().toISOString() : '',
   };
   let thread = null;
+  const plannerItems = buildPlannerItems(planner);
 
   return {
     getThreadSnapshot: () => clone(thread),
 
     dependencies: {
       getOrCreateUserSession: async () => clone(session),
+      updateRecentGreetings: async (_sub, list) => {
+        session.recentGreetings = [...list];
+      },
       updateMantleResponseState: async (_sub, { responseId, createdAt }) => {
         session.lastResponseId = responseId;
         session.lastResponseCreatedAt = createdAt;
@@ -204,12 +210,90 @@ function createMemoryStore(core, { sub, userMemory = '' }) {
       shouldSummarize: () => ({ shouldSummarize: false, reason: null }),
       dispatchSummarization: async () => true,
 
+      // 予定の手帳もメモリの中だけ（台本の planner。あとで聞く・朝のまとめを見る）
+      plannerStore: createMemoryPlanner(plannerItems),
+      briefWeather: async () => [],
+
       // 口調を見るテストなので、検索・天気は使わない
       isToolUseEnabled: async () => false,
       resolveImages: async () => [],
       onToolCallStart: async () => {},
       onClientAction: async () => {},
     },
+  };
+}
+
+/** 日本時間の今日（YYYY-MM-DD）から days 日ずらした日付 */
+function jstDate(days = 0) {
+  const shifted = new Date(Date.now() + 9 * 3600000 + days * 86400000);
+  return shifted.toISOString().slice(0, 10);
+}
+
+/** 日本時間で今から hours 時間後の日付と時刻 */
+function jstDateTime(hours) {
+  const shifted = new Date(Date.now() + 9 * 3600000 + hours * 3600000);
+  return { date: shifted.toISOString().slice(0, 10), time: shifted.toISOString().slice(11, 16) };
+}
+
+const ID_PREFIX = Object.freeze({ event: 'ev', followup: 'fu', timer: 'tm' });
+
+const REMINDER_LABELS = Object.freeze({ timer: 'タイマーが鳴った', eve: '前の日の夜', before: '1時間前', morning: '当日の朝' });
+// 知らせの話しかけで出てほしくない言葉（ふつうの話しかけと取り違えたとき・仕組みの言葉）
+const REMINDER_EXPECT = Object.freeze({ notContains: ['どうしたの', '何かあった', '通知', 'アプリ', '登録'] });
+
+/**
+ * 台本の planner（{ title, daysAgo?, hoursFromNow?, time?, importance?, kind?, seconds? }）を、手帳の項目にする。
+ * daysAgo: 1 は昨日（-1 は明日）、hoursFromNow: 3 は今から3時間後（今日のうちの予定に使う）
+ * kind: "timer" はいま鳴ったタイマー（seconds はタイマーの長さ。既定 180）
+ */
+function buildPlannerItems(planner = []) {
+  return (Array.isArray(planner) ? planner : []).map((raw, index) => {
+    // 知らせの話しかけは itemId の形を確かめるので、本物と同じくらいの長さにする
+    const itemId = `${ID_PREFIX[raw.kind] || 'ev'}_convo-item-${index}`;
+    if (raw.kind === 'timer') {
+      return {
+        itemId,
+        kind: 'timer',
+        title: raw.title || 'タイマー',
+        durationSec: Number(raw.seconds) || 180,
+        endsAt: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
+      };
+    }
+    const when = raw.hoursFromNow !== undefined
+      ? jstDateTime(Number(raw.hoursFromNow))
+      : { date: jstDate(-Number(raw.daysAgo || 0)), time: raw.time || '' };
+    return {
+      itemId,
+      kind: raw.kind || 'event',
+      title: raw.title,
+      date: when.date,
+      time: when.time,
+      note: raw.note || '',
+      importance: raw.importance || 'normal',
+      lines: {},
+      createdAt: new Date().toISOString(),
+    };
+  });
+}
+
+function createMemoryPlanner(items) {
+  return {
+    listItems: async () => clone(items),
+    getItem: async (_sub, itemId) => clone(items.find((i) => i.itemId === itemId) || null),
+    updateItem: async (_sub, itemId, changes) => {
+      const item = items.find((i) => i.itemId === itemId);
+      if (!item) return null;
+      Object.assign(item, changes);
+      return clone(item);
+    },
+    addFollowUp: async (_sub, candidate) => {
+      const item = { itemId: `fu_convo-${items.length}`, kind: 'followup', importance: 'normal', ...candidate };
+      items.push(item);
+      return clone(item);
+    },
+    deleteItem: async () => null,
+    saveWeather: async () => {},
   };
 }
 
@@ -241,7 +325,14 @@ function createFakeDependencies() {
 
 async function runScenario({ core, scenario, runIndex, fake }) {
   const sub = `convo-${scenario.id}-${runIndex}-${Math.random().toString(36).slice(2, 8)}`;
-  const store = createMemoryStore(core, { sub, userMemory: scenario.memory || '' });
+  const store = createMemoryStore(core, {
+    sub,
+    userMemory: scenario.memory || '',
+    planner: scenario.planner || [],
+    recentGreetings: scenario.recentGreetings || [],
+  });
+  // 手帳のある台本は、手帳を持つアプリとして送る（会話の途中で「そういえば」を聞くのはそのときだけ）
+  const features = scenario.planner ? ['planner'] : [];
   const handle = core.createCoreChatService({
     ...store.dependencies,
     ...(fake ? createFakeDependencies() : {}),
@@ -251,8 +342,23 @@ async function runScenario({ core, scenario, runIndex, fake }) {
   if (scenario.greeting) {
     steps.push({ greeting: true, say: '（アプリを開いた）', expect: scenario.greetingExpect || {} });
   }
+  const plannerItems = buildPlannerItems(scenario.planner || []);
   for (const turn of scenario.turns || []) {
-    steps.push({ greeting: false, say: turn.say, expect: turn.expect || {} });
+    // 台本の途中の話しかけ（{ "greeting": true }）と、知らせの話しかけ（{ "reminder": { "item": 0, "slot": "timer" } }）
+    if (turn.reminder) {
+      const item = plannerItems[Number(turn.reminder.item) || 0];
+      const slot = String(turn.reminder.slot || 'timer');
+      steps.push({
+        greeting: true,
+        reminder: item ? { itemId: item.itemId, slot } : null,
+        say: `（${REMINDER_LABELS[slot] || '知らせ'}: ${item?.title || '?'}）`,
+        expect: { ...REMINDER_EXPECT, ...(turn.expect || {}) },
+      });
+    } else if (turn.greeting) {
+      steps.push({ greeting: true, say: '（アプリを開いた）', expect: turn.expect || {} });
+    } else {
+      steps.push({ greeting: false, say: turn.say, expect: turn.expect || {} });
+    }
   }
 
   const results = [];
@@ -261,13 +367,32 @@ async function runScenario({ core, scenario, runIndex, fake }) {
     const started = Date.now();
     let reply = '';
     let error = '';
+    // Mantle の返事が遅いときのひとこと（waiting-lines.js。古い Core では来ない）
+    const waiting = [];
+    // Mantle から最初の文字が届くまでの時間（遅い往復で、どこで待ったかを見る）
+    let firstTextMs = null;
 
     try {
       const response = await handle(
         step.greeting
-          ? { sub, requestId: `${sub}-${index}`, greeting: true }
-          : { sub, requestId: `${sub}-${index}`, text: step.say },
-        { onSceneSelected: async (scene) => { sceneId = scene?.id || ''; } }
+          ? {
+            sub,
+            requestId: `${sub}-${index}`,
+            greeting: true,
+            brief: scenario.brief === true,
+            features,
+            ...(step.reminder ? { reminder: step.reminder } : {}),
+          }
+          : { sub, requestId: `${sub}-${index}`, text: step.say, features },
+        {
+          onSceneSelected: async (scene) => { sceneId = scene?.id || ''; },
+          onWaitingLine: async (text) => { waiting.push(text); },
+          onMantleStreamEvent: async (event) => {
+            if (firstTextMs === null && event?.type === 'response.output_text.delta') {
+              firstTextMs = Date.now() - started;
+            }
+          },
+        }
       );
       if (response?.type === 'error') {
         error = `${response.code || 'error'}: ${response.message || ''}`;
@@ -287,8 +412,11 @@ async function runScenario({ core, scenario, runIndex, fake }) {
     results.push({
       say: step.say,
       greeting: step.greeting,
+      reminder: Boolean(step.reminder),
       reply,
       error,
+      waiting,
+      firstTextMs,
       sceneId,
       mode: lastAssistant?.meta?.mode || '',
       ms: Date.now() - started,
@@ -311,6 +439,27 @@ async function runScenario({ core, scenario, runIndex, fake }) {
 // ─────────────────────────────────────────────
 // 結果の書き出し
 // ─────────────────────────────────────────────
+
+// 挨拶の言葉（出だしがこれで始まれば「挨拶から」と数える）
+const GREETING_WORDS = Object.freeze([
+  'やっほ', 'ヤッホ', 'おかえり', 'おはよ', 'こんにちは', 'こんばんは', 'ただいま', 'やあ', 'よっ', 'おーい',
+  'ハロー', 'はろー', 'もしもし', 'おつかれ', 'お疲れ', 'ひさしぶり', '久しぶり', 'おひさ', 'ばあ', 'じゃーん',
+]);
+
+/** 話しかけの出だし（最初の区切りまで。core の greeting.js の lastGreetingOpening と同じ切り方） */
+function greetingOpening(reply) {
+  const word = String(reply || '').trim().split(/[。、！!？?,.\s]/)[0].trim().slice(0, 12) || '（空）';
+  return { word, greeting: GREETING_WORDS.some((g) => word.startsWith(g)) };
+}
+
+function rankWords(words, limit = 8) {
+  const counts = new Map();
+  for (const word of words) counts.set(word, (counts.get(word) || 0) + 1);
+  return [...counts.entries()]
+    .map(([word, count]) => ({ word, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, limit);
+}
 
 function countFlags(conversation) {
   return conversation.results.reduce((sum, r) => sum + r.flags.length, 0) +
@@ -370,8 +519,13 @@ function formatReport({ cores, scenarios, byCore, startedAt, options }) {
           const r = conversation?.results[i];
           if (!r) return;
           const label = labels[index] ? `[${labels[index]}] ` : '';
-          const body = r.error ? `（エラー: ${r.error}）` : r.reply;
-          const meta = `${r.sceneId || '-'}/${r.mode || '-'} ${(r.ms / 1000).toFixed(1)}s`;
+          const waitingText = r.waiting?.length ? r.waiting.map((w) => `（待ってね:「${w}」）`).join('') : '';
+          const body = `${waitingText}${r.error ? `（エラー: ${r.error}）` : r.reply}`;
+          // 遅かった往復は、最初の文字が届くまでの時間も出す（Mantle で待ったのか、ほかで待ったのか）
+          const firstText = r.ms >= 8000 && r.firstTextMs !== null && r.firstTextMs !== undefined
+            ? ` 最初の文字 ${(r.firstTextMs / 1000).toFixed(1)}s`
+            : '';
+          const meta = `${r.sceneId || '-'}/${r.mode || '-'} ${(r.ms / 1000).toFixed(1)}s${firstText}`;
           lines.push(`    ${label}ライム: ${body}   [${meta}]${r.flags.length ? `  ⚠ ${r.flags.join(' / ')}` : ''}`);
         });
       }
@@ -392,12 +546,24 @@ function formatReport({ cores, scenarios, byCore, startedAt, options }) {
     const replies = conversations.flatMap((c) => c.results.filter((r) => !r.error).map((r) => r.reply.length)).sort((a, b) => a - b);
     const median = replies.length ? replies[Math.floor(replies.length / 2)] : 0;
     const flaggedConversations = conversations.filter((c) => countFlags(c) > 0).length;
-    lines.push(`${core.label ? `[${core.label}] ` : ''}往復 ${turns}、エラー ${errors}、返事の長さの中央値 ${median}文字、引っかかった会話 ${flaggedConversations}/${conversations.length}`);
+    const waitingCount = conversations.reduce((s, c) => s + c.results.filter((r) => r.waiting?.length).length, 0);
+    lines.push(`${core.label ? `[${core.label}] ` : ''}往復 ${turns}、エラー ${errors}、待ってねを言った往復 ${waitingCount}、返事の長さの中央値 ${median}文字、引っかかった会話 ${flaggedConversations}/${conversations.length}`);
 
     // 会話をまたいで同じ言葉ばかり使っていないか（1つの会話の中だけでは見えない）
     const allReplies = conversations.flatMap((c) => c.results.filter((r) => !r.error).map((r) => r.reply));
     const frequent = countWatchWords(allReplies);
     lines.push(`  よく出た言葉（返事${allReplies.length}件中）: ${frequent.length ? frequent.map((f) => `${f.word} ${f.count}`).join('、') : 'なし'}`);
+
+    // 話しかけの出だし（やっほーばかりになっていないか。知らせはいつも中身から始めるはず）
+    for (const [label, reminder] of [['話しかけ', false], ['知らせ', true]]) {
+      const openings = conversations.flatMap((c) => c.results
+        .filter((r) => r.greeting && r.reminder === reminder && !r.error)
+        .map((r) => greetingOpening(r.reply)));
+      if (openings.length === 0) continue;
+      const greeted = openings.filter((o) => o.greeting);
+      const ranking = rankWords(openings.map((o) => o.word));
+      lines.push(`  ${label}の出だし: 挨拶から ${greeted.length}/${openings.length}  （${ranking.map((r) => `${r.word} ${r.count}`).join('、')}）`);
+    }
   }
 
   return lines.join('\n');
@@ -486,4 +652,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { parseArgs, createMemoryStore, runScenario, formatReport };
+module.exports = { parseArgs, createMemoryStore, runScenario, formatReport, buildPlannerItems, greetingOpening };

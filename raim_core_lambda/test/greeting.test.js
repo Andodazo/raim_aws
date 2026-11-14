@@ -95,3 +95,70 @@ test('care greeting has no angle and asks gently', () => {
   // ふつうの話しかけにも、つらい話のあとの保険が入っている
   assert.ok(GREETING_INSTRUCTION.includes('直前の会話がつらい話だったら'));
 });
+
+// 話しかけの16回中13回が「やっほー」で始まっていた（2026-11-13）
+test('opening: about half start without a greeting word, the rest avoid the last opening', () => {
+  const { buildOpeningLine, lastGreetingOpening, PLAIN_OPENING_LINE } = require('../lib/greeting');
+  assert.equal(buildOpeningLine({ random: () => 0.1 }), PLAIN_OPENING_LINE);
+  assert.match(buildOpeningLine({ previousOpening: 'やっほー', random: () => 0.9 }), /前回の話しかけの出だし「やっほー」とは違う/);
+  assert.match(buildOpeningLine({ random: () => 0.9 }), /決まった言い方にしない/);
+  // 知らせる話しかけは、いつも中身から
+  assert.equal(buildOpeningLine({ previousOpening: 'やっほー', reminder: true, random: () => 0.9 }), PLAIN_OPENING_LINE);
+
+  const messages = [
+    { role: 'assistant', text: 'やっほー！また来てくれたね', meta: { greeting: true } },
+    { role: 'user', text: 'ただいま' },
+    { role: 'assistant', text: 'おかえり。今日はどうだった？', meta: { greeting: true } },
+    { role: 'assistant', text: 'それはよかった', meta: {} },
+  ];
+  assert.equal(lastGreetingOpening(messages), 'おかえり');
+  assert.equal(lastGreetingOpening([{ role: 'assistant', text: 'ふつうの返事' }]), '');
+  assert.equal(lastGreetingOpening([]), '');
+  assert.equal(lastGreetingOpening([{ role: 'assistant', text: 'あいうえおかきくけこさしすせそ', meta: { greeting: true } }]).length, 12);
+});
+
+test('recent greetings: this conversation first, then remembered ones, newest first, up to 3, no reminders', () => {
+  const { recentGreetings, buildRecentGreetingsLine, nextRecentGreetings, previousGreetingOpening } = require('../lib/greeting');
+  const messages = [
+    { role: 'assistant', text: 'やっほー！また来たね', meta: { greeting: true } },
+    { role: 'assistant', text: 'カップ麺の時間だよ', meta: { greeting: true, reminder: { itemId: 'x', slot: 'timer' } } },
+    { role: 'assistant', text: 'ふつうの返事', meta: {} },
+    { role: 'assistant', text: 'ねえ、寒くなってきたね', meta: { greeting: true } },
+  ];
+  const remembered = ['ねえ、寒くなってきたね', '私のこと待ってた？', 'ゲームしてた'];
+  assert.deepEqual(recentGreetings({ messages, remembered }), ['ねえ、寒くなってきたね', 'やっほー！また来たね', '私のこと待ってた？']);
+  assert.deepEqual(recentGreetings({}), []);
+  assert.equal(buildRecentGreetingsLine([]), '');
+  assert.match(buildRecentGreetingsLine(['a', 'b']), /「a」「b」。これと同じ話題・同じ言い回しにしない/);
+
+  assert.deepEqual(nextRecentGreetings(['b', 'c', 'd'], 'a'), ['a', 'b', 'c']);
+  assert.deepEqual(nextRecentGreetings(['a', 'b'], 'a'), ['a', 'b']);
+  assert.equal(nextRecentGreetings([], 'あ'.repeat(100))[0].length, 40);
+
+  assert.equal(previousGreetingOpening({ messages, remembered }), 'ねえ');
+  assert.equal(previousGreetingOpening({ remembered: ['こんばんは！遅いね'] }), 'こんばんは');
+  assert.equal(previousGreetingOpening({}), 'やっほー');
+});
+
+test('angles do not carry example phrases (they get copied)', () => {
+  const { GREETING_ANGLES } = require('../lib/greeting');
+  for (const angle of GREETING_ANGLES) {
+    assert.doesNotMatch(angle.text, /など）|ゲーム|待ってた|寒く/);
+  }
+});
+
+test('the "self" angle gets a topic chosen in code (it kept choosing games)', () => {
+  const { SELF_TOPICS } = require('../lib/greeting');
+  const selfIndex = GREETING_ANGLES.findIndex((angle) => angle.id === 'self');
+  const topics = new Set();
+  for (let i = 0; i < SELF_TOPICS.length; i += 1) {
+    const values = [(selfIndex + 0.5) / GREETING_ANGLES.length, (i + 0.5) / SELF_TOPICS.length];
+    const angle = pickGreetingAngle({ hasMemory: true, random: () => values.shift() });
+    assert.equal(angle.id, 'self');
+    assert.match(angle.text, new RegExp(`今回は「${angle.topic}」のこと`));
+    topics.add(angle.topic);
+  }
+  assert.equal(topics.size, SELF_TOPICS.length);
+  // 選ぶたびに元の一覧を書き換えない
+  assert.doesNotMatch(GREETING_ANGLES[selfIndex].text, /今回は/);
+});

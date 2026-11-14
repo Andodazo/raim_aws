@@ -34,6 +34,7 @@ const {
   clearMantleResponseState,
   getOrCreateUserSession,
   updateMantleResponseState,
+  updateRecentGreetings,
 } = require('./user-session-store');
 const {
   getMantleSessionState,
@@ -46,6 +47,7 @@ const {
 const { selectScene } = require('./scene-selector');
 const { buildMantleInput } = require('./prompt-builder');
 const { createMantleResponse } = require('./mantle-client');
+const { pickWaitingLine } = require('./waiting-lines');
 const { normalizeMantleOutput } = require('./response-validator');
 const { MESSAGE_TYPES } = require('./types');
 const {
@@ -76,6 +78,7 @@ const { resolveThread, ensureThreadTitle } = require('./thread-resolver');
 const {
   appendTurn,
   getThread,
+  listThreads,
   hasUnsummarizedUserTurn,
 } = require('./conversation-thread-store');
 const {
@@ -84,6 +87,12 @@ const {
   buildGreetingInstruction,
   isAfterHardTalk,
   buildCareGreetingInstruction,
+  previousGreetingOpening,
+  buildOpeningLine,
+  recentGreetings,
+  buildRecentGreetingsLine,
+  nextRecentGreetings,
+  PLAIN_OPENING_LINE,
 } = require('./greeting');
 const { shouldSummarize } = require('./summary-trigger');
 const { dispatchSummarization } = require('./summary-dispatcher');
@@ -96,6 +105,87 @@ const {
   isFactCheckEnabled,
   resolveSceneReasoningEffort,
 } = require('./fact-check');
+const { defaultPlannerStore } = require('./planner/planner-store');
+const {
+  PLANNER_FEATURE,
+  mentionsEventDate,
+  mentionsTimer,
+  mayNeedPlanner,
+  shouldOpenPlanner,
+  buildPlannerContext,
+} = require('./planner/planner-context');
+const { writeEventExtras, findEventCandidate } = require('./planner/planner-writer');
+const {
+  buildReminderInstruction,
+  buildReminderCue,
+  reminderMatchesItem,
+  reminderNeedsClaim,
+  reminderAlreadySpoken,
+  reminderSpokenKey,
+} = require('./planner/planner-reminder');
+
+// 同じ予定の知らせを、もう話していたときのエラーコード。アプリは何も出さずに会話を開くだけにする
+const REMINDER_ALREADY_SPOKEN = 'REMINDER_ALREADY_SPOKEN';
+const { todaysUpcomingEvents, buildBriefInstruction, briefWeather } = require('./planner/morning-brief');
+const { todayJst } = require('./planner/planner-dates');
+const { QUICK_REPLY_TOOL_NAMES, isPlannerTool, quickReplyOf, runPlannerTool } = require('./tools/planner');
+
+const QUICK_REPLY_LOG_TOOLS = new Set(QUICK_REPLY_TOOL_NAMES);
+
+/** ツールと一緒に書いた返事の表情。選んだ Scene のいつもの表情、無ければ少しうれしい */
+function quickReplyEmotions(scene) {
+  const emotions = scene?.default_emotions;
+  if (emotions && typeof emotions === 'object' && !Array.isArray(emotions) && Object.keys(emotions).length > 0) {
+    return emotions;
+  }
+  return { happy: 0.6 };
+}
+
+/**
+ * 前の回で2回目を呼ばずに終えたときの、ツールの結果（スレッドに残してある）。
+ * 今回その response_id から続けるときだけ返す。要約で response_id が消えていたら使わない
+ */
+function pendingToolOutputFor(thread, previousResponseId) {
+  const pending = thread?.pendingToolOutput;
+  if (!previousResponseId || !pending || pending.responseId !== previousResponseId) return null;
+  if (!pending.callId || typeof pending.output !== 'string' || typeof pending.assistantText !== 'string') return null;
+  return pending;
+}
+const {
+  PAST_TALK_TOOL_NAME,
+  PAST_TALK_INSTRUCTION,
+  mentionsPastTalk,
+  searchPastTalk,
+} = require('./tools/past-talk');
+const {
+  FOLLOW_UP_TURNS,
+  dueFollowUps,
+  sessionState: followUpSessionState,
+  mentionsItem,
+  talkedAboutSince,
+  sameThing,
+  buildFollowUpGreetingInstruction,
+  buildFollowUpBriefLines,
+  buildFollowUpTurnInstruction,
+  replyAskedAbout,
+} = require('./planner/follow-up');
+
+// 予定の知らせる文・「予定に入れる？」の中身を待つ上限。
+// 返事はもう出ているので、これを過ぎたら待たずに終える（知らせる文は決まり文句のまま）
+const PLANNER_HELPER_TIMEOUT_MS = Number(process.env.PLANNER_HELPER_TIMEOUT_MS || 8000);
+
+/**
+ * promise を ms まで待つ。過ぎたら fallback を返す（promise 自体は止めない）。
+ */
+function withTimeout(promise, ms, fallback) {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((resolve) => {
+      timer = setTimeout(() => resolve(fallback), ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
 
 // ─────────────────────────────────────────────
 // ツールループの設定
@@ -184,12 +274,16 @@ const defaultDependencies = Object.freeze({
   clearMantleResponseState,
   getOrCreateUserSession,
   updateMantleResponseState,
+  // 最近の話しかけを人ごとに覚える（greeting.js）
+  updateRecentGreetings,
 
   // 会話履歴の自前保存（案A）
   resolveThread,
   ensureThreadTitle,
   appendTurn,
   getThread,
+  // 前の話を探す（tools/past-talk.js）
+  listThreads: (sub) => listThreads(sub),
   shouldSummarize,
   dispatchSummarization,
   getMantleSessionState,
@@ -218,6 +312,21 @@ const defaultDependencies = Object.freeze({
   buildForcedFinalPrompt,
   onToolCallStart,
   onClientAction,
+
+  // 予定の手帳
+  plannerStore: defaultPlannerStore,
+  writeEventExtras,
+  findEventCandidate,
+  plannerHelperTimeoutMs: PLANNER_HELPER_TIMEOUT_MS,
+
+  // 朝のまとめの天気（当たった日だけ理由が返る。morning-brief.js）
+  briefWeather: ({ sub, location, now, store }) => briefWeather({
+    sub,
+    location,
+    now,
+    store,
+    getApiKey: async () => (await getToolSecrets())?.openWeatherMapApiKey || process.env.OPENWEATHERMAP_API_KEY,
+  }),
 });
 
 /**
@@ -240,6 +349,67 @@ async function requestSummaryOfPreviousThread(sub, threadId, dependencies) {
   } catch (error) {
     console.error(`[Summary] previous thread summary request failed (non-fatal): ${error.message}`);
     return false;
+  }
+}
+
+/**
+ * 予定を入れた・直したときの「知らせる文と大事さ」を保存してアプリへ知らせ、
+ * 話に出ただけの予定があれば「予定に入れる？」ボタンの中身をアプリへ送る。
+ *
+ * どれも失敗しても会話は壊さない。
+ */
+async function finishPlannerJobs({ sub, jobs, candidatePromise, items = [], dependencies, notifyClientAction }) {
+  const timeoutMs = dependencies.plannerHelperTimeoutMs;
+
+  for (const job of jobs) {
+    try {
+      const extras = await withTimeout(job.promise, timeoutMs, null);
+      if (!extras || !extras.fromLlm) {
+        if (!extras) console.warn('[Planner] extras timed out; keeping template lines');
+        continue;
+      }
+      const item = await dependencies.plannerStore.updateItem(sub, job.itemId, {
+        lines: extras.lines,
+        importance: extras.importance,
+        enriched: true,
+      });
+      if (item) {
+        await notifyClientAction({ action: 'planner.updated', params: { item } });
+      }
+    } catch (error) {
+      console.error(`[Planner] extras save failed (non-fatal): ${error.message}`);
+    }
+  }
+
+  if (candidatePromise) {
+    try {
+      const candidate = await withTimeout(candidatePromise, timeoutMs, null);
+      if (candidate) {
+        // ボタンが押されなかったら、終わったあとに聞けるよう「あとで聞くこと」として持つ（follow-up.js）。
+        // 同じことが予定に入っていれば予定のほうで聞くので持たない。前に持ったものがあればそれを使う
+        let followUp = null;
+        if (!items.some((item) => item?.kind === 'event' && sameThing(item, candidate))) {
+          followUp = items.find((item) => item?.kind === 'followup' && sameThing(item, candidate)) || null;
+          if (!followUp) {
+            try {
+              followUp = await dependencies.plannerStore.addFollowUp(sub, candidate);
+            } catch (error) {
+              console.error(`[FollowUp] save failed (non-fatal): ${error.message}`);
+            }
+          }
+        }
+        console.log(`[Planner] suggest: hasTime=${Boolean(candidate.time)} followUp=${Boolean(followUp)}`);
+        await notifyClientAction({
+          action: 'planner.suggest',
+          params: {
+            candidate: followUp ? { ...candidate, followUpId: followUp.itemId } : candidate,
+            ...(followUp ? { item: followUp } : {}),
+          },
+        });
+      }
+    } catch (error) {
+      console.error(`[Planner] suggest failed (non-fatal): ${error.message}`);
+    }
   }
 }
 
@@ -268,6 +438,12 @@ function createCoreChatService(dependencyOverrides = {}) {
     onToolCallStart,
     // SQS経路ではsqs-core-handlerが渡す。アプリへ操作を頼むときに呼ぶ。
     onClientAction,
+    // SQS経路ではsqs-core-handlerが渡す。返事の終わり（stream.completed）を送ったあとに
+    // 回してよい仕事（予定の知らせる文・「予定に入れる？」）を預ける。
+    // 未指定なら、これまでどおり返す前に待つ。
+    deferAfterReply,
+    // SQS経路ではsqs-core-handlerが渡す。Mantle の返事が遅いときのひとこと（waiting-lines.js）を流す。
+    onWaitingLine,
   } = {}) {
     const notifyToolCall = typeof onToolCallStart === 'function'
       ? onToolCallStart
@@ -412,9 +588,114 @@ function createCoreChatService(dependencyOverrides = {}) {
     // 何日も空いていたら切り口は使わず「久しぶり」を優先する
     // 少し前につらい話をしていたら、切り口は使わず、そっと様子を聞く（greeting.js 参照）
     let greetingInstruction = '';
-    if (input.greeting && isAfterHardTalk(threadContext.thread, now)) {
+    // 朝のまとめで伝える今日の予定（返事のあと、カードにも出す）
+    let briefEvents = [];
+    // 予定の手帳を読むのは1回だけ（話しかけ・あとで聞くことで共有する）。読めなければ空
+    let plannerRead = null;
+    const readPlannerItems = () => {
+      plannerRead ||= Promise.resolve()
+        .then(() => dependencies.plannerStore.listItems(input.sub))
+        .catch((error) => {
+          console.error(`[Planner] read failed (non-fatal): ${error.message}`);
+          return [];
+        });
+      return plannerRead;
+    };
+    const readBriefEvents = async () => todaysUpcomingEvents(await readPlannerItems(), now);
+    // 今日のまとめをほかの端末でもう言っていないか。言っていなければ、言ったことにする。
+    // 確かめられなければ、まとめる（端末ごとの1日1回は残っている）
+    const claimTodayBrief = async () => {
+      if (typeof dependencies.plannerStore.claimBrief !== 'function') return true;
+      try {
+        const claimed = await dependencies.plannerStore.claimBrief(input.sub, todayJst(now));
+        if (!claimed) console.log('[Greeting] brief already given today on another device');
+        return claimed;
+      } catch (error) {
+        console.error(`[Planner] brief mark failed (non-fatal): ${error.message}`);
+        return true;
+      }
+    };
+
+    // 終わったことを「そういえば」で聞く（follow-up.js）。
+    // by: 'raim' はライムから聞く、'user' は本人が先に話した（聞いた扱いにして乗るだけ）
+    let followUp = null;
+    const threadMessages = threadContext.thread?.messages || [];
+    const markFollowUpAsked = async (item) => {
+      try {
+        await dependencies.plannerStore.updateItem(input.sub, item.itemId, { askedAt: now.toISOString() });
+      } catch (error) {
+        console.error(`[FollowUp] mark failed (non-fatal): ${error.message}`);
+      }
+    };
+    // 今聞けることを1つ選ぶ。この会話でもう本人が話していたものは、聞いた扱いにして飛ばす
+    const pickFollowUp = async ({ userText = '' } = {}) => {
+      const due = dueFollowUps(await readPlannerItems(), now);
+      const spoken = userText ? due.find((item) => mentionsItem(userText, item)) : null;
+      if (spoken) return { item: spoken, by: 'user' };
+      for (const item of due) {
+        if (talkedAboutSince(item, threadMessages)) {
+          await markFollowUpAsked(item);
+          continue;
+        }
+        return { item, by: 'raim' };
+      }
+      return null;
+    };
+    // 予定を知らせる話しかけ（planner-reminder.js）。予定が読めなければ普段の話しかけにする
+    let reminderItem = null;
+    if (input.greeting && input.reminder) {
+      try {
+        const item = await dependencies.plannerStore.getItem(input.sub, input.reminder.itemId);
+        if (reminderMatchesItem(item, input.reminder.slot)) reminderItem = item;
+      } catch (error) {
+        console.error(`[Planner] reminder item read failed (non-fatal): ${error.message}`);
+      }
+      if (!reminderItem) console.warn('[Greeting] reminder item not found; using a normal greeting');
+    }
+    // 同じ知らせはもう話していたら、2回目は話さない（2026-11-13）。
+    // Windows が時刻に話したあとスマホの通知を押すと、同じタイマーの話をもう一度していた。
+    // 印は話し終えたあと（7-a）に付けるので、Mantle が失敗した回は話していない扱いのまま
+    if (reminderItem && reminderNeedsClaim(input.reminder.slot) &&
+        reminderAlreadySpoken(reminderItem, input.reminder.slot)) {
+      console.log(`[Greeting] reminder already spoken; skipping slot=${input.reminder.slot}`);
+      return createCoreError({
+        requestId: input.requestId,
+        code: REMINDER_ALREADY_SPOKEN,
+        message: 'This reminder was already spoken',
+        retriable: false,
+      });
+    }
+    if (reminderItem) {
+      greetingInstruction = buildReminderInstruction({ item: reminderItem, slot: input.reminder.slot, now });
+      console.log(`[Greeting] angle=reminder slot=${input.reminder.slot}`);
+    } else if (input.greeting && isAfterHardTalk(threadContext.thread, now)) {
       greetingInstruction = buildCareGreetingInstruction();
       console.log('[Greeting] angle=care');
+    } else if (
+      input.greeting && input.brief && (briefEvents = await readBriefEvents()).length > 0 &&
+      await claimTodayBrief()
+    ) {
+      // その日はじめての話しかけ（morning-brief.js）。今日これからの予定が無ければ普段の話しかけ
+      // 終わったことがあれば、まとめの中で一緒に聞く（「昨日の面接どうだった？今日は15時からバイトだね」）
+      followUp = await pickFollowUp();
+      const weather = await dependencies.briefWeather({
+        sub: input.sub,
+        location: input.location,
+        now,
+        store: dependencies.plannerStore,
+      });
+      greetingInstruction = buildBriefInstruction({
+        events: briefEvents,
+        weather,
+        followUpLines: followUp ? buildFollowUpBriefLines({ item: followUp.item, now }) : [],
+      });
+      console.log(`[Greeting] angle=brief events=${briefEvents.length} weather=${weather.length > 0} followUp=${Boolean(followUp)}`);
+      // 今日の予定は全部カードで出す（アプリは返事を出し終えてから並べる）
+      await notifyClientAction({ action: 'planner.show', params: { items: briefEvents, brief: true } });
+    } else if (input.greeting && (followUp = await pickFollowUp())) {
+      // 終わったことを「そういえば」で聞く話しかけ（follow-up.js）
+      greetingInstruction = buildFollowUpGreetingInstruction({ item: followUp.item, now });
+      console.log(`[Greeting] angle=follow_up kind=${followUp.item.kind} importance=${followUp.item.importance || 'normal'}`);
     } else if (input.greeting) {
       const gapMinutes = lastTalked.lastTalkedAt
         ? Math.max(0, (now.getTime() - Date.parse(lastTalked.lastTalkedAt)) / 60000)
@@ -425,7 +706,23 @@ function createCoreChatService(dependencyOverrides = {}) {
         random: dependencies.random || Math.random,
       });
       greetingInstruction = buildGreetingInstruction(angle);
-      console.log(`[Greeting] angle=${angle ? angle.id : 'long_gap'}`);
+      console.log(`[Greeting] angle=${angle ? angle.id : 'long_gap'}${angle?.topic ? ` topic=${angle.topic}` : ''}`);
+    }
+    // 出だしもコードで振り分ける（「やっほー」ばかりだった。greeting.js 参照）
+    if (input.greeting && greetingInstruction) {
+      const remembered = session.recentGreetings || [];
+      const openingLine = buildOpeningLine({
+        previousOpening: previousGreetingOpening({ messages: threadMessages, remembered }),
+        reminder: Boolean(reminderItem),
+        random: dependencies.random || Math.random,
+      });
+      greetingInstruction = `${greetingInstruction}\n${openingLine}`;
+      // 最近の話しかけと同じ話題・言い回しにしない（知らせのときは中身が決まっているので渡さない）
+      const recentLine = reminderItem
+        ? ''
+        : buildRecentGreetingsLine(recentGreetings({ messages: threadMessages, remembered }));
+      if (recentLine) greetingInstruction = `${greetingInstruction}\n${recentLine}`;
+      console.log(`[Greeting] opening=${openingLine === PLAIN_OPENING_LINE ? 'plain' : 'greet'} recent=${recentLine ? 'yes' : 'no'}`);
     }
 
     // 3-e. 記憶を渡し直すか。
@@ -447,6 +744,90 @@ function createCoreChatService(dependencyOverrides = {}) {
     let memorySent = sessionState.usePreviousResponseId
       ? resendUserMemory
       : Boolean(userMemory.trim());
+
+    // 3-f. 予定の手帳を開くか（planner-context.js の関門）。
+    //
+    // 日付・時間・予定の言葉があるとき、または前の返事で予定の話をしていたときだけ、
+    // 予定の指示・今の予定・日付の表とツールを渡す。普通の会話では何も足さない。
+    // 予定を読むのは、言葉で当たりそうなときだけ（毎回 DynamoDB を読まない）。
+    let plannerItems = [];
+    let plannerOpen = false;
+    const hasPlannerFeature = !input.greeting &&
+      Array.isArray(input.features) && input.features.includes(PLANNER_FEATURE);
+    const plannerHistory = threadContext.thread?.messages || [];
+    if (
+      hasPlannerFeature && toolsEnabled &&
+      mayNeedPlanner(input.text, plannerHistory)
+    ) {
+      try {
+        plannerItems = await dependencies.plannerStore.listItems(input.sub);
+        plannerOpen = shouldOpenPlanner({
+          features: input.features,
+          userText: input.text,
+          history: plannerHistory,
+          items: plannerItems,
+        });
+      } catch (error) {
+        // 予定が読めなくても会話は続ける（予定の手帳を開かないだけ）
+        console.error(`[Planner] list failed (non-fatal): ${error.message}`);
+        plannerOpen = false;
+      }
+    }
+    const plannerContext = plannerOpen
+      ? buildPlannerContext({ items: plannerItems, now })
+      : '';
+    if (plannerOpen) {
+      console.log(`[Planner] opened: items=${plannerItems.length}`);
+    }
+
+    // 3-g. 会話のはじめの3往復で、終わったことを「そういえば」で聞くか（follow-up.js）。
+    //
+    // 起動時の話しかけのあと（か1時間あいたあと）の3往復だけ。その区切りでもう聞いていたら聞かない。
+    // つらい話のとき、事実を調べる質問、予定の手帳を使う話のときは聞かない。
+    // 聞きたいことがあるときだけ指示を足す（普通の会話ではプロンプトは今と同じ）。
+    let followUpContext = '';
+    // 3-h. 前に話したことを聞いているか（tools/past-talk.js の関門）。
+    // 「この前話した〜」「前に言ってた〜なんだっけ」のときだけ、探す道具と指示を渡す
+    const pastTalkOpen = Boolean(toolsEnabled) && !input.greeting && mentionsPastTalk(input.text);
+    if (pastTalkOpen) {
+      console.log('[PastTalk] opened');
+    }
+    // 予定の手帳を持つアプリだけ（古いアプリでは手帳を読まない）。
+    // 前の話を探しているときも聞かない（話がそれるので）
+    if (
+      !input.greeting && hasPlannerFeature && !plannerOpen && !factCheck && !pastTalkOpen &&
+      String(input.text || '').trim()
+    ) {
+      const followUpSession = followUpSessionState(threadMessages, now);
+      const hardTalk = isAfterHardTalk(threadContext.thread, now) ||
+        isAfterHardTalk({ messages: [{ role: 'user', text: input.text, createdAt: now.toISOString() }] }, now);
+      if (followUpSession.turns < FOLLOW_UP_TURNS && !followUpSession.asked && !hardTalk) {
+        followUp = await pickFollowUp({ userText: input.text });
+        if (followUp?.by === 'raim') {
+          followUpContext = buildFollowUpTurnInstruction({ item: followUp.item, now });
+        }
+        if (followUp) {
+          console.log(`[FollowUp] turn=${followUpSession.turns + 1} by=${followUp.by} kind=${followUp.item.kind} importance=${followUp.item.importance || 'normal'}`);
+        }
+      }
+    }
+    // 状況のルールは予定の手帳と同じ場所に入れる（手帳を開いた回は聞かないので重ならない）
+    const situationContext = [plannerContext, followUpContext, pastTalkOpen ? PAST_TALK_INSTRUCTION : '']
+      .filter(Boolean)
+      .join('\n\n');
+
+    // 話に出ただけの予定（「予定に入れる？」ボタン）を、返事と並行して探す。
+    // 日付や予定の言葉が今回の発言にあるときだけ（前の返事からの続きだけでは探さない）
+    const candidatePromise = plannerOpen && mentionsEventDate(input.text) && !mentionsTimer(input.text)
+      ? dependencies.findEventCandidate({
+        userText: input.text,
+        now,
+        createResponse: dependencies.createMantleResponse,
+      })
+      : null;
+    // 予定を入れた・直したときに、知らせる文と大事さを作る呼び出し（並行して進める）
+    const plannerExtrasJobs = [];
+    let plannerAddedThisTurn = false;
 
     // 4. 初回ならsystem prompt・要約・Few-shotを含める。
     // 継続時はprevious_response_idを使うため、今回の発話を中心に組み立てる。
@@ -473,6 +854,9 @@ function createCoreChatService(dependencyOverrides = {}) {
       // アプリを開いたときは、ライムから話しかける
       greeting: input.greeting,
       greetingInstruction,
+      // 知らせる話しかけは、何の合図かを合図の文に書く（planner-reminder.js）
+      greetingCue: reminderItem ? buildReminderCue(reminderItem) : '',
+      plannerContext: situationContext,
     });
     // policyが期限・存在状態を確認済みの時だけprevious_response_idを送る。
     let previousResponseId = sessionState.usePreviousResponseId
@@ -504,6 +888,19 @@ function createCoreChatService(dependencyOverrides = {}) {
     // ツール結果を返す2回目以降の呼出では、直前のresponse_idを使って会話を継続する。
     // これによりツール呼出のコンテキストがMantle側に保持される。
     // ツールを使わない構成では、従来どおり1回だけ呼んで終わる。
+    // Mantle の返事が遅いときのひとこと。1回の発言で、遅いとき・頼み直すときそれぞれ1回まで。
+    // 話しかけと知らせのときは言わない（ライムから先に話すのに「待って」は変なので）
+    const spokenWaiting = new Set();
+    const speakWaiting = (!input.greeting && typeof onWaitingLine === 'function')
+      ? async ({ stage }) => {
+        if (spokenWaiting.has(stage)) return;
+        const line = pickWaitingLine(stage, dependencies.random || Math.random);
+        if (!line) return;
+        spokenWaiting.add(stage);
+        console.log(`[Mantle] waiting line: stage=${stage}`);
+        await onWaitingLine(line);
+      }
+      : null;
     const callMantle = async ({ input: currentInput, previousId, tools }) => {
       return dependencies.createMantleResponse({
         mantleInput: currentInput,
@@ -513,6 +910,7 @@ function createCoreChatService(dependencyOverrides = {}) {
         onTextDelta: onMantleTextDelta,
         tools,
         reasoningEffort,
+        onWaiting: speakWaiting,
       });
     };
 
@@ -521,8 +919,14 @@ function createCoreChatService(dependencyOverrides = {}) {
       try {
         return await callMantle({ input: currentInput, previousId, tools });
       } catch (error) {
+        // 前の回の「ツールの結果」を頭に足して断られたときも、履歴から作り直す（pendingFromLastTurn）
+        const rejectedPending = pendingInjected && previousId === pendingInjected &&
+          [400, 404, 422].includes(Number(error?.statusCode || error?.status));
+        if (rejectedPending) {
+          console.warn(`[Mantle] pending tool output rejected: status=${error.statusCode || error.status}`);
+        }
         const canRecover = Boolean(previousId) &&
-          dependencies.isMantleResponseExpiredError(error);
+          (dependencies.isMantleResponseExpiredError(error) || rejectedPending);
 
         if (!canRecover) {
           throw error;
@@ -547,6 +951,8 @@ function createCoreChatService(dependencyOverrides = {}) {
           history: threadContext.thread?.messages || [],
           greeting: input.greeting,
           greetingInstruction,
+          greetingCue: reminderItem ? buildReminderCue(reminderItem) : '',
+          plannerContext: situationContext,
         });
 
         mantleInput = rebuiltInput;
@@ -558,7 +964,7 @@ function createCoreChatService(dependencyOverrides = {}) {
     };
 
     const toolDefinitions = toolsEnabled
-      ? dependencies.getToolDefinitions({ features: input.features })
+      ? dependencies.getToolDefinitions({ features: input.features, planner: plannerOpen, pastTalk: pastTalkOpen })
       : null;
     // 今回ライムに見せたツール名。見せていないツール（アプリが対応していない
     // 駅アラームなど）を名前だけで呼ばれても実行しない。
@@ -568,6 +974,10 @@ function createCoreChatService(dependencyOverrides = {}) {
     const seenToolCalls = new Set();
 
     let toolTurn = 0;
+    // 前の回のツールの結果を頭に足した response_id（足していなければ ''）
+    let pendingInjected = '';
+    // 今回、ツールと一緒に書いた返事で終えたなら、次の回に渡すツールの結果
+    let pendingToolOutput = null;
     // 会話の記録に残す、このターンで使ったツール（分析用）
     const toolLog = [];
     let toolExecuted = false;
@@ -575,8 +985,24 @@ function createCoreChatService(dependencyOverrides = {}) {
     let exitedDueToDuplicate = false;
     let exitedDueToUnknownTool = false;
 
+    // 前の回で、ツールと一緒に書いた返事で終えていたら（2回目を呼んでいない）、
+    // AI の会話はツールの呼び出しで止まっている。今回の頭で、その結果と言った返事を渡してから続ける。
+    // 渡さないと「ツールの結果が無い」と断られる。断られたら履歴から作り直す（callMantleWithRecovery）
+    const pendingFromLastTurn = pendingToolOutputFor(threadContext.thread, previousResponseId);
+    pendingInjected = pendingFromLastTurn ? previousResponseId : '';
+    const firstInput = pendingFromLastTurn
+      ? {
+        ...mantleInput,
+        messages: [
+          { type: 'function_call_output', call_id: pendingFromLastTurn.callId, output: pendingFromLastTurn.output },
+          { role: 'assistant', content: pendingFromLastTurn.assistantText },
+          ...(mantleInput.messages || []),
+        ],
+      }
+      : mantleInput;
+
     mantleResponse = await callMantleWithRecovery({
-      input: mantleInput,
+      input: firstInput,
       previousId: previousResponseId,
       tools: toolDefinitions,
     });
@@ -634,6 +1060,143 @@ function createCoreChatService(dependencyOverrides = {}) {
         exitedDueToUnknownTool = true;
         toolLog.push({ name: String(toolName || ''), skipped: 'unknown' });
         break;
+      }
+
+      // 予定の手帳のツールは、保存してからアプリへ知らせる（tools/planner.js）。
+      // 前置きのセリフは言わない（保存はすぐ終わる）
+      if (isPlannerTool(toolName)) {
+        const { result, change } = await runPlannerTool(toolName, toolArgs, {
+          sub: input.sub,
+          store: dependencies.plannerStore,
+          items: plannerItems,
+          userText: input.text,
+          now,
+        }).catch((error) => {
+          console.error(`[Planner] ${toolName} failed: ${error.message}`);
+          return {
+            result: { error: true, message: '手帳に書けなかった。あとでもう一度頼んでもらう', tool: toolName },
+            change: null,
+          };
+        });
+
+        if (change?.type === 'show') {
+          // 「メモ何あったっけ？」: 返事の下にメモやリストのカードを出す（手帳は変えない）
+          await notifyClientAction({ action: 'planner.show', params: { items: change.items } });
+        } else if (change) {
+          await notifyClientAction({
+            action: `planner.${change.type}`,
+            params: { item: change.item, ...(change.params || {}) },
+          });
+          if (change.type === 'added') plannerAddedThisTurn = true;
+          // 名前か日時が変わったら、知らせる文と大事さを作り直す
+          // タイマーは知らせる文を作らない（鳴ったときの文は決まり文句）
+          const needsExtras = change.item?.kind === 'event' && (change.type === 'added' ||
+            (change.type === 'updated' && (change.changedFields || []).some((f) => ['title', 'date', 'time'].includes(f))));
+          if (needsExtras) {
+            plannerExtrasJobs.push({
+              itemId: change.item.itemId,
+              promise: dependencies.writeEventExtras({
+                title: change.item.title,
+                note: change.item.note,
+                createResponse: dependencies.createMantleResponse,
+              }),
+            });
+          }
+          // 消した・直したら、次の発言のために手元の一覧も合わせる
+          plannerItems = plannerItems.filter((item) => item.itemId !== change.item.itemId);
+          if (change.type !== 'deleted') plannerItems.push(change.item);
+        }
+
+        toolExecuted = true;
+        if (result?.error) toolFailed = true;
+
+        // うまくいったら、ツールと一緒に書いた返事をそのまま言って終える（AI の2回目を呼ばない）
+        const quickReply = quickReplyOf(toolName, toolArgs, { result, change });
+        if (quickReply) {
+          const assistantText = JSON.stringify({
+            emotions: quickReplyEmotions(selectedScene),
+            text: quickReply,
+          });
+          toolLog.push({ name: toolName, query: '', ok: true, quick: true });
+          console.log(`[Planner] quick reply: tool=${toolName}`);
+          pendingToolOutput = {
+            responseId: mantleResponse.responseId,
+            callId: toolCall.callId,
+            output: JSON.stringify(result),
+            assistantText,
+          };
+          if (typeof onMantleTextDelta === 'function') await onMantleTextDelta(assistantText);
+          mantleResponse = { ...mantleResponse, rawText: assistantText, toolCalls: [] };
+          break;
+        }
+        if (QUICK_REPLY_LOG_TOOLS.has(toolName) && !result?.error && change && change.type !== 'show') {
+          console.log(`[Planner] quick reply missing: tool=${toolName}`);
+        }
+        toolLog.push({ name: toolName, query: '', ok: !result?.error });
+
+        previousResponseId = mantleResponse.responseId;
+        mantleResponse = await callMantle({
+          input: {
+            ...mantleInput,
+            messages: [
+              {
+                type: 'function_call_output',
+                call_id: toolCall.callId,
+                output: JSON.stringify(result),
+              },
+            ],
+          },
+          previousId: previousResponseId,
+          tools: dependencies.multiTurnTools ? toolDefinitions : null,
+        });
+        continue;
+      }
+
+      // 前の話を探す（tools/past-talk.js）。見つかったら、返事の下にその会話を開くカードを出す
+      if (toolName === PAST_TALK_TOOL_NAME) {
+        const { result, best, stats } = await searchPastTalk({
+          sub: input.sub,
+          keywords: toolArgs?.keywords,
+          period: toolArgs?.period,
+          userText: input.text,
+          forgotten: session.forgottenMemories || [],
+          now,
+          store: { listThreads: dependencies.listThreads, getThread: dependencies.getThread },
+        }).catch((error) => {
+          console.error(`[PastTalk] search failed: ${error.message}`);
+          return {
+            result: { error: true, message: '前の会話を読めなかった。思い出せなかったと正直に言う', tool: toolName },
+            best: null,
+            stats: null,
+          };
+        });
+        if (stats) {
+          console.log(`[PastTalk] threads=${stats.threads} read=${stats.read} hits=${stats.hits} found=${Boolean(best)} ms=${stats.ms}`);
+        }
+        if (best) {
+          await notifyClientAction({ action: 'history.found', params: best });
+        }
+
+        toolExecuted = true;
+        if (result?.error) toolFailed = true;
+        toolLog.push({ name: toolName, query: '', ok: !result?.error, found: Boolean(best) });
+
+        previousResponseId = mantleResponse.responseId;
+        mantleResponse = await callMantle({
+          input: {
+            ...mantleInput,
+            messages: [
+              {
+                type: 'function_call_output',
+                call_id: toolCall.callId,
+                output: JSON.stringify(result),
+              },
+            ],
+          },
+          previousId: previousResponseId,
+          tools: dependencies.multiTurnTools ? toolDefinitions : null,
+        });
+        continue;
       }
 
       // アプリに頼むツール（駅アラームなど）か。頼むなら、今回の発言で
@@ -808,6 +1371,18 @@ function createCoreChatService(dependencyOverrides = {}) {
       });
     }
 
+    // 5-b. 終わったことを聞いたら（本人が先に話したときも）、もう聞かないように印を付ける。
+    // 会話の途中は「流れが合えば」なので、返事で聞いていなければ次の往復に持ち越す
+    let followUpMeta = null;
+    if (followUp) {
+      const asked = input.greeting || followUp.by === 'user' || replyAskedAbout(output.text, followUp.item);
+      if (asked) {
+        await markFollowUpAsked(followUp.item);
+        followUpMeta = { itemId: followUp.item.itemId, by: followUp.by };
+      }
+      console.log(`[FollowUp] asked=${asked}`);
+    }
+
     // 6. Mantleが発行したresponse_idを次回会話用に保存する。
     await dependencies.updateMantleResponseState(input.sub, {
       responseId: mantleResponse.responseId,
@@ -851,6 +1426,12 @@ function createCoreChatService(dependencyOverrides = {}) {
             reasoningEffort: reasoningEffort ||
               String((dependencies.env || process.env).MANTLE_REASONING_EFFORT || 'none'),
             ...(input.greeting ? { greeting: true } : {}),
+            // 予定を知らせる話しかけだったか（どの予定のどの時刻か）
+            ...(reminderItem ? { reminder: { itemId: reminderItem.itemId, slot: input.reminder.slot } } : {}),
+            // 予定の手帳を開いたか。次の発言（「うん」など）でも続けて開くのに使う
+            ...(plannerOpen ? { planner: true } : {}),
+            // 終わったことを聞いたか（その区切りではもう聞かない。follow-up.js）
+            ...(followUpMeta ? { followUp: followUpMeta } : {}),
           },
         },
         inputTokens: mantleResponse.usage
@@ -858,6 +1439,8 @@ function createCoreChatService(dependencyOverrides = {}) {
           : 0,
         responseId: mantleResponse.responseId,
         responseCreatedAt: mantleResponse.createdAt,
+        // 2回目を呼ばずに終えたら、次の回の頭で渡すツールの結果（無ければ消す）
+        pendingToolOutput,
         // 今回記憶を渡したら、その版を残す（次から同じ版は渡し直さない）
         memoryInjectedAt: memorySent ? memoryVersion : '',
       });
@@ -897,6 +1480,55 @@ function createCoreChatService(dependencyOverrides = {}) {
       console.error(`[Thread] append failed (non-fatal): ${error.message}`);
     }
 
+    // 7-a. 話しかけ（知らせ以外）を人ごとに覚える。次の会話の1回目でも同じことを言わないように
+    if (input.greeting && !reminderItem && output.text &&
+        typeof dependencies.updateRecentGreetings === 'function') {
+      try {
+        await dependencies.updateRecentGreetings(
+          input.sub,
+          nextRecentGreetings(session.recentGreetings || [], output.text)
+        );
+      } catch (error) {
+        console.warn(`[Greeting] could not remember the greeting (non-fatal): ${error.message}`);
+      }
+    }
+
+    // 7-a2. 知らせを話したことを予定に印として残す（同じ知らせを2回話さないように）
+    if (reminderItem && reminderNeedsClaim(input.reminder.slot) && output.text &&
+        typeof dependencies.plannerStore.markReminderSpoken === 'function') {
+      try {
+        await dependencies.plannerStore.markReminderSpoken(
+          input.sub,
+          reminderItem.itemId,
+          input.reminder.slot,
+          reminderSpokenKey(reminderItem)
+        );
+      } catch (error) {
+        console.error(`[Planner] reminder mark failed (non-fatal): ${error.message}`);
+      }
+    }
+
+    // 7-b. 予定の知らせる文・「予定に入れる？」ボタンを仕上げる。
+    // 返事はもう出ているので、待つのは上限まで（過ぎたら決まり文句のまま）。
+    //
+    // 以前はここで待ってから返していたので、返事の終わり（stream.completed）が最大8秒遅れ、
+    // そのあいだアプリの入力欄が「考えているよ」のままだった（2026-11-13 のテスト）。
+    // SQS経路では、返事の終わりを送ったあとに回す（sqs-core-handler.js）。
+    const plannerJobs = () => finishPlannerJobs({
+      sub: input.sub,
+      jobs: plannerExtrasJobs,
+      candidatePromise: plannerAddedThisTurn ? null : candidatePromise,
+      items: plannerItems,
+      dependencies,
+      notifyClientAction,
+    });
+    const hasPlannerJobs = plannerExtrasJobs.length > 0 || Boolean(candidatePromise && !plannerAddedThisTurn);
+    if (hasPlannerJobs && typeof deferAfterReply === 'function') {
+      deferAfterReply(plannerJobs);
+    } else if (hasPlannerJobs) {
+      await plannerJobs();
+    }
+
     // 8-b. 会話を切り替えたら、前のスレッドの要約を頼む。
     //
     // 以前は、長くなったスレッド（トークン数か往復数が閾値を超えたもの）しか
@@ -923,6 +1555,7 @@ function createCoreChatService(dependencyOverrides = {}) {
 const handleCoreChat = createCoreChatService();
 
 module.exports = {
+  REMINDER_ALREADY_SPOKEN,
   createCoreChatService,
   handleCoreChat,
 };

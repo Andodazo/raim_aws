@@ -25,6 +25,10 @@ const { createTtsClient } = require('./tts-client');
 const { getVoiceParamsFromEmotions } = require('./voice-mapper');
 const { createChat } = require('./types');
 const { RAIM_PERSONA } = require('./prompts/raim-system-prompt');
+const { parsePlannerEnrichMessage, enrichPlannerItem } = require('./planner/planner-enrich');
+const { defaultPlannerStore } = require('./planner/planner-store');
+const { writeEventExtras } = require('./planner/planner-writer');
+const { createMantleResponse } = require('./mantle-client');
 
 function isSqsEvent(event) {
   return Array.isArray(event?.Records) &&
@@ -41,10 +45,50 @@ function createSqsCoreHandler(dependencyOverrides = {}) {
     createResponseQueuePublisher,
     createTtsClient,
     getVoiceParamsFromEmotions,
+    enrichPlannerItem,
+    plannerStore: defaultPlannerStore,
+    writeEventExtras,
+    createMantleResponse,
     ...dependencyOverrides,
   };
 
+  /**
+   * 手で足した予定に知らせる文を付ける（planner-enrich.js）。
+   *
+   * チャットではないので、返事の流れ（started / completed）は送らず、
+   * 終わったら planner.updated だけをアプリへ送る。
+   * 失敗しても再試行しない（予定は決まり文句のまま使える）。
+   */
+  async function processPlannerEnrich(job, record) {
+    const publisher = job.connectionId
+      ? dependencies.createResponseQueuePublisher({
+        requestId: job.requestId || `enrich-${record.messageId}`,
+        connectionId: job.connectionId,
+        sub: job.sub,
+        source: 'websocket',
+        attempt: 1,
+      }, {})
+      : null;
+    try {
+      await dependencies.enrichPlannerItem(job, {
+        store: dependencies.plannerStore,
+        writeEventExtras: dependencies.writeEventExtras,
+        createResponse: dependencies.createMantleResponse,
+        notify: publisher ? (action) => publisher.clientAction(action) : null,
+      });
+    } catch (error) {
+      console.error(`[Planner] enrich failed (non-fatal): ${error.message}`);
+    }
+    return { plannerEnrich: true };
+  }
+
   async function processRecord(record, context) {
+    // 手で足した予定の仕上げ（チャットではない）
+    const enrichJob = parsePlannerEnrichMessage(record.body);
+    if (enrichJob) {
+      return processPlannerEnrich(enrichJob, record);
+    }
+
     // SQS record bodyをCore標準入力へ変換する。
     // messageIdはクライアントrequestId欠落時の追跡用fallbackとして使う。
     const input = dependencies.normalizeCoreEvent({ Records: [record] }, {
@@ -106,6 +150,9 @@ function createSqsCoreHandler(dependencyOverrides = {}) {
 
       await publisher.start();
 
+      // 返事の終わりを送ったあとに回す仕事（core-chat-service.js の deferAfterReply）
+      const afterReply = [];
+
       // Mantleのraw JSON deltaからtext値だけを抽出し、Response Queueへ順次送る。
       const result = await dependencies.handleCoreChat(input, {
         // ツール呼出時に前置きセリフとtool通知をResponse Queueへ流す。
@@ -113,9 +160,16 @@ function createSqsCoreHandler(dependencyOverrides = {}) {
         onToolCallStart: async ({ toolName, description, introText }) => {
           await publisher.toolCall({ toolName, description, introText });
         },
+        // Mantle の返事が遅いときのひとこと（前置きと同じく、声つきで先に出す）
+        onWaitingLine: async (text) => {
+          await publisher.filler(text);
+        },
         // ライムがアプリに頼んだ操作（駅アラームを始める など）を流す。
         onClientAction: async ({ action, params }) => {
           await publisher.clientAction({ action, params });
+        },
+        deferAfterReply: (task) => {
+          afterReply.push(task);
         },
         fallbackRequestId: record.messageId,
         onMantleTextDelta: (delta) => extractor.push(delta),
@@ -144,6 +198,16 @@ function createSqsCoreHandler(dependencyOverrides = {}) {
           code: result.code || '',
         },
       });
+
+      // 予定の知らせる文・「予定に入れる？」は、返事の終わりのあとにカードとして届ける。
+      // 失敗しても会話はもう終わっているので、やり直さない（要求は COMPLETED 済み）
+      for (const task of afterReply) {
+        try {
+          await task();
+        } catch (error) {
+          console.error(`[Core] after-reply task failed (non-fatal): ${error.message}`);
+        }
+      }
 
       return result;
     } catch (error) {

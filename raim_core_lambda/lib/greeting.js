@@ -37,6 +37,7 @@ const GREETING_INSTRUCTION = [
   '- 時間帯と、前回話してからの間に合わせる',
   '- 覚えていることには、切り口で言われたときだけ触れる',
   '- 「何か用？」「何でも聞いてね」のような受付っぽい言い方はしない',
+  '- 相手が自分に会いたかった、自分のことを考えていたと決めつけない',
   '- 「アプリが開かれた」「合図」には触れない',
   '- 直前の会話がつらい話だったら、明るいノリやボケはしない',
 ].join('\n');
@@ -53,17 +54,35 @@ const GREETING_INSTRUCTION = [
 // あわせて、話しかけのときは会話例を入れない（prompt-builder.js）。
 //
 // 何日も空いていたときは、切り口より「久しぶり」を優先する（安藤さんと決めた）。
+//
+// 切り口の文には例を書かない。以前は「ゲームしてた」「待ってた」「寒くなってきたね」と例を書いていて、
+// 「ゲームの攻略法を考えてた」「私のこと待ってた？」「寒くなってきたね」ばかりになった（2026-11-13 のテスト）。
+
+/**
+ * 近況の切り口で話す話題。コードで毎回1つ選ぶ。
+ *
+ * 選ばせると、好きなものに書いてあるゲームばかり選び、「ゲームの攻略法を考えてた」が続いた（2026-11-13）。
+ * 好きなもの（prompts の【性格】）と、ふだんの身の回りから選ぶ。
+ */
+const SELF_TOPICS = Object.freeze([
+  'ゲーム',
+  '食べもの',
+  '漫画や小説',
+  'ネットで見かけたもの',
+  '天気や季節',
+  'ちょっとした考えごと',
+]);
 
 /** これ以上空いていたら、切り口を使わず「久しぶり」を優先する */
 const LONG_GAP_MINUTES = 3 * 24 * 60;
 
 const GREETING_ANGLES = Object.freeze([
-  { id: 'time', text: '時間帯に合わせた一言（朝なら朝の、夜ならちょっと夜ふかしをいじる、など）' },
+  { id: 'time', text: '時間帯に合わせた一言' },
   { id: 'followup', text: '覚えていることの中から、前回の話の続きが気になると軽く聞く', needsMemory: true },
-  { id: 'self', text: '自分の近況をひとこと（ゲームしてた、考えごとしてた、など）' },
-  { id: 'welcome', text: '来てくれたことへのリアクション（待ってた、嬉しい、など）' },
-  { id: 'question', text: '軽い質問を1つだけ（今日どうだった？など）' },
-  { id: 'season', text: '曜日や季節に触れる（週末だね、寒くなってきたね、など）' },
+  { id: 'self', text: '自分の近況をひとこと（何をしていたかは、その場で自分で考える）', topics: true },
+  { id: 'welcome', text: '来てくれたことへのリアクション' },
+  { id: 'question', text: '軽い質問を1つだけ' },
+  { id: 'season', text: '曜日や季節に触れる' },
   { id: 'playful', text: 'ちょっとしたボケや、いたずらっぽい一言' },
 ]);
 
@@ -135,7 +154,10 @@ function pickGreetingAngle({ hasMemory = false, gapMinutes = null, random = Math
   }
   const angles = GREETING_ANGLES.filter((angle) => hasMemory || !angle.needsMemory);
   const index = Math.min(angles.length - 1, Math.floor(random() * angles.length));
-  return angles[index];
+  const angle = angles[index];
+  if (!angle.topics) return angle;
+  const topic = SELF_TOPICS[Math.min(SELF_TOPICS.length - 1, Math.floor(random() * SELF_TOPICS.length))];
+  return { ...angle, topic, text: `自分の近況をひとこと。今回は「${topic}」のこと（何をしていたかは、その場で自分で考える）` };
 }
 
 /**
@@ -151,11 +173,140 @@ function buildGreetingInstruction(angle) {
   return [GREETING_INSTRUCTION, ...extra].join('\n');
 }
 
+// ------------------------------------------------------------------------------
+// 出だし
+// ------------------------------------------------------------------------------
+//
+// 話しかけ16回のうち13回が「やっほー」で始まっていた（2026-11-13、知らせる話しかけも含む）。
+// 切り口を変えても、Gemma は温度を指定できないので、出だしの挨拶は同じ言葉に寄る。
+// 出だしもコードで振り分ける（安藤さんと決めた）。
+//   - 半分くらいは、挨拶の言葉を付けずに中身から話しはじめる
+//   - 残りは挨拶してよいが、前回の話しかけの出だしとは違う言い方にする（前回の出だしを渡す）
+//   - 予定・タイマーを知らせるときは、いつも中身から（何の知らせかを先に）
+// 例の言葉は足さない（例に挙げた言葉は丸写しされる。raim-system-prompt.js の v6.5 参照）。
+
+/**
+ * 前の出だしが分からないときに、前回の出だしとして渡す言葉。
+ *
+ * 新しい会話の1回目は前の出だしが無く、ほぼ毎回「やっほー」で始めていた（2026-11-13 のテスト）。
+ * Gemma がいつも選ぶ言葉なので、これを前回の出だしとして渡して、別の言い方にさせる。
+ */
+const DEFAULT_PREVIOUS_OPENING = 'やっほー';
+
+/** 挨拶の言葉を付けずに話しはじめる割合 */
+const PLAIN_OPENING_RATE = 0.5;
+
+const PLAIN_OPENING_LINE = '- 挨拶の言葉は付けずに、いきなり中身から話しはじめる';
+
+/**
+ * この会話で最後にした話しかけの出だし（最初の区切りまで。長ければ12文字まで）。無ければ ''。
+ *
+ * @param {Array} messages 今の会話（appendTurn の前の状態）
+ */
+function lastGreetingOpening(messages = []) {
+  const list = Array.isArray(messages) ? messages : [];
+  const last = [...list].reverse().find((m) => m?.role === 'assistant' && m.meta?.greeting);
+  return openingOf(last?.text);
+}
+
+/** 文の出だし（最初の区切りまで。長ければ12文字まで） */
+function openingOf(text) {
+  return String(text || '').trim().split(/[。、！!？?,.\s]/)[0].trim().slice(0, 12);
+}
+
+// ------------------------------------------------------------------------------
+// 最近の話しかけ
+// ------------------------------------------------------------------------------
+//
+// 「私のこと待ってた？」「ゲームの攻略法を考えてた」を、同じ会話の中でも会話をまたいでも
+// 繰り返していた（2026-11-13 のテスト）。最近の話しかけを人ごとに覚えておき（UserSession の
+// recentGreetings）、同じ話題・同じ言い回しにしないよう渡す（安藤さんと決めた）。
+
+/** 覚えておく話しかけの数 */
+const RECENT_GREETING_COUNT = 3;
+
+/** 1つの話しかけを覚えておく長さ（文字） */
+const RECENT_GREETING_MAX_LENGTH = 40;
+
+function trimGreeting(text) {
+  return String(text || '').replace(/\s+/g, ' ').trim().slice(0, RECENT_GREETING_MAX_LENGTH);
+}
+
+/**
+ * 最近の話しかけ（新しい順、最大3つ）。今の会話の分を先に、足りなければ人ごとに覚えている分から。
+ * 予定・タイマーの知らせは入れない（中身が決まっているので、話題を避けさせない）。
+ *
+ * @param {Object} params
+ * @param {Array} [params.messages] 今の会話（appendTurn の前の状態）
+ * @param {Array} [params.remembered] UserSession の recentGreetings（新しい順）
+ */
+function recentGreetings({ messages = [], remembered = [] } = {}) {
+  const list = Array.isArray(messages) ? messages : [];
+  const fromThread = [...list].reverse()
+    .filter((m) => m?.role === 'assistant' && m.meta?.greeting && !m.meta?.reminder)
+    .map((m) => trimGreeting(m.text));
+  const fromUser = (Array.isArray(remembered) ? remembered : []).map(trimGreeting);
+  const result = [];
+  for (const text of [...fromThread, ...fromUser]) {
+    if (text && !result.includes(text)) result.push(text);
+    if (result.length >= RECENT_GREETING_COUNT) break;
+  }
+  return result;
+}
+
+/**
+ * 最近の話しかけを避けさせる1行。無ければ ''。
+ */
+function buildRecentGreetingsLine(recent = []) {
+  if (!Array.isArray(recent) || recent.length === 0) return '';
+  const quoted = recent.map((text) => `「${text}」`).join('');
+  return `- 最近の話しかけ：${quoted}。これと同じ話題・同じ言い回しにしない`;
+}
+
+/**
+ * 覚えておく話しかけの一覧を更新する（新しい順、最大3つ）。
+ *
+ * @param {Array} remembered 今覚えている分（新しい順）
+ * @param {string} text 今回の話しかけ
+ */
+function nextRecentGreetings(remembered = [], text = '') {
+  const latest = trimGreeting(text);
+  const rest = (Array.isArray(remembered) ? remembered : [])
+    .map(trimGreeting)
+    .filter((item) => item && item !== latest);
+  return (latest ? [latest, ...rest] : rest).slice(0, RECENT_GREETING_COUNT);
+}
+
+/**
+ * 前回の話しかけの出だし。今の会話の分、人ごとに覚えている分、どちらも無ければ「やっほー」。
+ */
+function previousGreetingOpening({ messages = [], remembered = [] } = {}) {
+  return lastGreetingOpening(messages) ||
+    openingOf((Array.isArray(remembered) ? remembered : [])[0]) ||
+    DEFAULT_PREVIOUS_OPENING;
+}
+
+/**
+ * 出だしの指示を1行。
+ *
+ * @param {Object} params
+ * @param {string} [params.previousOpening] 前回の話しかけの出だし（lastGreetingOpening）
+ * @param {boolean} [params.reminder] 予定・タイマーを知らせる話しかけか（いつも中身から）
+ * @param {Function} [params.random] テストで固定できるよう注入可能
+ */
+function buildOpeningLine({ previousOpening = '', reminder = false, random = Math.random } = {}) {
+  if (reminder || random() < PLAIN_OPENING_RATE) return PLAIN_OPENING_LINE;
+  return previousOpening
+    ? `- 挨拶から始めてよいが、前回の話しかけの出だし「${previousOpening}」とは違う言い方にする`
+    : '- 挨拶から始めてよいが、決まった言い方にしない';
+}
+
 module.exports = {
   GREETING_USER_TEXT,
   GREETING_SCENE_TEXT,
   GREETING_INSTRUCTION,
   GREETING_ANGLES,
+  SELF_TOPICS,
   LONG_GAP_MINUTES,
   pickGreetingAngle,
   buildGreetingInstruction,
@@ -163,4 +314,14 @@ module.exports = {
   HARD_TALK_WORDS,
   isAfterHardTalk,
   buildCareGreetingInstruction,
+  PLAIN_OPENING_RATE,
+  PLAIN_OPENING_LINE,
+  lastGreetingOpening,
+  previousGreetingOpening,
+  buildOpeningLine,
+  recentGreetings,
+  buildRecentGreetingsLine,
+  nextRecentGreetings,
+  DEFAULT_PREVIOUS_OPENING,
+  RECENT_GREETING_COUNT,
 };

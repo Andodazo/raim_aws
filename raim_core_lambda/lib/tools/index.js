@@ -45,6 +45,12 @@ const {
   runStationAlarmTool,
   isStationAlarmRequested,
 } = require('./station-alarm');
+const {
+  PLANNER_TOOL_DEFINITIONS,
+  PLANNER_TOOL_NAMES,
+  isPlannerTool,
+} = require('./planner');
+const { PAST_TALK_TOOL_NAME, PAST_TALK_TOOL_DEFINITION } = require('./past-talk');
 
 // ─────────────────────────────────────────────
 // ツール定義（Responses API 形式）
@@ -98,13 +104,25 @@ const TOOL_DEFINITIONS = [
  * features はアプリが使える機能（例: ['station_alarm']）。
  * 機能を持つアプリにだけ、その機能を使うツールを見せる。
  *
- * @param {{ features?: string[] }} options
+ * planner が true のときだけ予定の手帳のツールを見せる。予定の手帳は、
+ * 発言に日付や予定の言葉があるときだけ開く（planner-context.js の関門）。
+ *
+ * @param {{ features?: string[], planner?: boolean }} options
  */
-function getToolDefinitions({ features = [] } = {}) {
+function getToolDefinitions({ features = [], planner = false, pastTalk = false } = {}) {
   const list = [...TOOL_DEFINITIONS];
 
   if (Array.isArray(features) && features.includes(STATION_ALARM_FEATURE)) {
     list.push(...STATION_ALARM_TOOL_DEFINITIONS);
+  }
+
+  if (planner) {
+    list.push(...PLANNER_TOOL_DEFINITIONS);
+  }
+
+  // 前の話を探す道具は、前に話したことを聞いているときだけ（past-talk.js の関門）
+  if (pastTalk) {
+    list.push(PAST_TALK_TOOL_DEFINITION);
   }
 
   return list;
@@ -316,7 +334,8 @@ const TOOL_INTROS = {
 function pickToolIntro(toolName, turn, random = Math.random, persona = RAIM_PERSONA) {
   // アプリに頼むツールは待ち時間が無いので、前置きは言わない。
   // 「ちょっと待って」の直後に「新宿で起こすね」が来ると不自然なため。
-  if (STATION_ALARM_TOOL_NAMES.includes(toolName)) {
+  // 予定の手帳も、保存はすぐ終わるので同じく言わない。
+  if (STATION_ALARM_TOOL_NAMES.includes(toolName) || PLANNER_TOOL_NAMES.includes(toolName)) {
     return '';
   }
 
@@ -346,6 +365,17 @@ const TOOL_DESCRIPTIONS = {
     : `${args.city}の天気を調べています`),
   start_station_alarm: () => '駅アラームを準備しています',
   stop_station_alarm: () => '駅アラームを止めています',
+  add_schedule: () => '予定を手帳に入れています',
+  update_schedule: () => '手帳の予定を直しています',
+  delete_schedule: () => '手帳の予定を消しています',
+  set_timer: () => 'タイマーを始めています',
+  cancel_timer: () => 'タイマーを止めています',
+  add_memo: () => 'メモしています',
+  add_to_list: () => 'リストに足しています',
+  check_list_entries: () => 'リストにチェックを付けています',
+  remove_list_entries: () => 'リストから消しています',
+  show_memos: () => 'メモを見ています',
+  delete_memo: () => 'メモを消しています',
 };
 
 function getToolDescription(toolName, args = {}) {
@@ -415,7 +445,12 @@ function makeToolCallKey(toolName, args = {}) {
  * intro を発話する前にこれで弾く。
  */
 function isKnownTool(toolName) {
-  return Object.prototype.hasOwnProperty.call(TOOL_FUNCTIONS, toolName);
+  // 予定の手帳のツールは、DynamoDB とアプリへの知らせが要るので
+  // core-chat-service が runPlannerTool で直接実行する（TOOL_FUNCTIONS には無い）
+  // 前の話を探す道具も、会話のテーブルを読むので core-chat-service が直接実行する
+  return Object.prototype.hasOwnProperty.call(TOOL_FUNCTIONS, toolName) ||
+    isPlannerTool(toolName) ||
+    toolName === PAST_TALK_TOOL_NAME;
 }
 
 async function executeTool(toolName, args, secrets = {}, context = {}) {
@@ -460,4 +495,5 @@ module.exports = {
   parseToolArguments,
   makeToolCallKey,
   isKnownTool,
+  isPlannerTool,
 };

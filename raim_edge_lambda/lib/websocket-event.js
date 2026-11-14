@@ -136,7 +136,7 @@ function normalizeThreadId(value) {
  * 機能を持たないクライアント（Windows 版など）にツールを見せると、
  * ライムが「起こすね」と言ったのに何も起きない状態になるため。
  */
-const KNOWN_FEATURES = Object.freeze(['station_alarm']);
+const KNOWN_FEATURES = Object.freeze(['station_alarm', 'planner']);
 
 function normalizeFeatures(value) {
   if (!Array.isArray(value)) {
@@ -204,6 +204,22 @@ function normalizeBeforeIndex(value) {
   return Math.floor(n);
 }
 
+// 予定を知らせる話しかけ（Core の planner-reminder.js と同じ形）
+// snooze はタイマーの「5分後にもう一回」の通知を押したとき（2026-11-13）
+const REMINDER_SLOTS = Object.freeze(['eve', 'before', 'morning', 'timer', 'snooze']);
+const REMINDER_ITEM_ID_PATTERN = /^[a-z]{2,4}_[A-Za-z0-9-]{8,64}$/;
+
+/**
+ * 話しかけに付いてくる reminder: { itemId, slot }。形が違えば null。
+ */
+function normalizeReminder(value) {
+  if (!value || typeof value !== 'object') return null;
+  const itemId = String(value.itemId || '').trim();
+  const slot = String(value.slot || '').trim();
+  if (!REMINDER_ITEM_ID_PATTERN.test(itemId) || !REMINDER_SLOTS.includes(slot)) return null;
+  return { itemId, slot };
+}
+
 function normalizeAction(value) {
   const action = String(value || '').trim().toLowerCase();
   return action || 'chat';
@@ -240,6 +256,10 @@ function normalizeWebSocketEvent(event, lambdaContext = {}) {
   const location = normalizeLocation(payload.location);
   // アプリで声を消しているとき false。読み上げ（TTS）を作らない
   const speech = payload.speech !== false;
+  // 予定を知らせる話しかけのときだけ（type: greeting）
+  const reminder = action === 'greeting' ? normalizeReminder(payload.reminder) : null;
+  // その日はじめての話しかけで、今日の予定をまとめる（Core の morning-brief.js）
+  const brief = action === 'greeting' && payload.brief === true;
 
   // text/images が要るのはチャット送信のときだけ。
   // thread.list のような読み取り要求は本文を持たない。
@@ -271,6 +291,8 @@ function normalizeWebSocketEvent(event, lambdaContext = {}) {
     // 現在地（約10kmに丸めたもの）。天気の場所が指定されないときに使う
     location,
     speech,
+    reminder,
+    brief,
     // 履歴を遡る位置。null なら最新側から返す
     beforeIndex,
     rawPayload: payload,
@@ -284,6 +306,7 @@ module.exports = {
   normalizeBeforeIndex,
   normalizeFeatures,
   normalizeLocation,
+  normalizeReminder,
   KNOWN_FEATURES,
   normalizeWebSocketEvent,
   parseJsonBody,

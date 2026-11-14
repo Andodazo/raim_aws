@@ -52,7 +52,21 @@ node ~/convo/run_convo.js --core ~/core --fake                                  
 node ~/convo/run_convo.js --core before=~/core-old --core after=~/core --env ~/core-env.json
 ```
 
-## 台本（scenarios.json）
+## 台本（scenarios.json / scenarios2.json）
+
+- `scenarios.json`: 68本。あいさつ、ノリ、褒め、落ち込み、重い話、説明、ミーム、記憶、話しかけ など
+- `scenarios2.json`: 66本。1本目と別の場面（短い返事しかしない人、意見を聞く、ゲーム、恋愛、愚痴、
+  ライムへの質問、乱暴な言葉、若者言葉、体調、話題の切り替え、8往復の会話、別の人の記憶 など）。
+  `--scenarios ~/convo/scenarios2.json` で使う
+- `scenarios-followup.json`: 6本。言ってたことを後で聞く（「そういえば、昨日の面接どうだった？」）。
+  話しかけで聞く、朝のまとめと一緒に聞く、はじめの3往復で聞く、本人が先に話す、濁される、用事は聞かない。
+  `--scenarios ~/convo/scenarios-followup.json` で使う
+- `scenarios-greeting.json`: 13本。ライムからの話しかけと、タイマー・予定の知らせ（2026-11-13）。
+  同じ会話で何回も話しかける（出だしがばらけるか）、タイマーが鳴った・予定の前の晩・1時間前・当日の朝、朝のまとめ。
+  `--scenarios ~/convo/scenarios-greeting.json --runs 3` で使う。まとめに「話しかけの出だし」
+  （挨拶から始めた数と、出だしの言葉の多い順）が出る。知らせはいつも挨拶なしで始まるはず
+
+### 書き方
 
 ```json
 {
@@ -70,7 +84,17 @@ node ~/convo/run_convo.js --core before=~/core-old --core after=~/core --env ~/c
 ```
 
 - `memory`: ライムの記憶（任意）。Summary が作る形（【事実】【関係性】）で書く
+- `recentGreetings`: 前の会話でした話しかけ（任意、新しい順）。新しい会話の1回目に同じことを言わないかを見る
 - `greeting`: true なら、最初にアプリを開いたときの話しかけをする
+- `brief`: true なら、その話しかけを「その日はじめて」として送る（朝のまとめ）
+- `planner`: 予定の手帳（メモリの中だけ）。`[{ "title": "面接", "daysAgo": 1, "time": "10:00", "importance": "important" }]`。
+  `daysAgo: 1` は昨日、`hoursFromNow: 3` は今から3時間後。手帳のある台本は、手帳を持つアプリとして送る
+  `kind: "timer"` はいま鳴ったタイマー（`seconds` は長さ。既定 180）。`daysAgo: -1` は明日
+- `turns` の途中に話しかけを入れられる
+  - `{ "greeting": true }`: アプリを開いたときの話しかけ
+  - `{ "reminder": { "item": 0, "slot": "timer" } }`: 知らせの話しかけ。`item` は `planner` の何番目か（0から）、
+    `slot` は `timer`（タイマーが鳴った）・`eve`（前の日の夜）・`before`（1時間前）・`morning`（当日の朝）。
+    「どうしたの」「通知」などが出たら引っかける
 - `expect`: 会話全体の期待。`turns[].expect` は発言ごと（両方書くと合わせて見る）
 - 台本ごとに新しい会話で始まる（前の台本の返事は引きずらない）
 

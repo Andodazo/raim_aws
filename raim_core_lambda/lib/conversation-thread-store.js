@@ -320,6 +320,8 @@ async function appendTurn(
     responseCreatedAt = '',
     // 今回ライムに渡した記憶の版（UserSession.userMemoryUpdatedAt）。渡していなければ空
     memoryInjectedAt = '',
+    // ツールと一緒に書いた返事で終えたときの、次の回に渡すツールの結果（core-chat-service.js）
+    pendingToolOutput = null,
   },
   deps = {}
 ) {
@@ -345,6 +347,7 @@ async function appendTurn(
     return null;
   }
 
+  const removeParts = [];
   const setParts = [
     // messages が未作成でも動くよう if_not_exists で空リストを補う
     'messages = list_append(if_not_exists(messages, :emptyList), :newMessages)',
@@ -374,6 +377,14 @@ async function appendTurn(
     values[':responseExpiresAt'] = calculateResponseExpiresAt(
       responseCreatedAt || now
     );
+    // 2回目を呼ばずに終えた回だけ、次の回の頭で渡すツールの結果を持つ。
+    // 続きの response_id が新しくなったら、前のものは要らないので消す
+    if (pendingToolOutput) {
+      setParts.push('pendingToolOutput = :pendingToolOutput');
+      values[':pendingToolOutput'] = pendingToolOutput;
+    } else {
+      removeParts.push('pendingToolOutput');
+    }
   }
 
   // このスレッドでライムに最後に渡した記憶の版。続きの会話で、記憶がこれより
@@ -400,6 +411,7 @@ async function appendTurn(
 
   const updateExpression =
     `SET ${setParts.join(', ')} ` +
+    (removeParts.length > 0 ? `REMOVE ${removeParts.join(', ')} ` : '') +
     'ADD turnCount :one';
 
   values[':tokens'] = Number(inputTokens) || 0;

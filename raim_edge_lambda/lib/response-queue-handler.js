@@ -14,6 +14,11 @@
 const { createConnectionStore } = require('./connection-store');
 const { createWebSocketPostback } = require('./websocket-postback');
 const { toClientMessage } = require('./client-message');
+const { broadcastPlannerChanged } = require('./planner-sync');
+const userSessionStore = require('./user-session-store');
+
+// ライムが予定を足した・直した・消したときの client_action。ほかの端末にも知らせる
+const PLANNER_CHANGE_ACTIONS = Object.freeze(['planner.added', 'planner.updated', 'planner.deleted']);
 
 function parseRecordBody(record) {
   try {
@@ -29,8 +34,10 @@ function parseRecordBody(record) {
 function createResponseQueueHandler({
   connectionStore,
   postback,
+  sessionStore,
   logger = console,
 } = {}) {
+  const getSessionStore = () => sessionStore || userSessionStore;
   const getConnectionStore = () => connectionStore || createConnectionStore();
   const getPostback = () => postback || createWebSocketPostback();
 
@@ -51,6 +58,21 @@ function createResponseQueueHandler({
       // クライアントが既に切断済みの場合、再試行しても成功しない。
       // SQSメッセージは成功扱いにし、接続管理テーブルだけ掃除する。
       await getConnectionStore().deleteConnection(connectionId);
+    }
+
+    // ライムが予定を変えたら、同じ人のほかの端末にも知らせる（planner-sync.js）
+    if (
+      clientMessage.type === 'client_action' &&
+      PLANNER_CHANGE_ACTIONS.includes(clientMessage.action) &&
+      coreEvent.sub
+    ) {
+      await broadcastPlannerChanged({
+        sub: String(coreEvent.sub),
+        exceptConnectionId: connectionId,
+        sessionStore: getSessionStore(),
+        postback: getPostback(),
+        logger,
+      });
     }
   }
 

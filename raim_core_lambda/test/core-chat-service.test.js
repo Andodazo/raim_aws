@@ -587,6 +587,69 @@ test('greeting right after a hard talk gently checks in instead of using an angl
   assert.doesNotMatch(build[1].greetingInstruction, /今回の切り口/);
 });
 
+// 2026-11-13: 話しかけの16回中13回が「やっほー」で始まっていた
+test('greeting decides the opening in code and passes the last opening to avoid', async () => {
+  const run = async (randomValue) => {
+    const calls = [];
+    const dependencies = createDependencies(calls);
+    dependencies.random = () => randomValue;
+    dependencies.resolveThread = async () => ({
+      threadId: 'thread-open',
+      isNew: false,
+      thread: {
+        messages: [
+          { role: 'assistant', text: 'やっほー！また来てくれたね', meta: { greeting: true }, createdAt: '2026-11-13T01:00:00.000Z' },
+          { role: 'user', text: 'うん', createdAt: '2026-11-13T01:00:10.000Z' },
+        ],
+      },
+    });
+    dependencies.buildMantleInput = (input) => {
+      calls.push(['build', input]);
+      return input;
+    };
+    await createCoreChatService(dependencies)({
+      sub: 'user-1', requestId: `req-open-${randomValue}`, text: '', images: [], greeting: true,
+    });
+    return calls.find(([name]) => name === 'build')[1].greetingInstruction;
+  };
+  assert.match(await run(0.1), /挨拶の言葉は付けずに/);
+  assert.match(await run(0.9), /出だし「やっほー」とは違う/);
+});
+
+// 2026-11-13: 新しい会話の1回目は前の出だしが無く、ほぼ毎回「やっほー」だった。
+// 「私のこと待ってた？」「ゲームの攻略法」を会話をまたいで繰り返していた
+test('greeting remembers recent greetings per user and passes them to a new conversation', async () => {
+  const run = async ({ recent }) => {
+    const calls = [];
+    const saved = [];
+    const dependencies = createDependencies(calls);
+    dependencies.random = () => 0.9;
+    dependencies.getOrCreateUserSession = async () => ({ lastResponseId: '', recentGreetings: recent });
+    dependencies.updateRecentGreetings = async (sub, list) => saved.push([sub, list]);
+    dependencies.resolveThread = async () => ({ threadId: 'thread-new', isNew: true, thread: { messages: [] } });
+    dependencies.buildMantleInput = (input) => {
+      calls.push(['build', input]);
+      return input;
+    };
+    await createCoreChatService(dependencies)({
+      sub: 'user-1', requestId: 'req-recent', text: '', images: [], greeting: true,
+    });
+    return { instruction: calls.find(([name]) => name === 'build')[1].greetingInstruction, saved };
+  };
+
+  // 一度も話しかけていない人は「やっほー」を前回の出だしとして渡す
+  const first = await run({ recent: [] });
+  assert.match(first.instruction, /出だし「やっほー」とは違う/);
+  assert.doesNotMatch(first.instruction, /最近の話しかけ/);
+  assert.deepEqual(first.saved, [['user-1', ['やあ']]]);
+
+  // 前の会話の話しかけを渡す（出だしも、話題も）
+  const next = await run({ recent: ['お、また来た！ゲームの攻略法考えてた', 'やっほー！今日どうだった？'] });
+  assert.match(next.instruction, /出だし「お」とは違う/);
+  assert.match(next.instruction, /最近の話しかけ：「お、また来た！ゲームの攻略法考えてた」「やっほー！今日どうだった？」/);
+  assert.deepEqual(next.saved[0][1], ['やあ', 'お、また来た！ゲームの攻略法考えてた', 'やっほー！今日どうだった？']);
+});
+
 // ── 会話の切り替えと記憶 ─────────────────────────
 
 function runChat(overrides = {}, event = {}) {
@@ -716,4 +779,34 @@ test('the first turn of a thread records the memory version it sent', async () =
   });
 
   assert.equal(appended[0].memoryInjectedAt, '2026-11-06T03:00:00.000Z');
+});
+
+// 2026-11-13: Mantle が黙っている間、アプリは「考えているよ」のままだった
+test('a slow Mantle makes ライム say a waiting line once per stage, but not for greetings', async () => {
+  const run = async (event) => {
+    const calls = [];
+    const lines = [];
+    const dependencies = createDependencies(calls);
+    dependencies.random = () => 0;
+    const original = dependencies.createMantleResponse;
+    dependencies.createMantleResponse = async (params) => {
+      if (typeof params.onWaiting === 'function') {
+        await params.onWaiting({ stage: 'slow' });
+        await params.onWaiting({ stage: 'slow' });
+        await params.onWaiting({ stage: 'retry' });
+      }
+      return original(params);
+    };
+    await createCoreChatService(dependencies)(
+      { sub: 'user-1', requestId: 'req-wait', text: 'こんにちは', images: [], ...event },
+      { onWaitingLine: async (text) => lines.push(text) }
+    );
+    return lines;
+  };
+
+  assert.deepEqual(await run({}), [
+    'ちょっと待ってね、いま考えてる',
+    'ごめん、頭が固まってた。もうちょっとだけ待って',
+  ]);
+  assert.deepEqual(await run({ text: '', greeting: true }), []);
 });
