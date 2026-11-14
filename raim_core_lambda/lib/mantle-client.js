@@ -32,6 +32,9 @@
 // - MANTLE_FIRST_OUTPUT_TIMEOUT_MS: この間に返事が1文字も来なければ、打ち切って1回だけ頼み直す。
 //   既定値 15000ms（0 で頼み直さない）
 // - MANTLE_SLOW_NOTICE_MS: この間に返事が来なければ「待ってね」のひとことを頼む（onWaiting）。既定値 8000ms
+// - MANTLE_HEDGE_MS: この間に返事が1文字も来なければ、同じ中身を別のリージョンにも頼み、
+//   先に文字が来た方を使う（並走）。既定値 5000ms（0 で並走しない）
+// - MANTLE_HEDGE_REGION: 並走の2本目を送るリージョン。既定値 us-west-2（オレゴン）
 // - MANTLE_MAX_OUTPUT_TOKENS: 最大出力token数。既定値 1024
 //
 // APIキーはログやエラーdetailsへ出さないこと。
@@ -62,6 +65,7 @@
 // ==============================================================================
 
 const { getMantleApiKey } = require('./mantle-secret-provider');
+const { isResponseIdContinuationEnabled } = require('./mantle-session-policy');
 
 /**
  * 必須環境変数を読み取る。
@@ -534,6 +538,28 @@ async function consumeMantleStream(body, {
   };
 }
 
+/** 並走で負けた・止められたときのエラー（呼び出し側は結果を使わない） */
+function createCancelledError() {
+  const error = new Error('Mantle request was cancelled');
+  error.name = 'MantleCancelledError';
+  error.code = 'MANTLE_CANCELLED';
+  error.retriable = false;
+  return error;
+}
+
+/** リージョン名から Mantle の base URL を作る */
+function mantleBaseUrlForRegion(region) {
+  return `https://bedrock-mantle.${String(region).trim()}.api.aws/openai/v1`;
+}
+
+/** 環境変数どおりのときのリージョン名（ログと、ツールの続きの送り先に使う） */
+function mantleRegionOf(env = process.env) {
+  const explicitUrl = String(env.OPENAI_BASE_URL || env.MANTLE_BASE_URL || '').trim();
+  const match = explicitUrl.match(/bedrock-mantle\.([a-z0-9-]+)\.api\.aws/);
+  if (match) return match[1];
+  return String(env.BEDROCK_MANTLE_REGION || 'us-east-1').trim();
+}
+
 /**
  * fetchを注入可能にして、単体テストでは外部通信なしでrequest/responseを検証する。
  * 本番ではNode.js 24のglobal fetchを使用する。
@@ -574,6 +600,13 @@ function createMantleClient({
     firstOutputMs = 0,
     slowNoticeMs = 0,
     onSlow = null,
+    // 並走のとき（createMantleResponse が渡す）。ふだんは使わない
+    // baseUrl: 送り先（オレゴンなど）。空なら環境変数どおり
+    // claim: 最初の文字が来たときに呼ぶ。false が返ったら負けなので、自分を止める
+    // cancelSignal: 呼び出し側から止めるとき
+    baseUrl: baseUrlOverride = '',
+    claim = null,
+    cancelSignal = null,
   }) {
     if (!mantleInput || typeof mantleInput !== 'object') {
       throw new Error('mantleInput is required');
@@ -582,7 +615,7 @@ function createMantleClient({
     // 1. Mantle endpointを確定し、Secrets ManagerからAPIキーを取得する。
     // 環境変数にはAPIキー本体を置かず、Secret ARNなどの参照情報だけを置く。
     // provider側でwarm container内キャッシュを使うため、通常は初回だけAWSへ問い合わせる。
-    const baseUrl = resolveMantleBaseUrl(env);
+    const baseUrl = baseUrlOverride || resolveMantleBaseUrl(env);
     const apiKey = String(await apiKeyProvider()).trim();
 
     if (!apiKey) {
@@ -601,6 +634,16 @@ function createMantleClient({
     // 返事が来始めたか。来始めるまでの待ちだけを見張る（来始めたあとは MANTLE_TIMEOUT_MS まで待つ）
     let gotOutput = false;
     let noOutput = false;
+    // 並走で負けた・呼び出し側から止められた
+    let cancelled = false;
+    const onCancel = () => {
+      cancelled = true;
+      controller.abort();
+    };
+    if (cancelSignal) {
+      if (cancelSignal.aborted) onCancel();
+      else cancelSignal.addEventListener('abort', onCancel, { once: true });
+    }
     const firstOutputTimer = firstOutputMs > 0
       ? setTimeout(() => {
         if (gotOutput) return;
@@ -614,7 +657,14 @@ function createMantleClient({
       }, slowNoticeMs)
       : null;
     const watchOutput = async (event) => {
-      if (!gotOutput && isOutputEvent(event)) gotOutput = true;
+      if (!gotOutput && isOutputEvent(event)) {
+        gotOutput = true;
+        // 並走のとき、先に文字が来た方だけが続ける
+        if (typeof claim === 'function' && !(await claim())) {
+          onCancel();
+          throw createCancelledError();
+        }
+      }
       if (typeof onStreamEvent === 'function') await onStreamEvent(event);
     };
     // 3. 認証headerはMantle環境差を吸収できるよう、header名とprefixも設定可能にする。
@@ -706,6 +756,11 @@ function createMantleClient({
         usage: streamed.usage || null,
       };
     } catch (error) {
+      // 並走で負けた・止められた（呼び出し側は結果を使わない）
+      if (cancelled) {
+        throw error?.code === 'MANTLE_CANCELLED' ? error : createCancelledError();
+      }
+
       // 返事が来始めないまま打ち切った（呼び出し側が頼み直す）
       if (error.name === 'AbortError' && noOutput) {
         const noOutputError = new Error(`Mantle sent nothing in ${firstOutputMs}ms`);
@@ -738,6 +793,7 @@ function createMantleClient({
       clearTimeout(timeout);
       if (firstOutputTimer) clearTimeout(firstOutputTimer);
       if (slowTimer) clearTimeout(slowTimer);
+      if (cancelSignal) cancelSignal.removeEventListener('abort', onCancel);
     }
   };
 
@@ -750,32 +806,169 @@ function createMantleClient({
    * onWaiting({ stage }) は、待たせているときに呼ぶ（stage: 'slow' は少し遅いとき、'retry' は頼み直すとき）。
    * ライムに「待ってね」と言わせるのに使う。
    */
-  return async function createMantleResponse({ onWaiting = null, ...params }) {
+  return async function createMantleResponse({ onWaiting = null, region = '', ...params }) {
     const firstOutputMs = numberSetting(env, 'MANTLE_FIRST_OUTPUT_TIMEOUT_MS', 15000);
     const slowNoticeMs = numberSetting(env, 'MANTLE_SLOW_NOTICE_MS', 8000);
+    const hedgeMs = numberSetting(env, 'MANTLE_HEDGE_MS', 5000);
     const notify = (stage) => {
       if (typeof onWaiting !== 'function') return;
       Promise.resolve()
         .then(() => onWaiting({ stage }))
         .catch((error) => console.warn(`[Mantle] waiting notice failed: ${error.message}`));
     };
+    // ツールの続き（直前の response_id を使う）は、その返事を作ったリージョンへ送る
+    const primaryBaseUrl = region ? mantleBaseUrlForRegion(region) : resolveMantleBaseUrl(env);
+    const primaryRegion = region || mantleRegionOf(env);
+    const withRegion = (result, regionName) => ({ ...result, region: regionName });
 
     if (firstOutputMs <= 0) {
-      return sendOnce({ ...params, slowNoticeMs, onSlow: () => notify('slow') });
+      const result = await sendOnce({ ...params, baseUrl: primaryBaseUrl, slowNoticeMs, onSlow: () => notify('slow') });
+      return withRegion(result, primaryRegion);
     }
-    try {
-      return await sendOnce({
-        ...params,
-        firstOutputMs,
-        slowNoticeMs: slowNoticeMs < firstOutputMs ? slowNoticeMs : 0,
-        onSlow: () => notify('slow'),
-      });
-    } catch (error) {
-      if (error.code !== 'MANTLE_NO_OUTPUT') throw error;
-      console.warn(`[Mantle] nothing in ${firstOutputMs}ms; asking once more`);
-      notify('retry');
-      return sendOnce(params);
+
+    if (hedgeMs <= 0 || hedgeMs >= firstOutputMs) {
+      try {
+        const result = await sendOnce({
+          ...params,
+          baseUrl: primaryBaseUrl,
+          firstOutputMs,
+          slowNoticeMs: slowNoticeMs < firstOutputMs ? slowNoticeMs : 0,
+          onSlow: () => notify('slow'),
+        });
+        return withRegion(result, primaryRegion);
+      } catch (error) {
+        if (error.code !== 'MANTLE_NO_OUTPUT') throw error;
+        console.warn(`[Mantle] nothing in ${firstOutputMs}ms; asking once more`);
+        notify('retry');
+        return withRegion(await sendOnce({ ...params, baseUrl: primaryBaseUrl }), primaryRegion);
+      }
     }
+
+    // 並走する（2026-11-15）
+    //
+    // Mantle はふだん1〜2秒で返すが、30回に1回くらい、受け付けたまま30秒近く黙る
+    // （会話の量と関係なく起きる）。[MANTLE_HEDGE_MS] たっても文字が来なければ、同じ中身を
+    // 別のリージョン（MANTLE_HEDGE_REGION、既定オレゴン）にも頼み、先に文字が来た方を使う。
+    // 遅い方はすぐ止める。料金が増えるのは並走したときの2本目の分だけ。
+    //
+    // 直前の response_id で続けるとき（ツールの続き）は、ID がそのリージョンにしか無いので、
+    // 2本目も同じリージョンに送る。
+    //
+    // [MANTLE_FIRST_OUTPUT_TIMEOUT_MS] たっても両方から何も来なければ、両方止めて1回だけ頼み直す（前と同じ）。
+    const hedgeRegion = params.previousResponseId || isResponseIdContinuationEnabled(env)
+      ? primaryRegion
+      : String(env.MANTLE_HEDGE_REGION || 'us-west-2').trim() || primaryRegion;
+    const hedgeBaseUrl = hedgeRegion === primaryRegion ? primaryBaseUrl : mantleBaseUrlForRegion(hedgeRegion);
+
+    const outcome = await new Promise((resolve) => {
+      const attempts = [];
+      let winner = null;
+      let settled = false;
+      let hedgeTimer = null;
+      let slowTimer = null;
+      let stallTimer = null;
+
+      const finish = (value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(hedgeTimer);
+        clearTimeout(slowTimer);
+        clearTimeout(stallTimer);
+        resolve(value);
+      };
+
+      const launch = (label, baseUrl, regionName) => {
+        const cancel = new AbortController();
+        const attempt = { label, regionName, cancel, done: false, error: null };
+        // 勝つまでは届いたものを手元にためて、勝ったら流す（2本の文字が混ざらないように）
+        const held = [];
+        let open = false;
+        const pass = async (kind, args) => {
+          if (open) {
+            const target = kind === 'event' ? params.onStreamEvent : params.onTextDelta;
+            if (typeof target === 'function') await target(...args);
+            return;
+          }
+          held.push([kind, args]);
+        };
+        attempt.promise = sendOnce({
+          ...params,
+          baseUrl,
+          cancelSignal: cancel.signal,
+          onStreamEvent: (...args) => pass('event', args),
+          onTextDelta: (...args) => pass('delta', args),
+          claim: async () => {
+            if (winner && winner !== attempt) return false;
+            winner = attempt;
+            clearTimeout(hedgeTimer);
+            clearTimeout(slowTimer);
+            clearTimeout(stallTimer);
+            for (const other of attempts) {
+              if (other !== attempt) other.cancel.abort();
+            }
+            if (attempt.label === 'hedge') {
+              console.log(`[Mantle] hedge won: region=${regionName}`);
+            }
+            open = true;
+            for (const [kind, args] of held.splice(0)) {
+              const target = kind === 'event' ? params.onStreamEvent : params.onTextDelta;
+              if (typeof target === 'function') await target(...args);
+            }
+            return true;
+          },
+        }).then(
+          (result) => {
+            attempt.done = true;
+            if (winner === attempt || !winner) finish({ result, regionName });
+          },
+          (error) => {
+            attempt.done = true;
+            attempt.error = error;
+            if (winner === attempt) {
+              finish({ error });
+              return;
+            }
+            if (winner || settled || error?.code === 'MANTLE_CANCELLED') return;
+            // まだ誰も文字を返していないのに失敗した。2本目がまだなら、すぐ出す
+            if (!attempts.some((a) => a.label === 'hedge')) {
+              startHedge();
+              return;
+            }
+            if (attempts.every((a) => a.done)) {
+              finish({ error: attempts[0].error || error });
+            }
+          }
+        );
+        attempts.push(attempt);
+        return attempt;
+      };
+
+      const startHedge = () => {
+        if (settled || winner || attempts.some((a) => a.label === 'hedge')) return;
+        console.log(`[Mantle] nothing in ${hedgeMs}ms; also asking region=${hedgeRegion}`);
+        launch('hedge', hedgeBaseUrl, hedgeRegion);
+      };
+
+      launch('primary', primaryBaseUrl, primaryRegion);
+      hedgeTimer = setTimeout(startHedge, hedgeMs);
+      if (slowNoticeMs > 0 && slowNoticeMs < firstOutputMs) {
+        slowTimer = setTimeout(() => {
+          if (!winner && !settled) notify('slow');
+        }, slowNoticeMs);
+      }
+      stallTimer = setTimeout(() => {
+        if (winner || settled) return;
+        for (const attempt of attempts) attempt.cancel.abort();
+        finish({ stalled: true });
+      }, firstOutputMs);
+    });
+
+    if (outcome.result) return withRegion(outcome.result, outcome.regionName);
+    if (outcome.error) throw outcome.error;
+
+    console.warn(`[Mantle] nothing in ${firstOutputMs}ms from any region; asking once more`);
+    notify('retry');
+    return withRegion(await sendOnce({ ...params, baseUrl: primaryBaseUrl }), primaryRegion);
   };
 }
 

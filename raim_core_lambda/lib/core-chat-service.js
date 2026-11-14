@@ -901,10 +901,15 @@ function createCoreChatService(dependencyOverrides = {}) {
         await onWaitingLine(line);
       }
       : null;
+    // 直前の返事を作ったリージョン（並走でオレゴンが勝つことがある）。
+    // ツールの続きは直前の response_id を使うので、同じリージョンへ送る必要がある
+    let lastMantleRegion = '';
+    let lastMantleResponseId = '';
     const callMantle = async ({ input: currentInput, previousId, tools }) => {
-      return dependencies.createMantleResponse({
+      const response = await dependencies.createMantleResponse({
         mantleInput: currentInput,
         previousResponseId: previousId,
+        region: previousId && previousId === lastMantleResponseId ? lastMantleRegion : '',
         store: true,
         onStreamEvent: onMantleStreamEvent,
         onTextDelta: onMantleTextDelta,
@@ -912,6 +917,9 @@ function createCoreChatService(dependencyOverrides = {}) {
         reasoningEffort,
         onWaiting: speakWaiting,
       });
+      lastMantleResponseId = response?.responseId || '';
+      lastMantleRegion = response?.region || '';
+      return response;
     };
 
     // Mantle側のresponse_idが失効していた場合だけ、初回promptで1回再試行する。

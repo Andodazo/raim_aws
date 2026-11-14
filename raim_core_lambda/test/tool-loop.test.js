@@ -157,6 +157,38 @@ test('TOOL_DEFINITIONS use the flat Responses API schema', () => {
 // ツールループ本体
 // ─────────────────────────────────────────────
 
+test('the tool continuation goes to the region that answered first (hedge, 2026-11-15)', async () => {
+  const mantleStub = createMantleStub([
+    {
+      responseId: 'resp-1',
+      region: 'us-west-2',
+      rawText: '',
+      createdAt: '2026-07-14T00:00:00Z',
+      toolCalls: [{ callId: 'call-1', name: 'get_weather', arguments: '{"city":"Tokyo"}' }],
+    },
+    {
+      responseId: 'resp-2',
+      region: 'us-west-2',
+      rawText: JSON.stringify({ text: '晴れだって', emotions: { happy: 0.5 } }),
+      createdAt: '2026-07-14T00:00:01Z',
+      toolCalls: [],
+    },
+  ]);
+  const { dependencies } = buildDependencies({
+    mantleStub,
+    toolResults: { get_weather: { city: 'Tokyo', weather: 'Clear', temp: 24 } },
+  });
+
+  const result = await createCoreChatService(dependencies)(BASE_EVENT);
+
+  assert.equal(result.ok, true);
+  // 1回目はどこでもよい（並走は mantle-client が決める）
+  assert.equal(mantleStub.calls[0].region, '');
+  // 2回目は直前の response_id で続けるので、それを作ったオレゴンへ
+  assert.equal(mantleStub.calls[1].previousResponseId, 'resp-1');
+  assert.equal(mantleStub.calls[1].region, 'us-west-2');
+});
+
 test('executes a tool call and feeds the result back to Mantle', async () => {
   const mantleStub = createMantleStub([
     // 1回目: ツール呼出。Gemmaは本文を返さない（rawTextが空）
