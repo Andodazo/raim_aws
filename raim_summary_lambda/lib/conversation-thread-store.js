@@ -363,13 +363,47 @@ function deriveTitleFromSummary(summary) {
 }
 
 /**
+ * 要約と一緒に LLM が作った題名を、一覧に出せる形に整える。
+ * 使えなければ（空・長すぎる・作られていない）【事実】の1行目から作る（deriveTitleFromSummary）。
+ *
+ * 2026-11-15: 前は【事実】の1行目だけを題名にしていたので、「挨拶をした」のままの会話が多かった。
+ */
+function resolveThreadTitle({ title = '', summary = '' } = {}) {
+  let value = String(title || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^[「『"']+|[」』"']+$/g, '')
+    .replace(/^ユーザー[はがの]\s*/, '')
+    .replace(/[。．]$/, '')
+    .trim();
+
+  if (!value) {
+    return deriveTitleFromSummary(summary);
+  }
+
+  // 話題は2つまで。3つ以上並んでいたら最初の2つだけ残す（前からある話題を残すので題名が変わりにくい）。
+  // 2026-11-15 の比べ直しで「卒業制作の進捗, バイトの状況, 京都旅行」と3つ並び、途中で切れていた。
+  const topics = value.split(/\s*[,、，/／]\s*/).filter(Boolean);
+  if (topics.length >= 2) {
+    value = topics.slice(0, 2).join('と');
+  }
+
+  if (SENSITIVE_TITLE_WORDS.some((word) => value.includes(word))) {
+    return SENSITIVE_TITLE;
+  }
+  return value.length <= 20 ? value : `${value.slice(0, 20)}…`;
+}
+
+/**
  * 要約からタイトルを付け直す。
  *
  * titleSource が 'user' の場合は上書きしない（手で付けた名前を尊重する）。
  * 条件付き更新なので、読み取ってから判定する必要がない。
+ *
+ * options.title は要約と一緒に LLM が作った題名（あれば優先する。resolveThreadTitle）。
  */
-async function updateTitleFromSummary(sub, threadId, summary, deps = {}) {
-  const title = deriveTitleFromSummary(summary);
+async function updateTitleFromSummary(sub, threadId, summary, deps = {}, options = {}) {
+  const title = resolveThreadTitle({ title: options.title, summary });
 
   if (!title) {
     return null;
@@ -425,5 +459,6 @@ module.exports = {
   saveThreadSummary,
   toSummaryHistory,
   deriveTitleFromSummary,
+  resolveThreadTitle,
   updateTitleFromSummary,
 };

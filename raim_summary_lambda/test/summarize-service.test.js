@@ -207,3 +207,69 @@ test('memory keeps words the person taught, with their meaning (v6.4)', () => {
   const { MEMORY_INSTRUCTION } = require('../lib/summarize-service');
   assert.ok(MEMORY_INSTRUCTION.includes('教えてくれた言葉やネタは、意味も一緒に残す'));
 });
+
+// ── 会話ごとの要約と題名（2026-11-15）─────────────
+
+test('thread summaries get the thread instruction, memory does not', () => {
+  const { THREAD_INSTRUCTION, MEMORY_INSTRUCTION } = require('../lib/summarize-service');
+  const text = (messages) => messages.map((m) => m.content).join('\n');
+
+  const thread = text(buildSummaryInput(HISTORY, '', 'full'));
+  assert.ok(thread.includes(THREAD_INSTRUCTION));
+  assert.ok(THREAD_INSTRUCTION.includes('挨拶・お礼・相づちだけのやり取りは書かない'));
+  assert.ok(THREAD_INSTRUCTION.includes('"title"'));
+  assert.ok(!thread.includes(MEMORY_INSTRUCTION));
+
+  const memory = text(buildSummaryInput(HISTORY, '', 'full', [], 'memory', '卒業制作'));
+  assert.ok(!memory.includes(THREAD_INSTRUCTION));
+  assert.ok(!memory.includes('【今の題名】'));
+});
+
+test('the current title is passed only when there is one', () => {
+  const withTitle = buildSummaryInput(HISTORY, '', 'full', [], 'thread', '卒業制作');
+  assert.ok(withTitle.some((m) => m.role === 'system' && m.content === '【今の題名】卒業制作'));
+
+  const without = buildSummaryInput(HISTORY, '', 'full', [], 'thread', '  ');
+  assert.ok(!without.some((m) => String(m.content).startsWith('【今の題名】')));
+});
+
+test('generateSummary returns the title for threads and not for memory', async () => {
+  const raw = '{"facts": ["カフェに行った"], "relationship": [], "title": "カフェと卒業制作"}';
+  let captured = null;
+  const deps = {
+    env: { MANTLE_MODEL: 'm' },
+    createSummary: async (params) => { captured = params; return { text: raw, usage: null }; },
+  };
+
+  const thread = await generateSummary({ history: HISTORY, currentTitle: '卒業制作' }, deps);
+  assert.equal(thread.title, 'カフェと卒業制作');
+  assert.ok(!thread.summary.includes('カフェと卒業制作')); // 題名は要約の本文には入れない
+  assert.ok(captured.messages.some((m) => m.content === '【今の題名】卒業制作'));
+
+  const memory = await generateSummary({ history: HISTORY, purpose: 'memory' }, deps);
+  assert.equal(memory.title, '');
+});
+
+test('generateSummary reads the title from broken JSON too', async () => {
+  const raw = '{"facts": ["カフェに行った",], "title": "カフェ"';
+  const result = await generateSummary(
+    { history: HISTORY },
+    { env: { MANTLE_MODEL: 'm' }, createSummary: async () => ({ text: raw, usage: null }) }
+  );
+  assert.equal(result.title, 'カフェ');
+});
+
+test('generateSummary gives an empty title when the model wrote none', async () => {
+  const result = await generateSummary(
+    { history: HISTORY },
+    { env: { MANTLE_MODEL: 'm' }, createSummary: async () => ({ text: '{"facts": ["x"]}', usage: null }) }
+  );
+  assert.equal(result.title, '');
+});
+
+test('the title is capped at two topics and sad talks are not forced to one title', () => {
+  const { THREAD_INSTRUCTION } = require('../lib/summarize-service');
+  assert.ok(THREAD_INSTRUCTION.includes('3つ目は足さない'));
+  // 「気持ちを話した」に置き換えるのはコード（SENSITIVE_TITLE_WORDS）だけ
+  assert.ok(!THREAD_INSTRUCTION.includes('気持ちを話した'));
+});

@@ -136,6 +136,34 @@ test('summarizeThread passes the existing summary for integration', async () => 
   assert.ok(captured.previousSummary.includes('既存'));
 });
 
+test('summarizeThread passes the current title only when it came from a summary', async () => {
+  const run = async (thread) => {
+    let captured = null;
+    let titleOption = null;
+    await summarizeThread(
+      { sub: 'u', threadId: 't' },
+      {
+        env: ENV,
+        getThread: async () => makeThread(thread),
+        getForgottenMemories: async () => [],
+        generateSummary: async (params) => { captured = params; return { summary: '【事実】\n- x', title: 'カフェ巡り' }; },
+        saveThreadSummary: async () => {},
+        updateTitleFromSummary: async (sub, tid, summary, d, options) => { titleOption = options; },
+      }
+    );
+    return { captured, titleOption };
+  };
+
+  // 要約から付けた題名は渡す
+  const fromSummary = await run({ title: '卒業制作', titleSource: 'summary' });
+  assert.equal(fromSummary.captured.currentTitle, '卒業制作');
+  assert.deepEqual(fromSummary.titleOption, { title: 'カフェ巡り' });
+
+  // 最初の発言から仮に付けた題名（「こんにちは」など）は渡さない
+  const fromMessage = await run({ title: 'こんにちは', titleSource: 'message' });
+  assert.equal(fromMessage.captured.currentTitle, '');
+});
+
 // ── SQS ハンドラ ─────────────────────────────
 
 test('handleSqsEvent processes records', async () => {

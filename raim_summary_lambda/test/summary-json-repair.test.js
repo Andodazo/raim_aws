@@ -34,3 +34,11 @@ test('plain text without JSON is kept as is', () => {
   assert.equal(formatSummary('【事実】\n- そのまま'), '【事実】\n- そのまま');
   assert.equal(parseSummaryJson('JSONではない'), null);
 });
+
+test('strings are still picked up when the brackets cannot be repaired', () => {
+  // 3つ目の拾い方は、前は文字列を読めず空の要約になっていた
+  assert.deepEqual(parseSummaryJson('{"facts": ["A", "B",, ], "relationship": ["C"'), {
+    facts: ['A', 'B'],
+    relationship: ['C'],
+  });
+});
