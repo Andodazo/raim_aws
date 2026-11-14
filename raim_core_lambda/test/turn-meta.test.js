@@ -48,10 +48,6 @@ function createService({ appended, responses, env = {}, executeTool }) {
   return createCoreChatService({
     env,
     getOrCreateUserSession: async () => ({ sessionSummary: '' }),
-    getMantleSessionState: () => ({ usePreviousResponseId: false, previousResponseId: '' }),
-    isMantleResponseExpiredError: () => false,
-    clearMantleResponseState: async () => {},
-    updateMantleResponseState: async () => {},
     resolveThread: async () => ({ threadId: 'thread-meta', thread: null, isNew: false }),
     ensureThreadTitle: async () => {},
     appendTurn: async (params) => { appended.push(params); return {}; },

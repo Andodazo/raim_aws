@@ -51,13 +51,6 @@ function buildDependencies({ mantleStub, toolResults = {}, toolsEnabled = true, 
   return {
     dependencies: {
       getOrCreateUserSession: async () => ({ sessionSummary: '' }),
-      getMantleSessionState: () => ({
-        usePreviousResponseId: false,
-        previousResponseId: '',
-      }),
-      isMantleResponseExpiredError: () => false,
-      clearMantleResponseState: async () => {},
-      updateMantleResponseState: async () => {},
       // 案A: 会話履歴の自前保存はここでは検証対象外
       resolveThread: async () => ({ threadId: 'thread-test', thread: null, isNew: false }),
       ensureThreadTitle: async () => {},

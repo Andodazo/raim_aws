@@ -8,7 +8,6 @@ const {
   listThreads,
   scanIdleThreads,
   saveThreadSummary,
-  resetThreadSession,
 } = require('../lib/conversation-thread-store');
 
 function fakeClient(responder) {
@@ -97,14 +96,15 @@ test('saveThreadSummary stores summary and resets counters', async () => {
 
   const input = client.calls[0];
   assert.ok(input.UpdateExpression.includes('sessionSummary = :summary'));
-  assert.ok(input.UpdateExpression.includes('summarizedAtInputTokens = if_not_exists(sessionInputTokens, :zero)'));
+  assert.ok(input.UpdateExpression.includes('turnCount = :zero'));
+  assert.ok(!input.UpdateExpression.includes('summarizedAtInputTokens'));
   assert.equal(input.ExpressionAttributeValues[':zero'], 0);
 });
 
 test('saveThreadSummary can keep counters', async () => {
   const client = fakeClient(() => ({ Attributes: {} }));
   await saveThreadSummary('u', 't', 'x', { resetCounters: false }, { docClient: client });
-  assert.ok(!client.calls[0].UpdateExpression.includes('summarizedAtInputTokens'));
+  assert.ok(!client.calls[0].UpdateExpression.includes('turnCount'));
 });
 
 test('saveThreadSummary refuses to overwrite with an empty summary', async () => {
@@ -112,14 +112,6 @@ test('saveThreadSummary refuses to overwrite with an empty summary', async () =>
   const result = await saveThreadSummary('u', 't', '   ', {}, { docClient: client });
   assert.equal(result, null);
   assert.equal(client.calls.length, 0);
-});
-
-test('resetThreadSession clears lastResponseId', async () => {
-  const client = fakeClient(() => ({ Attributes: {} }));
-  await resetThreadSession('u', 't', { docClient: client });
-  const input = client.calls[0];
-  assert.ok(input.UpdateExpression.includes('lastResponseId = :empty'));
-  assert.equal(input.ExpressionAttributeValues[':empty'], '');
 });
 
 test('saveThreadSummary does not recreate a deleted thread', async () => {

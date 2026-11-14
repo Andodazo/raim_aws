@@ -31,15 +31,9 @@
 // ==============================================================================
 
 const {
-  clearMantleResponseState,
   getOrCreateUserSession,
-  updateMantleResponseState,
   updateRecentGreetings,
 } = require('./user-session-store');
-const {
-  getMantleSessionState,
-  isMantleResponseExpiredError,
-} = require('./mantle-session-policy');
 const {
   getSceneById,
   listSceneCandidates,
@@ -141,16 +135,6 @@ function quickReplyEmotions(scene) {
   return { happy: 0.6 };
 }
 
-/**
- * 前の回で2回目を呼ばずに終えたときの、ツールの結果（スレッドに残してある）。
- * 今回その response_id から続けるときだけ返す。要約で response_id が消えていたら使わない
- */
-function pendingToolOutputFor(thread, previousResponseId) {
-  const pending = thread?.pendingToolOutput;
-  if (!previousResponseId || !pending || pending.responseId !== previousResponseId) return null;
-  if (!pending.callId || typeof pending.output !== 'string' || typeof pending.assistantText !== 'string') return null;
-  return pending;
-}
 const {
   PAST_TALK_TOOL_NAME,
   PAST_TALK_INSTRUCTION,
@@ -271,9 +255,7 @@ async function onClientAction() {
 }
 
 const defaultDependencies = Object.freeze({
-  clearMantleResponseState,
   getOrCreateUserSession,
-  updateMantleResponseState,
   // 最近の話しかけを人ごとに覚える（greeting.js）
   updateRecentGreetings,
 
@@ -286,8 +268,6 @@ const defaultDependencies = Object.freeze({
   listThreads: (sub) => listThreads(sub),
   shouldSummarize,
   dispatchSummarization,
-  getMantleSessionState,
-  isMantleResponseExpiredError,
   getSceneById,
   listSceneCandidates,
   selectScene,
@@ -493,8 +473,7 @@ function createCoreChatService(dependencyOverrides = {}) {
       });
     }
 
-    // 1. ユーザー単位の会話状態をDynamoDBから取得する。
-    // lastResponseIdが有効ならMantle側の会話コンテキストを継続できる。
+    // 1. ユーザー単位の状態（記憶・最近の話しかけなど）をDynamoDBから取得する。
     const session = await dependencies.getOrCreateUserSession(input.sub);
 
     // 切り替える前に使っていたスレッド。resolveThread が activeThreadId を
@@ -503,8 +482,6 @@ function createCoreChatService(dependencyOverrides = {}) {
 
     // 1-b. 今回の往復が属する会話スレッドを決める（案A: 履歴を自前保存）。
     // クライアント指定 > UserSession の activeThreadId > 新規作成、の優先順位。
-    // スレッド側にも lastResponseId を持たせるため、Mantle の継続判定は
-    // スレッドの状態を優先する。
     let threadContext;
     try {
       threadContext = await dependencies.resolveThread({
@@ -527,12 +504,6 @@ function createCoreChatService(dependencyOverrides = {}) {
         details: { threadId: input.threadId },
       });
     }
-
-    // 継続判定はスレッド単位で行う。
-    // 別スレッドへ切り替えたときに前スレッドの response_id を使い回さないため。
-    const sessionState = dependencies.getMantleSessionState(
-      threadContext.thread || session
-    );
 
     // 2. Scene選択用の軽量候補を取得し、Titan Embeddingで今回のsceneIdを選ぶ。
     // ここではDynamoDBから `id` と `textCentroid` だけをScanする。
@@ -725,25 +696,8 @@ function createCoreChatService(dependencyOverrides = {}) {
       console.log(`[Greeting] opening=${openingLine === PLAIN_OPENING_LINE ? 'plain' : 'greet'} recent=${recentLine ? 'yes' : 'no'}`);
     }
 
-    // 3-e. 記憶を渡し直すか。
-    //
-    // 記憶（userMemory）はスレッドの最初の1回（初回モード）でしか渡していなかった。
-    // 会話を切り替えると前のスレッドの要約と記憶の作り直しが走るが、新しい会話の
-    // 最初の発言には間に合わず、そのスレッドではずっと記憶が無いままだった。
-    // 記憶の版（userMemoryUpdatedAt）がこのスレッドで前に渡したものと違えば、
-    // 続きの会話でも渡し直す。
+    // 3-e. 記憶（userMemory）。毎回、中身があれば渡す
     const userMemory = session.userMemory || '';
-    const memoryVersion = String(session.userMemoryUpdatedAt || '');
-    const resendUserMemory = Boolean(
-      sessionState.usePreviousResponseId &&
-      userMemory.trim() &&
-      memoryVersion &&
-      memoryVersion !== String(threadContext.thread?.memoryInjectedAt || '')
-    );
-    // 今回ライムに記憶を渡すか（初回モードは中身があれば必ず渡す）
-    let memorySent = sessionState.usePreviousResponseId
-      ? resendUserMemory
-      : Boolean(userMemory.trim());
 
     // 3-f. 予定の手帳を開くか（planner-context.js の関門）。
     //
@@ -840,10 +794,7 @@ function createCoreChatService(dependencyOverrides = {}) {
       sessionSummary: threadContext.thread?.sessionSummary || '',
       // スレッドを跨いだ記憶。別スレッドで話した内容をライムが覚えている状態にする。
       userMemory,
-      // 続きの会話でも、記憶が新しくなっていたら渡し直す（§ 3-e）
-      resendUserMemory,
       scene: selectedScene,
-      usePreviousResponseId: sessionState.usePreviousResponseId,
       withTools: toolsEnabled,
       // アプリが使える機能。駅アラームのツールの説明を入れるかが決まる
       features: input.features,
@@ -858,10 +809,9 @@ function createCoreChatService(dependencyOverrides = {}) {
       greetingCue: reminderItem ? buildReminderCue(reminderItem) : '',
       plannerContext: situationContext,
     });
-    // policyが期限・存在状態を確認済みの時だけprevious_response_idを送る。
-    let previousResponseId = sessionState.usePreviousResponseId
-      ? sessionState.previousResponseId
-      : '';
+    // 発言をまたいでは previous_response_id を使わない（毎回、入力に会話を入れて送る）。
+    // 1回の返事の中のツールの続きだけ、直前の response_id を使う
+    let previousResponseId = '';
     let mantleResponse;
 
     // ─────────────────────────────────────────────
@@ -922,55 +872,6 @@ function createCoreChatService(dependencyOverrides = {}) {
       return response;
     };
 
-    // Mantle側のresponse_idが失効していた場合だけ、初回promptで1回再試行する。
-    const callMantleWithRecovery = async ({ input: currentInput, previousId, tools }) => {
-      try {
-        return await callMantle({ input: currentInput, previousId, tools });
-      } catch (error) {
-        // 前の回の「ツールの結果」を頭に足して断られたときも、履歴から作り直す（pendingFromLastTurn）
-        const rejectedPending = pendingInjected && previousId === pendingInjected &&
-          [400, 404, 422].includes(Number(error?.statusCode || error?.status));
-        if (rejectedPending) {
-          console.warn(`[Mantle] pending tool output rejected: status=${error.statusCode || error.status}`);
-        }
-        const canRecover = Boolean(previousId) &&
-          (dependencies.isMantleResponseExpiredError(error) || rejectedPending);
-
-        if (!canRecover) {
-          throw error;
-        }
-
-        // 次回Invocationでも同じ失効IDを使わないよう、再試行より先にDynamoDBをクリアする。
-        await dependencies.clearMantleResponseState(input.sub);
-        previousResponseId = '';
-
-        const rebuiltInput = dependencies.buildMantleInput({
-          userText: input.text,
-          images: resolvedImages,
-          // 要約はスレッド単位に保存される（§ 上のコメント参照）
-          sessionSummary: threadContext.thread?.sessionSummary || '',
-          userMemory,
-          scene: selectedScene,
-          usePreviousResponseId: false,
-          withTools: toolsEnabled,
-          features: input.features,
-          conversationGap,
-          factCheck,
-          history: threadContext.thread?.messages || [],
-          greeting: input.greeting,
-          greetingInstruction,
-          greetingCue: reminderItem ? buildReminderCue(reminderItem) : '',
-          plannerContext: situationContext,
-        });
-
-        mantleInput = rebuiltInput;
-        // 初回用に作り直したので、記憶は中身があれば渡している
-        memorySent = Boolean(userMemory.trim());
-
-        return callMantle({ input: rebuiltInput, previousId: '', tools });
-      }
-    };
-
     const toolDefinitions = toolsEnabled
       ? dependencies.getToolDefinitions({ features: input.features, planner: plannerOpen, pastTalk: pastTalkOpen })
       : null;
@@ -982,10 +883,6 @@ function createCoreChatService(dependencyOverrides = {}) {
     const seenToolCalls = new Set();
 
     let toolTurn = 0;
-    // 前の回のツールの結果を頭に足した response_id（足していなければ ''）
-    let pendingInjected = '';
-    // 今回、ツールと一緒に書いた返事で終えたなら、次の回に渡すツールの結果
-    let pendingToolOutput = null;
     // 会話の記録に残す、このターンで使ったツール（分析用）
     const toolLog = [];
     let toolExecuted = false;
@@ -993,25 +890,9 @@ function createCoreChatService(dependencyOverrides = {}) {
     let exitedDueToDuplicate = false;
     let exitedDueToUnknownTool = false;
 
-    // 前の回で、ツールと一緒に書いた返事で終えていたら（2回目を呼んでいない）、
-    // AI の会話はツールの呼び出しで止まっている。今回の頭で、その結果と言った返事を渡してから続ける。
-    // 渡さないと「ツールの結果が無い」と断られる。断られたら履歴から作り直す（callMantleWithRecovery）
-    const pendingFromLastTurn = pendingToolOutputFor(threadContext.thread, previousResponseId);
-    pendingInjected = pendingFromLastTurn ? previousResponseId : '';
-    const firstInput = pendingFromLastTurn
-      ? {
-        ...mantleInput,
-        messages: [
-          { type: 'function_call_output', call_id: pendingFromLastTurn.callId, output: pendingFromLastTurn.output },
-          { role: 'assistant', content: pendingFromLastTurn.assistantText },
-          ...(mantleInput.messages || []),
-        ],
-      }
-      : mantleInput;
-
-    mantleResponse = await callMantleWithRecovery({
-      input: firstInput,
-      previousId: previousResponseId,
+    mantleResponse = await callMantle({
+      input: mantleInput,
+      previousId: '',
       tools: toolDefinitions,
     });
 
@@ -1127,12 +1008,6 @@ function createCoreChatService(dependencyOverrides = {}) {
           });
           toolLog.push({ name: toolName, query: '', ok: true, quick: true });
           console.log(`[Planner] quick reply: tool=${toolName}`);
-          pendingToolOutput = {
-            responseId: mantleResponse.responseId,
-            callId: toolCall.callId,
-            output: JSON.stringify(result),
-            assistantText,
-          };
           if (typeof onMantleTextDelta === 'function') await onMantleTextDelta(assistantText);
           mantleResponse = { ...mantleResponse, rawText: assistantText, toolCalls: [] };
           break;
@@ -1391,12 +1266,6 @@ function createCoreChatService(dependencyOverrides = {}) {
       console.log(`[FollowUp] asked=${asked}`);
     }
 
-    // 6. Mantleが発行したresponse_idを次回会話用に保存する。
-    await dependencies.updateMantleResponseState(input.sub, {
-      responseId: mantleResponse.responseId,
-      createdAt: mantleResponse.createdAt,
-    });
-
     // 7. 会話履歴をスレッドへ追記する（案A）。
     //
     // Mantle 側の履歴は30日で消え、Core からは中身も読めないため、
@@ -1445,12 +1314,6 @@ function createCoreChatService(dependencyOverrides = {}) {
         inputTokens: mantleResponse.usage
           ? Number(mantleResponse.usage.input_tokens) || 0
           : 0,
-        responseId: mantleResponse.responseId,
-        responseCreatedAt: mantleResponse.createdAt,
-        // 2回目を呼ばずに終えたら、次の回の頭で渡すツールの結果（無ければ消す）
-        pendingToolOutput,
-        // 今回記憶を渡したら、その版を残す（次から同じ版は渡し直さない）
-        memoryInjectedAt: memorySent ? memoryVersion : '',
       });
 
       // 返事を作っている間にスレッドが消されていたら（appendTurn が null）、

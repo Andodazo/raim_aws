@@ -75,7 +75,7 @@ test('a short gap adds no extra rule', () => {
   assert.ok(!text.includes('久しぶり'));
 });
 
-test('gap context reaches both initial and followup inputs', () => {
+test('gap context reaches the input only when given', () => {
   const gap = '【前回の発話】\nこの会話で前に話したのは2日前。';
   const systemText = (input) => input.messages
     .filter((m) => m.role === 'system')
@@ -84,13 +84,6 @@ test('gap context reaches both initial and followup inputs', () => {
 
   const initial = buildMantleInput({ userText: 'こんにちは', conversationGap: gap });
   assert.ok(systemText(initial).includes('前に話したのは2日前'));
-
-  const followup = buildMantleInput({
-    userText: 'こんにちは',
-    usePreviousResponseId: true,
-    conversationGap: gap,
-  });
-  assert.ok(systemText(followup).includes('前に話したのは2日前'));
 
   const withoutGap = buildMantleInput({ userText: 'こんにちは' });
   // 人格プロンプト自体が【前回の発話】という見出しに触れているので、本文で判定する

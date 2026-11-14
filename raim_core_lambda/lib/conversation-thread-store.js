@@ -10,11 +10,12 @@
 //
 // 【なぜ自前保存するのか】
 //
-// previous_response_id を使うと会話履歴は Mantle 側にしか無く、
+// Mantle 側の会話（response_id）は
 //   - Core からは中身を読めない（要約の材料が取れない）
 //   - 30日で消える（それ以降スレッドを開き直せない）
 //   - 画像の説明を貯めておけない
 // という制約がある。案A としてフル履歴を DynamoDB に持つことにした。
+// 2026-11 からは、毎回この履歴の直近15往復を Mantle に送っている（prompt-builder.js）。
 //
 // 【テーブル】
 //   RAiM-ConversationThread-dev
@@ -32,7 +33,6 @@ const {
 } = require('@aws-sdk/lib-dynamodb');
 
 const { randomUUID } = require('node:crypto');
-const { calculateResponseExpiresAt } = require('./mantle-session-policy');
 
 const TABLE_NAME =
   process.env.CONVERSATION_THREAD_TABLE_NAME || 'RAiM-ConversationThread-dev';
@@ -176,11 +176,8 @@ async function ensureThread({ sub, threadId, title }, deps = {}) {
           'titleSource = if_not_exists(titleSource, :titleSource)',
           'messages = if_not_exists(messages, :emptyList)',
           'sessionSummary = if_not_exists(sessionSummary, :empty)',
-          'lastResponseId = if_not_exists(lastResponseId, :empty)',
-          'lastResponseCreatedAt = if_not_exists(lastResponseCreatedAt, :empty)',
           'cumulativeInputTokens = if_not_exists(cumulativeInputTokens, :zero)',
-          // Mantle のセッションを開始してからの累積。
-          // 要約ではリセットされず、鎖を切ったときだけ 0 に戻る。
+          // 直前の1回で Mantle に送った量（トークン）。見て確かめる用
           'sessionInputTokens = if_not_exists(sessionInputTokens, :zero)',
           'turnCount = if_not_exists(turnCount, :zero)',
           'updatedAt = :now',
@@ -230,8 +227,7 @@ async function listThreads(sub, options = {}, deps = {}) {
 
   if (!options.includeMessages) {
     params.ProjectionExpression =
-      '#sub, threadId, title, sessionSummary, lastResponseId, ' +
-      'lastResponseCreatedAt, turnCount, createdAt, updatedAt';
+      '#sub, threadId, title, sessionSummary, turnCount, createdAt, updatedAt';
   }
 
   const items = [];
@@ -306,8 +302,6 @@ function buildMessageRecord({ role, text, imageDescription, emotions, meta, crea
  * @param {Object} params.userMessage { text, imageDescription }
  * @param {Object} params.assistantMessage { text, emotions }
  * @param {number} params.inputTokens 今回の入力トークン数
- * @param {string} params.responseId Mantle の response_id
- * @param {string} params.responseCreatedAt
  */
 async function appendTurn(
   {
@@ -316,12 +310,6 @@ async function appendTurn(
     userMessage,
     assistantMessage,
     inputTokens = 0,
-    responseId = '',
-    responseCreatedAt = '',
-    // 今回ライムに渡した記憶の版（UserSession.userMemoryUpdatedAt）。渡していなければ空
-    memoryInjectedAt = '',
-    // ツールと一緒に書いた返事で終えたときの、次の回に渡すツールの結果（core-chat-service.js）
-    pendingToolOutput = null,
   },
   deps = {}
 ) {
@@ -347,7 +335,6 @@ async function appendTurn(
     return null;
   }
 
-  const removeParts = [];
   const setParts = [
     // messages が未作成でも動くよう if_not_exists で空リストを補う
     'messages = list_append(if_not_exists(messages, :emptyList), :newMessages)',
@@ -360,58 +347,14 @@ async function appendTurn(
     ':now': now,
   };
 
-  if (responseId) {
-    // 期限も一緒に保存する。
-    // 以前は id と createdAt しか書いておらず、継続判定
-    // （canUsePreviousResponseId）が要求する lastResponseExpiresAt が
-    // スレッド項目に存在しなかったため、判定が常に false になっていた。
-    // 判定側でも createdAt から導出するようにしたが、
-    // 保存側にも持たせて意図を明示する。
-    setParts.push(
-      'lastResponseId = :responseId',
-      'lastResponseCreatedAt = :responseCreatedAt',
-      'lastResponseExpiresAt = :responseExpiresAt'
-    );
-    values[':responseId'] = responseId;
-    values[':responseCreatedAt'] = responseCreatedAt || now;
-    values[':responseExpiresAt'] = calculateResponseExpiresAt(
-      responseCreatedAt || now
-    );
-    // 2回目を呼ばずに終えた回だけ、次の回の頭で渡すツールの結果を持つ。
-    // 続きの response_id が新しくなったら、前のものは要らないので消す
-    if (pendingToolOutput) {
-      setParts.push('pendingToolOutput = :pendingToolOutput');
-      values[':pendingToolOutput'] = pendingToolOutput;
-    } else {
-      removeParts.push('pendingToolOutput');
-    }
-  }
-
-  // このスレッドでライムに最後に渡した記憶の版。続きの会話で、記憶がこれより
-  // 新しくなっていたら渡し直す（core-chat-service.js の resendUserMemory）。
-  if (memoryInjectedAt) {
-    setParts.push('memoryInjectedAt = :memoryInjectedAt');
-    values[':memoryInjectedAt'] = String(memoryInjectedAt);
-  }
-
-  // sessionInputTokens は「今の文脈サイズ」。加算ではなく代入する。
-  //
-  // previous_response_id を使うと Mantle 側がサーバーに履歴を持ち、
-  // usage.input_tokens は「こちらが送った量」ではなく
-  // 「モデルが読んだ量（履歴込み）」を返す。つまり既に累計なので、
-  // 足すと二重に数えることになる。
-  //
-  // 実測（2026-09-05）: 継続モードの1往復で 4233 → 4693 → 5119 と
-  // 毎回 450 前後ずつ増えた。これは履歴が積まれている値そのもの。
-  // 以前 1513 固定に見えたのは、継続モードが一度も動いていなかったため。
-  //
-  // 要約の間隔は summarizedAtInputTokens（前回要約時の文脈サイズ）との
-  // 差で測る。summary-trigger.js を参照。
+  // sessionInputTokens は直前の1回で Mantle に送った量。加算ではなく代入する。
+  // 毎回「人格・要約・記憶・直近の会話」を送るので、ほぼ一定（1万前後）になる。
+  // 以前は previous_response_id で会話をつないでいて、長いスレッドで6.5万まで
+  // 伸びていた（2026-11-14）。大きくなっていないか見て確かめる用に残す。
   setParts.push('sessionInputTokens = :tokens');
 
   const updateExpression =
     `SET ${setParts.join(', ')} ` +
-    (removeParts.length > 0 ? `REMOVE ${removeParts.join(', ')} ` : '') +
     'ADD turnCount :one';
 
   values[':tokens'] = Number(inputTokens) || 0;

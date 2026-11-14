@@ -14,10 +14,7 @@ const {
   isKnownTool,
 } = require('../lib/tools');
 const { buildSystemPrompt } = require('../lib/prompts/raim-system-prompt');
-const {
-  buildFollowupMantleInput,
-  buildInitialMantleInput,
-} = require('../lib/prompt-builder');
+const { buildInitialMantleInput } = require('../lib/prompt-builder');
 
 // ─────────────────────────────────────────────
 // ツール定義の出し分け
@@ -109,7 +106,7 @@ test('system prompt explains the station alarm only for supporting apps', () => 
   assert.ok(!noTools.includes('start_station_alarm'));
 });
 
-test('initial and followup inputs carry the station alarm rules', () => {
+test('the input carries the station alarm rules only for apps that have it', () => {
   const initial = buildInitialMantleInput({
     userText: '新宿で起こして',
     withTools: true,
@@ -117,22 +114,11 @@ test('initial and followup inputs carry the station alarm rules', () => {
   });
   assert.ok(initial.messages[0].content.includes('start_station_alarm'));
 
-  const followup = buildFollowupMantleInput({
-    userText: '新宿で起こして',
-    withTools: true,
-    features: ['station_alarm'],
-  });
-  const systemText = followup.messages
-    .filter((m) => m.role === 'system')
-    .map((m) => m.content)
-    .join('\n');
-  assert.ok(systemText.includes('start_station_alarm'));
-
-  const followupWithout = buildFollowupMantleInput({
+  const without = buildInitialMantleInput({
     userText: '新宿で起こして',
     withTools: true,
   });
-  const plainText = followupWithout.messages
+  const plainText = without.messages
     .filter((m) => m.role === 'system')
     .map((m) => m.content)
     .join('\n');
@@ -168,10 +154,6 @@ function buildDependencies(mantleStub, overrides = {}) {
     notifications,
     dependencies: {
       getOrCreateUserSession: async () => ({ sessionSummary: '' }),
-      getMantleSessionState: () => ({ usePreviousResponseId: false, previousResponseId: '' }),
-      isMantleResponseExpiredError: () => false,
-      clearMantleResponseState: async () => {},
-      updateMantleResponseState: async () => {},
       resolveThread: async () => ({ threadId: 'thread-test', thread: null, isNew: false }),
       ensureThreadTitle: async () => {},
       appendTurn: async () => ({}),

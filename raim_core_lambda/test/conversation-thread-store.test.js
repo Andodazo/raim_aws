@@ -169,19 +169,15 @@ test('appendTurn accumulates tokens and turn count atomically', async () => {
   assert.equal(input.ExpressionAttributeValues[':one'], 1);
 });
 
-test('appendTurn records lastResponseId when provided', async () => {
+test('appendTurn no longer stores the Mantle response_id', async () => {
   const client = fakeClient(() => ({ Attributes: { messages: [] } }));
+  // 前は responseId を渡すと lastResponseId に保存していた（会話をつなぐため）
   await appendTurn(
     { sub: 'u', threadId: 't', userMessage: { text: 'a' }, responseId: 'resp_9' },
     { docClient: client }
   );
-  assert.equal(client.calls[0].ExpressionAttributeValues[':responseId'], 'resp_9');
-});
-
-test('appendTurn omits response fields when no responseId', async () => {
-  const client = fakeClient(() => ({ Attributes: { messages: [] } }));
-  await appendTurn({ sub: 'u', threadId: 't', userMessage: { text: 'a' } }, { docClient: client });
   assert.ok(!client.calls[0].UpdateExpression.includes('lastResponseId'));
+  assert.equal(client.calls[0].ExpressionAttributeValues[':responseId'], undefined);
 });
 
 test('appendTurn does nothing when no messages are given', async () => {
@@ -354,26 +350,6 @@ test('hasUnsummarizedUserTurn looks only at user messages after the last summary
   }), true);
   // 消したスレッドの墓標
   assert.equal(hasUnsummarizedUserTurn({ deletedAt: 'x', messages: [user('2026-11-06T03:00:00Z')] }), false);
-});
-
-test('appendTurn saves the memory version sent in this turn', async () => {
-  const { appendTurn } = require('../lib/conversation-thread-store');
-  const sent = [];
-  const docClient = { send: async (cmd) => { sent.push(cmd.input); return { Attributes: {} }; } };
-
-  await appendTurn({
-    sub: 's', threadId: 't',
-    userMessage: { text: 'a' }, assistantMessage: { text: 'b' },
-    memoryInjectedAt: '2026-11-06T03:00:00.000Z',
-  }, { docClient });
-  assert.ok(sent[0].UpdateExpression.includes('memoryInjectedAt = :memoryInjectedAt'));
-  assert.equal(sent[0].ExpressionAttributeValues[':memoryInjectedAt'], '2026-11-06T03:00:00.000Z');
-
-  await appendTurn({
-    sub: 's', threadId: 't',
-    userMessage: { text: 'a' }, assistantMessage: { text: 'b' },
-  }, { docClient });
-  assert.ok(!sent[1].UpdateExpression.includes('memoryInjectedAt'));
 });
 
 // 2026-11-06: 会話一覧の題名に「消えたい」がそのまま出ていた

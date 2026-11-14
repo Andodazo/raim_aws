@@ -6,69 +6,18 @@ const assert = require('node:assert/strict');
 const { shouldSummarize } = require('../lib/summary-trigger');
 const { dispatchSummarization } = require('../lib/summary-dispatcher');
 
-// 文脈の伸びで決めるのは、発言をまたいで response_id で続けるときだけ
-const ON = { SUMMARIZE_ENABLED: 'true', MANTLE_CONTINUE_WITH_RESPONSE_ID: 'true' };
+const ON = { SUMMARIZE_ENABLED: 'true' };
 
 // ── 有効/無効 ──────────────────────────────
 
 test('does nothing when summarization is disabled (default)', () => {
-  const r = shouldSummarize({ sessionInputTokens: 999999, turnCount: 999 }, {});
+  const r = shouldSummarize({ turnCount: 999 }, {});
   assert.equal(r.shouldSummarize, false);
-});
-
-test('enabled only when SUMMARIZE_ENABLED=true', () => {
-  const r = shouldSummarize({ sessionInputTokens: 999999, turnCount: 0 }, ON);
-  assert.equal(r.shouldSummarize, true);
-});
-
-// ── トークン閾値（主軸）────────────────────
-
-test('triggers when the context grows past the threshold', () => {
-  const env = { ...ON, SUMMARIZE_TOKEN_THRESHOLD: '8000' };
-  assert.equal(shouldSummarize({ sessionInputTokens: 7999, turnCount: 1 }, env).shouldSummarize, false);
-
-  const hit = shouldSummarize({ sessionInputTokens: 8000, turnCount: 1 }, env);
-  assert.equal(hit.shouldSummarize, true);
-  assert.match(hit.reason, /token_growth/);
-});
-
-// ── 往復キャップ（安全弁）──────────────────
-
-test('triggers on turn cap even when tokens are low', () => {
-  const env = { ...ON, SUMMARIZE_TOKEN_THRESHOLD: '100000', SUMMARIZE_MAX_TURNS: '20' };
-  const hit = shouldSummarize({ sessionInputTokens: 500, turnCount: 20 }, env);
-  assert.equal(hit.shouldSummarize, true);
-  assert.match(hit.reason, /max_turns/);
-});
-
-test('token growth takes priority in the reason', () => {
-  const env = { ...ON, SUMMARIZE_TOKEN_THRESHOLD: '8000', SUMMARIZE_MAX_TURNS: '20' };
-  const hit = shouldSummarize({ sessionInputTokens: 9000, turnCount: 25 }, env);
-  assert.match(hit.reason, /token_growth/);
-});
-
-test('does not trigger below both limits', () => {
-  const env = { ...ON, SUMMARIZE_TOKEN_THRESHOLD: '8000', SUMMARIZE_MAX_TURNS: '20' };
-  assert.equal(shouldSummarize({ sessionInputTokens: 1000, turnCount: 3 }, env).shouldSummarize, false);
 });
 
 test('tolerates a missing thread', () => {
   assert.equal(shouldSummarize(null, ON).shouldSummarize, false);
   assert.equal(shouldSummarize({}, ON).shouldSummarize, false);
-});
-
-test('accumulates across turns until the threshold is crossed', () => {
-  const env = { ...ON, SUMMARIZE_TOKEN_THRESHOLD: '8000', SUMMARIZE_MAX_TURNS: '20' };
-  // 継続モードで毎回およそ1800トークン
-  let fired = null;
-  for (let turn = 1; turn <= 6; turn += 1) {
-    const thread = { sessionInputTokens: 1800 * turn, summarizedAtInputTokens: 0, turnCount: turn };
-    if (!fired && shouldSummarize(thread, env).shouldSummarize) {
-      fired = turn;
-    }
-  }
-  // 1800 × 5 = 9000 で5往復目に発火
-  assert.equal(fired, 5);
 });
 
 // ── ディスパッチ（SQS）─────────────────────
@@ -126,44 +75,16 @@ test('dispatchSummarization requires sub and threadId', async () => {
 
 // usage.input_tokens は履歴込みの累計なので、絶対値ではなく
 // 前回要約時からの伸びで判定する。
-test('前回要約時からの伸びが閾値に届かなければ要約しない', () => {
-  const env = { ...ON, SUMMARIZE_TOKEN_THRESHOLD: '8000', SUMMARIZE_MAX_TURNS: '0' };
 
-  const thread = {
-    sessionInputTokens: 50000,
-    summarizedAtInputTokens: 45000,
-    turnCount: 3,
-  };
+// ── 往復数で決める ────
 
-  assert.equal(shouldSummarize(thread, env).shouldSummarize, false);
-});
-
-test('前回要約時からの伸びが閾値に届けば要約する', () => {
-  const env = { ...ON, SUMMARIZE_TOKEN_THRESHOLD: '8000', SUMMARIZE_MAX_TURNS: '0' };
-
-  const thread = {
-    sessionInputTokens: 53000,
-    summarizedAtInputTokens: 45000,
-    turnCount: 3,
-  };
-
-  const hit = shouldSummarize(thread, env);
-  assert.equal(hit.shouldSummarize, true);
-  assert.match(hit.reason, /token_growth \(8000 >= 8000\)/);
-});
-
-test('基準点が無い（初回）ときは文脈サイズそのもので判定する', () => {
-  const env = { ...ON, SUMMARIZE_TOKEN_THRESHOLD: '8000', SUMMARIZE_MAX_TURNS: '0' };
-
-  assert.equal(shouldSummarize({ sessionInputTokens: 7999, turnCount: 1 }, env).shouldSummarize, false);
-  assert.equal(shouldSummarize({ sessionInputTokens: 8000, turnCount: 1 }, env).shouldSummarize, true);
-});
-
-// ── 往復数で決める（既定: 発言をまたいで response_id を使わない）────
-
-test('response_id で続けないときは、前の要約から10往復で要約する', () => {
+test('前の要約から10往復で要約する', () => {
   const env = { SUMMARIZE_ENABLED: 'true' };
-  assert.equal(shouldSummarize({ sessionInputTokens: 999999, turnCount: 9 }, env).shouldSummarize, false);
+  // トークン数はもう見ない（前は SUMMARIZE_TOKEN_THRESHOLD で決めていた）
+  assert.equal(
+    shouldSummarize({ sessionInputTokens: 999999, turnCount: 9 }, { ...env, SUMMARIZE_TOKEN_THRESHOLD: '8000' }).shouldSummarize,
+    false
+  );
   const hit = shouldSummarize({ sessionInputTokens: 0, turnCount: 10 }, env);
   assert.equal(hit.shouldSummarize, true);
   assert.match(hit.reason, /every_turns/);

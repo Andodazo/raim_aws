@@ -56,18 +56,16 @@ test('fact check is on by default and can be turned off', () => {
   assert.equal(isFactCheckEnabled({ FACT_CHECK_SEARCH: 'false' }), false);
 });
 
-test('the instruction reaches initial, digest and full inputs', () => {
+test('the instruction reaches the input only when asked', () => {
   const systemText = (input) => input.messages
     .filter((m) => m.role === 'system')
     .map((m) => m.content)
     .join('\n');
 
   const initial = buildMantleInput({ userText: 'x', factCheck: true });
-  const digest = buildMantleInput({ userText: 'x', usePreviousResponseId: true, factCheck: true });
   const off = buildMantleInput({ userText: 'x' });
 
   assert.ok(systemText(initial).includes('今回は調べてから答える'));
-  assert.ok(systemText(digest).includes('今回は調べてから答える'));
   assert.ok(!systemText(off).includes('今回は調べてから答える'));
   assert.ok(FACT_CHECK_INSTRUCTION.includes('web_search'));
 });
@@ -100,10 +98,7 @@ const { createCoreChatService } = require('../lib/core-chat-service');
 function serviceFor(calls, { toolsEnabled = true, sceneId = 'question', env = {} } = {}) {
   return createCoreChatService({
     env,
-    clearMantleResponseState: async () => {},
     getOrCreateUserSession: async () => ({}),
-    getMantleSessionState: () => ({ usePreviousResponseId: false, previousResponseId: '' }),
-    isMantleResponseExpiredError: () => false,
     listSceneCandidates: async () => [],
     selectScene: () => ({ sceneId }),
     getSceneById: async (id) => ({ id, few_shots: [] }),
@@ -123,7 +118,6 @@ function serviceFor(calls, { toolsEnabled = true, sceneId = 'question', env = {}
     appendTurn: async () => ({}),
     shouldSummarize: () => ({ shouldSummarize: false }),
     dispatchSummarization: async () => true,
-    updateMantleResponseState: async () => {},
   });
 }
 

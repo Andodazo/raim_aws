@@ -67,71 +67,25 @@ test('toSummaryHistory tolerates missing messages', () => {
 
 // ── summarizeThread ─────────────────────────
 
-test('summarizeThread saves the summary without cutting the Mantle chain', async () => {
+test('summarizeThread saves the summary and never cuts a Mantle chain', async () => {
   const saved = [];
-  const reset = [];
 
   const result = await summarizeThread(
     { sub: 'user-1', threadId: 'thread-1' },
     {
-      env: ENV,
-      // まだ文脈は小さい
-      getThread: async () => makeThread({ sessionInputTokens: 9000 }),
+      // 以前は文脈が15万トークンを超えたら鎖を切っていた。もう切らない
+      env: { ...ENV, SUMMARY_RESET_TOKEN_THRESHOLD: '150000' },
+      getThread: async () => makeThread({ sessionInputTokens: 151000 }),
       getForgottenMemories: async () => [],
       generateSummary: async () => ({ summary: '【事実】\n- テスト', usage: null }),
       saveThreadSummary: async (sub, tid, s) => { saved.push({ sub, tid, s }); },
-      resetThreadSession: async (sub, tid) => { reset.push({ sub, tid }); },
       updateTitleFromSummary: async () => {},
     }
   );
 
   assert.equal(result.ok, true);
   assert.equal(saved.length, 1);
-
-  // 30日以内は Mantle が完全な会話を持っているので鎖は切らない
-  assert.equal(reset.length, 0);
 });
-
-test('summarizeThread cuts the chain once the context grows large', async () => {
-  const reset = [];
-
-  await summarizeThread(
-    { sub: 'user-1', threadId: 'thread-1' },
-    {
-      env: { ...ENV, SUMMARY_RESET_TOKEN_THRESHOLD: '150000' },
-      // 256K に近づいてきた状態
-      getThread: async () => makeThread({ sessionInputTokens: 151000 }),
-      getForgottenMemories: async () => [],
-      generateSummary: async () => ({ summary: 'x', usage: null }),
-      saveThreadSummary: async () => {},
-      resetThreadSession: async (sub, tid) => { reset.push({ sub, tid }); },
-      updateTitleFromSummary: async () => {},
-    }
-  );
-
-  assert.equal(reset.length, 1);
-});
-
-test('summarizeThread never cuts the chain when reset is disabled', async () => {
-  const reset = [];
-
-  await summarizeThread(
-    { sub: 'user-1', threadId: 'thread-1' },
-    {
-      env: { ...ENV, SUMMARY_RESET_SESSION: 'false' },
-      // 閾値を超えていても切らない
-      getThread: async () => makeThread({ sessionInputTokens: 999999 }),
-      getForgottenMemories: async () => [],
-      generateSummary: async () => ({ summary: 'x', usage: null }),
-      saveThreadSummary: async () => {},
-      resetThreadSession: async () => { reset.push(1); },
-      updateTitleFromSummary: async () => {},
-    }
-  );
-
-  assert.equal(reset.length, 0);
-});
-
 
 test('summarizeThread reports missing thread', async () => {
   const result = await summarizeThread(
@@ -177,7 +131,6 @@ test('summarizeThread passes the existing summary for integration', async () => 
       getForgottenMemories: async () => [],
       generateSummary: async (params) => { captured = params; return { summary: 'x' }; },
       saveThreadSummary: async () => {},
-      resetThreadSession: async () => {},
     }
   );
   assert.ok(captured.previousSummary.includes('既存'));
@@ -203,7 +156,6 @@ test('handleSqsEvent processes records', async () => {
       getForgottenMemories: async () => [],
       generateSummary: async () => { processed.push(1); return { summary: 'ok' }; },
       saveThreadSummary: async () => {},
-      resetThreadSession: async () => {},
       refreshUserMemory: async () => true,
     }
   );
@@ -228,7 +180,6 @@ test('handleSqsEvent returns only failed records for retry', async () => {
       getForgottenMemories: async () => [],
       generateSummary: async () => ({ summary: 'ok' }),
       saveThreadSummary: async () => {},
-      resetThreadSession: async () => {},
       refreshUserMemory: async () => true,
     }
   );
@@ -263,7 +214,6 @@ test('handleSqsEvent rebuilds user memory after a thread summary is saved', asyn
       generateSummary: async () => ({ summary: '【事実】\n- 猫を飼っている' }),
       saveThreadSummary: async () => {},
       updateTitleFromSummary: async () => {},
-      resetThreadSession: async () => {},
       getMemoryGeneration: async () => 3,
       listThreads: async () => [
         { threadId: 't1', title: '猫の話', sessionSummary: '【事実】\n- 猫を飼っている' },
@@ -307,7 +257,6 @@ test('a failed memory rebuild after a summary is not retried', async () => {
       generateSummary: async () => { summaries += 1; return { summary: 'ok' }; },
       saveThreadSummary: async () => {},
       updateTitleFromSummary: async () => {},
-      resetThreadSession: async () => {},
       refreshUserMemory: async () => { throw new Error('DynamoDB down'); },
     }
   );
@@ -332,7 +281,6 @@ test('handleScheduledEvent summarizes idle threads and updates user memory', asy
       getForgottenMemories: async () => [],
       generateSummary: async () => ({ summary: '【事実】\n- あり' }),
       saveThreadSummary: async () => {},
-      resetThreadSession: async () => {},
       getMemoryGeneration: async () => null,
       listThreads: async () => [{ threadId: 't1', title: 'A', sessionSummary: '【事実】\n- あり' }],
       updateUserMemory: async (sub, m) => { memories.push({ sub, m }); },
@@ -380,7 +328,6 @@ test('handleScheduledEvent continues after a single thread failure', async () =>
       getForgottenMemories: async () => [],
       generateSummary: async () => ({ summary: 'ok' }),
       saveThreadSummary: async () => {},
-      resetThreadSession: async () => {},
       getMemoryGeneration: async () => null,
       listThreads: async () => [{ threadId: 'good', sessionSummary: 'ok' }],
       updateUserMemory: async () => {},

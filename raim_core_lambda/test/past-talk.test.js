@@ -145,10 +145,6 @@ test('flow: the search tool runs, sends the card, and the reply is built from th
   const appended = [];
   const service = createCoreChatService({
     getOrCreateUserSession: async () => ({ sessionSummary: '', forgottenMemories: [] }),
-    getMantleSessionState: () => ({ usePreviousResponseId: false, previousResponseId: '' }),
-    isMantleResponseExpiredError: () => false,
-    clearMantleResponseState: async () => {},
-    updateMantleResponseState: async () => {},
     resolveThread: async () => ({ threadId: 't-now', thread: null, isNew: false }),
     ensureThreadTitle: async () => {},
     appendTurn: async (turn) => { appended.push(turn); return {}; },
