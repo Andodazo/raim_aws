@@ -616,6 +616,104 @@ function buildUserMessage({ userText, images = [] }) {
 }
 
 // ─────────────────────────────────────────────
+// 直近の会話
+// ─────────────────────────────────────────────
+
+// 毎回送る直近の会話の往復数（ユーザーとライムで1往復）
+function recentTurnsSetting(env = process.env) {
+  const value = Number(env.MANTLE_RECENT_TURNS ?? 15);
+  return Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 15;
+}
+
+// 直近の会話の文字数の上限。超えたら古い方から削る（日本語はおよそ1文字1トークン）
+function recentCharsSetting(env = process.env) {
+  const value = Number(env.MANTLE_RECENT_MAX_CHARS ?? 8000);
+  return Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 8000;
+}
+
+/**
+ * スレッドの履歴から、直近の会話を Mantle の会話の形（user / assistant）で作る。
+ *
+ * 発言をまたいで previous_response_id を使わないので、すぐ前の話を一字一句覚えて
+ * いるために、毎回これを送る。それより前の話は要約（sessionSummary）と記憶
+ * （userMemory）、はっきり聞かれたら前の話を探す道具（tools/past-talk.js）で補う。
+ *
+ * 要約は前の要約から10往復ごとに作るので（summary-trigger.js）、15往復を送ると
+ * 要約と重なる。重ねておくと、要約の直後や要約が遅れたときも、すぐ前の会話が抜けない。
+ *
+ * ライムの返事は、返す形（emotions と text の JSON）と同じ形で見せる。
+ * 違う形で見せると、モデルが本文だけで返すようになり得るため。
+ *
+ * @param {Array} history スレッドの messages（今回の発言はまだ入っていない）
+ * @param {Object} [options]
+ * @param {number} [options.maxTurns] 往復数の上限
+ * @param {number} [options.maxChars] 文字数の上限
+ * @returns {Array<{role: string, content: string}>}
+ */
+function buildRecentHistoryMessages(history, {
+  maxTurns = recentTurnsSetting(),
+  maxChars = recentCharsSetting(),
+} = {}) {
+  if (!Array.isArray(history) || maxTurns <= 0 || maxChars <= 0) {
+    return [];
+  }
+
+  // 後ろから数えて、ユーザーの発言が maxTurns 個になるところまでさかのぼる
+  let start = history.length;
+  let userCount = 0;
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    if (history[i]?.role === 'user') {
+      if (userCount >= maxTurns) break;
+      userCount += 1;
+    }
+    start = i;
+  }
+
+  const messages = [];
+  for (const record of history.slice(start)) {
+    const message = toHistoryMessage(record);
+    if (message) messages.push(message);
+  }
+
+  // 文字数の上限を超えたら、古い方から削る。ライムの返事から始まらないようにする
+  let total = messages.reduce((sum, m) => sum + m.content.length, 0);
+  while (messages.length > 0 && (total > maxChars || messages[0].role !== 'user')) {
+    total -= messages.shift().content.length;
+  }
+
+  return messages;
+}
+
+function toHistoryMessage(record) {
+  if (!record || typeof record !== 'object') {
+    return null;
+  }
+
+  const text = toSafeString(record.text).trim();
+
+  if (record.role === 'assistant') {
+    if (!text) return null;
+    const emotions = normalizeEmotionMap(record.emotions);
+    return {
+      role: 'assistant',
+      content: JSON.stringify({
+        emotions: Object.keys(emotions).length > 0 ? emotions : { neutral: 0.5 },
+        text,
+      }),
+    };
+  }
+
+  // 画像は中身を送り直さず、そのときの説明だけを添える
+  const imageDescription = toSafeString(record.imageDescription).trim();
+  const content = [
+    text,
+    imageDescription ? `（このとき送った画像: ${imageDescription}）` : '',
+  ].filter(Boolean).join('\n');
+  if (!content) return null;
+  return { role: 'user', content };
+}
+
+// ─────────────────────────────────────────────
 // 初回 / 復旧時 input 作成
 // ─────────────────────────────────────────────
 
@@ -634,7 +732,8 @@ function buildUserMessage({ userText, images = [] }) {
  * 2. sessionSummary
  * 3. Scene情報
  * 4. Few-shot
- * 5. 今回のユーザー発話
+ * 5. 直近の会話（buildRecentHistoryMessages）
+ * 6. 今回のユーザー発話
  */
 function buildInitialMantleInput({
   userText,
@@ -651,6 +750,8 @@ function buildInitialMantleInput({
   greetingInstruction = '',
   // 予定の手帳（指示・今の予定・日付の表）。日付や予定の言葉があるときだけ入る
   plannerContext = '',
+  // 直近の会話（buildRecentHistoryMessages の戻り値）
+  recentHistory = [],
 }) {
   const messages = [];
 
@@ -699,6 +800,11 @@ function buildInitialMantleInput({
   // （「こんにちは」への返事）をそのまま写していた（2026-10-30）。口調は人格プロンプトで保てる
   if (!greeting) {
     messages.push(...buildFewShotBlock(scene, userText));
+  }
+
+  // 直近の会話。会話例の後ろに置き、本当の会話として今回の発言につなげる
+  if (Array.isArray(recentHistory) && recentHistory.length > 0) {
+    messages.push(...recentHistory);
   }
 
   // 会話例の後ろに置く（例の説明文より後ろなので、本当の会話の話として読まれる）
@@ -983,6 +1089,7 @@ function buildMantleInput({
   }
 
   return buildInitialMantleInput({
+    recentHistory: buildRecentHistoryMessages(history),
     userText,
     images,
     sessionSummary,
@@ -1037,6 +1144,7 @@ module.exports = {
   buildUserMemoryUpdateContext,
   buildUserContent,
   buildUserMessage,
+  buildRecentHistoryMessages,
   buildInitialMantleInput,
   buildFollowupMantleInput,
   buildMantleInput,

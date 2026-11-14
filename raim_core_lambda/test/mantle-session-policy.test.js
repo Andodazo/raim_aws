@@ -67,13 +67,16 @@ test('session が無ければ継続しない', () => {
 });
 
 test('getMantleSessionState は継続できるときだけ previousResponseId を返す', () => {
+  const env = { MANTLE_CONTINUE_WITH_RESPONSE_ID: 'true' };
   const usable = getMantleSessionState(
     { lastResponseId: 'resp-1', lastResponseCreatedAt: '2026-09-02T00:00:00Z' },
-    NOW
+    NOW,
+    env
   );
   const expired = getMantleSessionState(
     { lastResponseId: 'resp-1', lastResponseCreatedAt: '2026-07-01T00:00:00Z' },
-    NOW
+    NOW,
+    env
   );
 
   assert.equal(usable.usePreviousResponseId, true);
@@ -87,4 +90,17 @@ test('calculateResponseExpiresAt は createdAt から有効日数ぶん先を返
   const expiresAt = calculateResponseExpiresAt('2026-09-01T00:00:00Z', 29);
 
   assert.equal(new Date(expiresAt).toISOString(), '2026-09-30T00:00:00.000Z');
+});
+
+test('getMantleSessionState は既定では発言をまたいで response_id を使わない', () => {
+  const state = getMantleSessionState(
+    { lastResponseId: 'resp-1', lastResponseCreatedAt: '2026-09-02T00:00:00Z' },
+    NOW,
+    {}
+  );
+
+  assert.equal(state.usePreviousResponseId, false);
+  assert.equal(state.previousResponseId, '');
+  // 保存してある ID は見えるまま（戻したときに使える）
+  assert.equal(state.lastResponseId, 'resp-1');
 });

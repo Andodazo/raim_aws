@@ -554,3 +554,71 @@ test('an utterance that matches a few-shot example gets a note not to copy its r
   const greetingText = greeting.messages.map((m) => (typeof m.content === 'string' ? m.content : '')).join('\n');
   assert.ok(!greetingText.includes('【会話例と同じ発言】'));
 });
+
+// ── 直近の会話（発言をまたいで response_id を使わないので、毎回送る）────
+
+function historyOf(turns) {
+  const messages = [];
+  for (let i = 1; i <= turns; i += 1) {
+    messages.push({ role: 'user', text: `発言${i}`, createdAt: `2026-11-14T10:${String(i).padStart(2, '0')}:00Z` });
+    messages.push({ role: 'assistant', text: `返事${i}`, emotions: { happy: 0.5 } });
+  }
+  return messages;
+}
+
+test('buildRecentHistoryMessages keeps only the last N turns, starting from the user', () => {
+  const { buildRecentHistoryMessages } = require('../lib/prompt-builder');
+  const messages = buildRecentHistoryMessages(historyOf(20), { maxTurns: 15, maxChars: 100000 });
+
+  assert.equal(messages.length, 30);
+  assert.deepEqual(messages[0], { role: 'user', content: '発言6' });
+  // ライムの返事は、返す形と同じ JSON で見せる
+  assert.deepEqual(JSON.parse(messages[1].content), { emotions: { happy: 0.5 }, text: '返事6' });
+  assert.equal(JSON.parse(messages[29].content).text, '返事20');
+});
+
+test('buildRecentHistoryMessages drops the oldest messages past the character cap', () => {
+  const { buildRecentHistoryMessages } = require('../lib/prompt-builder');
+  const long = [
+    { role: 'user', text: 'あ'.repeat(50) },
+    { role: 'assistant', text: 'い'.repeat(50) },
+    { role: 'user', text: '最近の発言' },
+    { role: 'assistant', text: '最近の返事' },
+  ];
+  const messages = buildRecentHistoryMessages(long, { maxTurns: 15, maxChars: 120 });
+
+  assert.equal(messages.length, 2);
+  assert.equal(messages[0].content, '最近の発言');
+  assert.equal(messages[0].role, 'user');
+});
+
+test('buildRecentHistoryMessages adds image descriptions and skips empty records', () => {
+  const { buildRecentHistoryMessages } = require('../lib/prompt-builder');
+  const messages = buildRecentHistoryMessages([
+    { role: 'user', text: 'これ見て', imageDescription: '赤いマグカップ' },
+    { role: 'assistant', text: '' },
+    { role: 'assistant', text: 'かわいいね' },
+  ], { maxTurns: 15, maxChars: 1000 });
+
+  assert.equal(messages.length, 2);
+  assert.ok(messages[0].content.includes('赤いマグカップ'));
+  // 感情が無い返事は neutral で埋める
+  assert.deepEqual(JSON.parse(messages[1].content).emotions, { neutral: 0.5 });
+  assert.deepEqual(buildRecentHistoryMessages(undefined), []);
+  assert.deepEqual(buildRecentHistoryMessages(historyOf(3), { maxTurns: 0 }), []);
+});
+
+test('the initial input sends the recent conversation right before the current message', () => {
+  const input = buildMantleInput({ userText: '今の発言', history: historyOf(3) });
+  const contents = input.messages.map((m) => m.content);
+  const last = input.messages[input.messages.length - 1];
+
+  assert.equal(input.mode, 'initial');
+  assert.equal(last.role, 'user');
+  assert.ok(JSON.stringify(last.content).includes('今の発言'));
+  const firstHistory = contents.indexOf('発言1');
+  assert.ok(firstHistory > 0, 'history is included');
+  // 人格・要約などの system より後ろ、今回の発言より前
+  assert.ok(input.messages.slice(0, firstHistory).some((m) => m.role === 'system'));
+  assert.equal(JSON.parse(input.messages[input.messages.length - 2].content).text, '返事3');
+});
