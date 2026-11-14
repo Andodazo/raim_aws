@@ -6,7 +6,8 @@ const assert = require('node:assert/strict');
 const { shouldSummarize } = require('../lib/summary-trigger');
 const { dispatchSummarization } = require('../lib/summary-dispatcher');
 
-const ON = { SUMMARIZE_ENABLED: 'true' };
+// 文脈の伸びで決めるのは、発言をまたいで response_id で続けるときだけ
+const ON = { SUMMARIZE_ENABLED: 'true', MANTLE_CONTINUE_WITH_RESPONSE_ID: 'true' };
 
 // ── 有効/無効 ──────────────────────────────
 
@@ -126,7 +127,7 @@ test('dispatchSummarization requires sub and threadId', async () => {
 // usage.input_tokens は履歴込みの累計なので、絶対値ではなく
 // 前回要約時からの伸びで判定する。
 test('前回要約時からの伸びが閾値に届かなければ要約しない', () => {
-  const env = { SUMMARIZE_ENABLED: 'true', SUMMARIZE_TOKEN_THRESHOLD: '8000', SUMMARIZE_MAX_TURNS: '0' };
+  const env = { ...ON, SUMMARIZE_TOKEN_THRESHOLD: '8000', SUMMARIZE_MAX_TURNS: '0' };
 
   const thread = {
     sessionInputTokens: 50000,
@@ -138,7 +139,7 @@ test('前回要約時からの伸びが閾値に届かなければ要約しな�
 });
 
 test('前回要約時からの伸びが閾値に届けば要約する', () => {
-  const env = { SUMMARIZE_ENABLED: 'true', SUMMARIZE_TOKEN_THRESHOLD: '8000', SUMMARIZE_MAX_TURNS: '0' };
+  const env = { ...ON, SUMMARIZE_TOKEN_THRESHOLD: '8000', SUMMARIZE_MAX_TURNS: '0' };
 
   const thread = {
     sessionInputTokens: 53000,
@@ -152,8 +153,29 @@ test('前回要約時からの伸びが閾値に届けば要約する', () => {
 });
 
 test('基準点が無い（初回）ときは文脈サイズそのもので判定する', () => {
-  const env = { SUMMARIZE_ENABLED: 'true', SUMMARIZE_TOKEN_THRESHOLD: '8000', SUMMARIZE_MAX_TURNS: '0' };
+  const env = { ...ON, SUMMARIZE_TOKEN_THRESHOLD: '8000', SUMMARIZE_MAX_TURNS: '0' };
 
   assert.equal(shouldSummarize({ sessionInputTokens: 7999, turnCount: 1 }, env).shouldSummarize, false);
   assert.equal(shouldSummarize({ sessionInputTokens: 8000, turnCount: 1 }, env).shouldSummarize, true);
+});
+
+// ── 往復数で決める（既定: 発言をまたいで response_id を使わない）────
+
+test('response_id で続けないときは、前の要約から10往復で要約する', () => {
+  const env = { SUMMARIZE_ENABLED: 'true' };
+  assert.equal(shouldSummarize({ sessionInputTokens: 999999, turnCount: 9 }, env).shouldSummarize, false);
+  const hit = shouldSummarize({ sessionInputTokens: 0, turnCount: 10 }, env);
+  assert.equal(hit.shouldSummarize, true);
+  assert.match(hit.reason, /every_turns/);
+});
+
+test('SUMMARIZE_EVERY_TURNS で往復数を変えられる。0 なら要約しない', () => {
+  assert.equal(
+    shouldSummarize({ turnCount: 5 }, { SUMMARIZE_ENABLED: 'true', SUMMARIZE_EVERY_TURNS: '5' }).shouldSummarize,
+    true
+  );
+  assert.equal(
+    shouldSummarize({ turnCount: 99 }, { SUMMARIZE_ENABLED: 'true', SUMMARIZE_EVERY_TURNS: '0' }).shouldSummarize,
+    false
+  );
 });

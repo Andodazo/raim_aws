@@ -1,5 +1,7 @@
 'use strict';
 
+const { isResponseIdContinuationEnabled } = require('./mantle-session-policy');
+
 // ==============================================================================
 // 要約トリガー判定
 // ==============================================================================
@@ -41,6 +43,17 @@ function maxTurns(env) {
   return Math.max(0, Number(env.SUMMARIZE_MAX_TURNS || 20));
 }
 
+// 発言をまたいで response_id を使わないとき（既定）、要約は往復数だけで決める。
+//
+// 毎回送る量は「人格・要約・記憶・直近の会話」でほぼ一定なので、文脈の伸び
+// （sessionInputTokens の差）では測れない。前の要約から何往復したかで決める。
+// 直近の会話は15往復送るので（prompt-builder.js）、10往復ごとに要約すれば重なりができ、
+// 要約の前の会話が抜けない。
+function everyTurns(env) {
+  const value = Number(env.SUMMARIZE_EVERY_TURNS ?? 10);
+  return Number.isFinite(value) ? Math.max(0, value) : 10;
+}
+
 // 要約機能そのものの ON/OFF。既定 OFF。
 // SQS キューやイベントソースマッピングが揃うまで暴発させないための安全弁。
 function isSummarizationEnabled(env) {
@@ -60,6 +73,19 @@ function shouldSummarize(thread, env = process.env) {
   }
 
   if (!thread || typeof thread !== 'object') {
+    return { shouldSummarize: false, reason: null };
+  }
+
+  // 発言をまたいで response_id を使わないときは、往復数だけで決める
+  if (!isResponseIdContinuationEnabled(env)) {
+    const turns = Number(thread.turnCount) || 0;
+    const every = everyTurns(env);
+    if (every > 0 && turns >= every) {
+      return {
+        shouldSummarize: true,
+        reason: `every_turns (${turns} >= ${every})`,
+      };
+    }
     return { shouldSummarize: false, reason: null };
   }
 
@@ -95,4 +121,5 @@ module.exports = {
   isSummarizationEnabled,
   tokenThreshold,
   maxTurns,
+  everyTurns,
 };

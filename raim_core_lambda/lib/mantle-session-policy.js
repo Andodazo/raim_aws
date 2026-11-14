@@ -108,6 +108,24 @@ function canUsePreviousResponseId(session, now = new Date()) {
 }
 
 /**
+ * 発言をまたいで previous_response_id で会話を続けるか。既定は続けない。
+ *
+ * 続けると Mantle が会話を全部持ってくれるが、長いスレッドほど毎回読む量が増える。
+ * 6.5万トークンまで伸びたスレッドで、最初の文字まで15〜30秒以上かかり、
+ * 頼み直しても返ってこなかった（2026-11-14。新しいスレッドでは1〜2秒）。
+ * 料金も読んだ量でかかるので、続けても安くはならない。
+ *
+ * 今は毎回「人格・要約・記憶・直近の会話」を最初から送る（prompt-builder.js の
+ * buildRecentHistoryMessages）。1回の返事の中のツールの続きだけは、今まで通り
+ * 直前の response_id を使う（core-chat-service.js のツールループ）。
+ *
+ * MANTLE_CONTINUE_WITH_RESPONSE_ID=true にすると前の動きに戻る。
+ */
+function isResponseIdContinuationEnabled(env = process.env) {
+  return String(env.MANTLE_CONTINUE_WITH_RESPONSE_ID || 'false').trim().toLowerCase() === 'true';
+}
+
+/**
  * Mantle呼び出し時に使う response_id 状態をまとめて返す。
  *
  * index.js 側ではこの関数を使うと、
@@ -117,8 +135,9 @@ function canUsePreviousResponseId(session, now = new Date()) {
  * @param {Date} now 現在時刻。テスト用に差し替え可能
  * @returns {Object}
  */
-function getMantleSessionState(session, now = new Date()) {
-  const usePreviousResponseId = canUsePreviousResponseId(session, now);
+function getMantleSessionState(session, now = new Date(), env = process.env) {
+  const usePreviousResponseId = isResponseIdContinuationEnabled(env) &&
+    canUsePreviousResponseId(session, now);
 
   return {
     usePreviousResponseId,
@@ -204,4 +223,5 @@ module.exports = {
   canUsePreviousResponseId,
   getMantleSessionState,
   isMantleResponseExpiredError,
+  isResponseIdContinuationEnabled,
 };
