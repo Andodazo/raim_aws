@@ -110,8 +110,10 @@ async function summarizeThread({ sub, threadId }, deps = {}) {
   }
 
   const forgotten = await readForgotten(sub, deps);
-  const { summary } = await (deps.generateSummary || generateSummary)(
-    { history, previousSummary: thread.sessionSummary || '', forgotten },
+  // 要約から付けた今の題名。最初の発言から仮に付けた題名（titleSource 'message'）は渡さない
+  const currentTitle = thread.titleSource === 'summary' ? String(thread.title || '') : '';
+  const { summary, title } = await (deps.generateSummary || generateSummary)(
+    { history, previousSummary: thread.sessionSummary || '', forgotten, currentTitle },
     { env }
   );
 
@@ -135,8 +137,8 @@ async function summarizeThread({ sub, threadId }, deps = {}) {
   //
   // 作成時のタイトルは最初の発話をそのまま切ったものなので、
   // 挨拶から始まる会話だと一覧が「こんにちは」だらけになる。
-  // 要約は既に生成済みなので、ここでの LLM 呼び出しは発生しない。
-  await (deps.updateTitleFromSummary || updateTitleFromSummary)(sub, threadId, summary);
+  // 題名は要約と同じ呼び出しで作っているので、ここでの LLM 呼び出しは発生しない。
+  await (deps.updateTitleFromSummary || updateTitleFromSummary)(sub, threadId, summary, {}, { title });
 
   console.log(
     `[Summary] thread summarized: sub=${sub} threadId=${threadId} chars=${summary.length}`

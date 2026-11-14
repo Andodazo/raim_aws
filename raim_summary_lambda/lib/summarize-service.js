@@ -121,6 +121,26 @@ const MEMORY_INSTRUCTION = `
 - この人が教えてくれた言葉やネタは、意味も一緒に残す（例:「ユーザーが『〜』は『〜』という意味だと教えてくれた」）
 `.trim();
 
+// 会話ごとの要約（purpose 'thread'）のときだけ足す指示。記憶を作るときは使わない。
+//
+// 2026-11-15 の試しで、【事実】が「挨拶をした」「〜するよう指示した」ばかりで、
+// 本人について分かったことが埋もれていた。会話の流れを残すため頼みごとは今まで通り書くが、
+// 挨拶は書かず、本人のことを先に書く。
+//
+// 題名も同じ呼び出しで作る（LLM を呼ぶ回数は増えない）。前は【事実】の1行目を題名にしていたので、
+// 要約を足していっても題名がずっと会話の最初のこと（「挨拶をした」など）のままだった。
+// 話題が変わるたびに題名が変わると一覧で探せなくなるので、会話全体の主な話題にして、
+// 今の題名で表せていればそのまま返させる（安藤さんと決めた）。
+// 具体的な例の言葉は入れない（例の言葉は真似される。raim_test/convo の試しで分かったこと）。
+const THREAD_INSTRUCTION = `
+【この会話の要約で守ること】
+- facts に、挨拶・お礼・相づちだけのやり取りは書かない
+- facts は、ユーザー本人について分かったこと（好き嫌い・出来事・予定・状況）を先に書き、ライムへの頼みごと（予定を入れた・タイマー・メモ・調べもの）はそのあとに書く
+- JSON に "title"（文字列）も入れる。この会話全体の主な話題を2つまで、20文字以内の短い名詞の形で書く
+- 【今の題名】があり、それで会話全体を表せていれば、同じ題名をそのまま返す。主な話題が増えたときだけ足す
+- 題名に「ユーザー」「ライム」という言葉は入れない。つらい気持ちの話なら「気持ちを話した」にする。挨拶だけの会話なら空にする
+`.trim();
+
 // ─────────────────────────────────────────────
 // 入力の組み立て
 // ─────────────────────────────────────────────
@@ -136,8 +156,9 @@ const MEMORY_INSTRUCTION = `
  * @param {string} mode 'full' | 'facts'
  * @param {string[]} [forgotten] 利用者が消した項目（書かせない）
  * @param {string} [purpose] 'thread'（スレッドの要約、既定）| 'memory'（記憶を作る）
+ * @param {string} [currentTitle] 今の題名（要約から付けたものだけ。最初の発言から仮に付けたものは渡さない）
  */
-function buildSummaryInput(history, previousSummary, mode, forgotten = [], purpose = 'thread') {
+function buildSummaryInput(history, previousSummary, mode, forgotten = [], purpose = 'thread', currentTitle = '') {
   const instruction =
     mode === 'facts' ? SUMMARY_INSTRUCTION_FACTS : SUMMARY_INSTRUCTION_FULL;
 
@@ -146,6 +167,12 @@ function buildSummaryInput(history, previousSummary, mode, forgotten = [], purpo
   // 記憶を作るときは、その場限りの頼みごとを書かせない
   if (purpose === 'memory') {
     messages.push({ role: 'system', content: MEMORY_INSTRUCTION });
+  } else {
+    // 会話ごとの要約は、挨拶を書かず本人のことを先に。題名も一緒に作る
+    messages.push({ role: 'system', content: THREAD_INSTRUCTION });
+    if (String(currentTitle || '').trim()) {
+      messages.push({ role: 'system', content: `【今の題名】${String(currentTitle).trim()}` });
+    }
   }
 
   // 利用者がアプリで「忘れて」と消した項目。作り直すたびに戻ってこないよう除かせる
@@ -228,6 +255,15 @@ function parseSummaryJson(rawText) {
   if (fixed) return fixed;
 
   // 3. 配列の中の文字列だけを拾う
+  // （tryParse は object しか返さないので、文字列は別に読む。前は tryParse を使っていて、ここで何も拾えていなかった）
+  const parseString = (value) => {
+    try {
+      const result = JSON.parse(value);
+      return typeof result === 'string' ? result : null;
+    } catch {
+      return null;
+    }
+  };
   const loose = {};
   for (const key of ['facts', 'relationship']) {
     const match = new RegExp(`"${key}"\\s*:\\s*\\[([\\s\\S]*?)(?:\\]|\\}|$)`).exec(text);
@@ -236,10 +272,15 @@ function parseSummaryJson(rawText) {
     const stringPattern = /"((?:[^"\\]|\\.)*)"/g;
     let item;
     while ((item = stringPattern.exec(match[1])) !== null) {
-      const value = tryParse(`"${item[1]}"`);
-      if (typeof value === 'string' && value.trim()) items.push(value);
+      const value = parseString(`"${item[1]}"`);
+      if (value && value.trim()) items.push(value);
     }
     loose[key] = items;
+  }
+  const title = /"title"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(text);
+  if (title) {
+    const value = parseString(`"${title[1]}"`);
+    if (value !== null) loose.title = value;
   }
   return Object.keys(loose).length > 0 ? loose : null;
 }
@@ -336,14 +377,16 @@ function formatSummary(rawText, forgotten = [], { maxRelationship = Infinity } =
  * @param {Object} params
  * @param {Array}  params.history [{ role, content }]
  * @param {string} [params.previousSummary]
+ * @param {string} [params.currentTitle] 今の題名（purpose 'thread' のとき）
  * @param {Object} [deps]
- * @returns {Promise<{ summary: string, usage: Object|null }>}
+ * @returns {Promise<{ summary: string, usage: Object|null, title: string }>}
+ *   title は LLM が出した題名そのもの（整えるのは conversation-thread-store.js の resolveThreadTitle）
  */
-async function generateSummary({ history, previousSummary = '', forgotten = [], purpose = 'thread' }, deps = {}) {
+async function generateSummary({ history, previousSummary = '', forgotten = [], purpose = 'thread', currentTitle = '' }, deps = {}) {
   const env = deps.env || process.env;
 
   if (!Array.isArray(history) || history.length === 0) {
-    return { summary: '', usage: null };
+    return { summary: '', usage: null, title: '' };
   }
 
   const model = summaryModel(env);
@@ -354,7 +397,7 @@ async function generateSummary({ history, previousSummary = '', forgotten = [], 
   const createSummary =
     deps.createSummary || createSummaryMantleClient({ env });
 
-  const messages = buildSummaryInput(history, previousSummary, summaryMode(env), forgotten, purpose);
+  const messages = buildSummaryInput(history, previousSummary, summaryMode(env), forgotten, purpose, currentTitle);
 
   const response = await createSummary({
     messages,
@@ -369,7 +412,14 @@ async function generateSummary({ history, previousSummary = '', forgotten = [], 
       maxRelationship: purpose === 'memory' ? 1 : Infinity,
     }),
     usage: response.usage || null,
+    title: purpose === 'memory' ? '' : titleOf(response.text || ''),
   };
+}
+
+/** 要約の JSON から題名を読む。無ければ空 */
+function titleOf(rawText) {
+  const parsed = parseSummaryJson(rawText);
+  return typeof parsed?.title === 'string' ? parsed.title.trim() : '';
 }
 
 module.exports = {
@@ -380,4 +430,5 @@ module.exports = {
   SUMMARY_INSTRUCTION_FULL,
   SUMMARY_INSTRUCTION_FACTS,
   MEMORY_INSTRUCTION,
+  THREAD_INSTRUCTION,
 };

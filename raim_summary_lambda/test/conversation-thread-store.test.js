@@ -148,3 +148,37 @@ test('deriveTitleFromSummary softens a title about wanting to disappear', () => 
     '新宿で起こしてほしいと述べた'
   );
 });
+
+// 2026-11-15: 題名を要約と一緒に LLM に作らせる
+test('resolveThreadTitle tidies the title the model wrote', () => {
+  const { resolveThreadTitle } = require('../lib/conversation-thread-store');
+  assert.equal(resolveThreadTitle({ title: '「カフェ巡りと卒業制作」' }), 'カフェ巡りと卒業制作');
+  assert.equal(resolveThreadTitle({ title: 'ユーザーの猫の体調。' }), '猫の体調');
+  assert.equal(resolveThreadTitle({ title: '消えたい気持ち' }), '気持ちを話した');
+  assert.equal(
+    resolveThreadTitle({ title: 'あ'.repeat(25) }),
+    `${'あ'.repeat(20)}…`
+  );
+});
+
+test('resolveThreadTitle falls back to the first fact when the model wrote none', () => {
+  const { resolveThreadTitle } = require('../lib/conversation-thread-store');
+  assert.equal(
+    resolveThreadTitle({ title: '', summary: '【事実】\n- ユーザーは新宿で起こしてほしいと述べた' }),
+    '新宿で起こしてほしいと述べた'
+  );
+  assert.equal(resolveThreadTitle({ title: '  ', summary: '' }), '');
+});
+
+test('updateTitleFromSummary prefers the model title', async () => {
+  const { updateTitleFromSummary } = require('../lib/conversation-thread-store');
+  const commands = [];
+  const docClient = { send: async (command) => { commands.push(command.input); return { Attributes: {} }; } };
+
+  await updateTitleFromSummary('u1', 't1', '【事実】\n- ユーザーはカフェに行った', { docClient }, { title: 'カフェ巡り' });
+  assert.equal(commands[0].ExpressionAttributeValues[':title'], 'カフェ巡り');
+
+  // 題名が無ければ今まで通り【事実】の1行目
+  await updateTitleFromSummary('u1', 't1', '【事実】\n- ユーザーはカフェに行った', { docClient });
+  assert.equal(commands[1].ExpressionAttributeValues[':title'], 'カフェに行った');
+});
