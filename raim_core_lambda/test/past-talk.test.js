@@ -23,6 +23,33 @@ test('past talk: the tool is offered only when the user asks about an earlier ta
   assert.equal(isKnownTool('search_past_talk'), true);
 });
 
+test('past talk: words added on 2026-11-15 open the tool, everyday talk still does not', () => {
+  for (const text of [
+    'カフェの話したっけ？',
+    '前話したやつ何？',
+    'あのとき喋ったゲーム、思い出せない',
+    '先日伝えた予定、忘れちゃった',
+    '今朝言ったっけ',
+    '去年話した旅行のこと覚えてる？',
+    '昨夜のあれなんだっけ',
+  ]) {
+    assert.equal(pastTalk.mentionsPastTalk(text), true, text);
+  }
+  for (const text of [
+    '最近寒いね',
+    '駅前のカフェ行きたい',
+    '前から思ってたんだけど',
+    '今朝は寒かった',
+    '去年の今ごろは暑かったね',
+    '東京の人口って何人だっけ',
+    'あの時はありがとう',
+    '宿題忘れた',
+    'いつも話してて楽しいよ',
+  ]) {
+    assert.equal(pastTalk.mentionsPastTalk(text), false, text);
+  }
+});
+
 test('past talk: the period comes from the words (code), then from the LLM', () => {
   // NOW は 11/11(水)
   assert.deepEqual(pastTalk.resolvePeriod({ userText: '先週話したやつ', now: NOW }), { from: '2026-11-02', to: '2026-11-08', label: '先週' });
