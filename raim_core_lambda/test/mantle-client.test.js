@@ -331,3 +331,193 @@ test('createMantleClient does not ask again or say "wait" when the reply starts 
   assert.equal(calls, 1);
   assert.deepEqual(stages, []);
 });
+
+// ── 並走（2026-11-15: 5秒文字が来なければオレゴンにも頼む） ─────────
+
+const HEDGE_ENV = Object.freeze({
+  ...TEST_ENV,
+  MANTLE_TIMEOUT_MS: '600',
+  MANTLE_FIRST_OUTPUT_TIMEOUT_MS: '300',
+  MANTLE_SLOW_NOTICE_MS: '150',
+  MANTLE_HEDGE_MS: '60',
+});
+
+function textResponse(id, text) {
+  return {
+    ok: true,
+    status: 200,
+    headers: { get: () => '' },
+    body: createSseBody([
+      { type: 'response.created', response: { id, created_at: 1782259200 } },
+      { type: 'response.output_text.delta', delta: text },
+      { type: 'response.completed', response: { id, created_at: 1782259200, status: 'completed' } },
+    ]),
+  };
+}
+
+test('hedge: when Virginia is silent, Oregon is asked too and its reply is used', async () => {
+  const urls = [];
+  const deltas = [];
+  const stages = [];
+  let virginiaAborted = false;
+  const client = createMantleClient({
+    env: HEDGE_ENV,
+    apiKeyProvider: TEST_API_KEY_PROVIDER,
+    fetchImpl: async (url, options) => {
+      urls.push(url);
+      if (url.includes('us-east-1')) {
+        options.signal.addEventListener('abort', () => { virginiaAborted = true; });
+        return { ok: true, status: 200, headers: { get: () => '' }, body: silentBody(options.signal) };
+      }
+      return textResponse('resp-oregon', '{"text":"オレゴン"}');
+    },
+  });
+
+  const result = await client({
+    mantleInput: { mode: 'initial', messages: [{ role: 'user', content: 'やあ' }] },
+    onTextDelta: (delta) => deltas.push(delta),
+    onWaiting: ({ stage }) => stages.push(stage),
+  });
+
+  assert.equal(urls.length, 2);
+  assert.ok(urls[1].startsWith('https://bedrock-mantle.us-west-2.api.aws/openai/v1'));
+  assert.equal(result.responseId, 'resp-oregon');
+  assert.equal(result.region, 'us-west-2');
+  assert.deepEqual(deltas, ['{"text":"オレゴン"}']);
+  assert.equal(virginiaAborted, true);
+  // 8秒（ここでは150ms）より前に返ったので、「待ってね」は言わない
+  assert.deepEqual(stages, []);
+});
+
+test('hedge: only the winner streams text, even if the loser starts later', async () => {
+  const deltas = [];
+  const client = createMantleClient({
+    env: HEDGE_ENV,
+    apiKeyProvider: TEST_API_KEY_PROVIDER,
+    fetchImpl: async (url, options) => {
+      if (url.includes('us-east-1')) {
+        // 遅れて（オレゴンが勝ったあとで）文字を出す
+        await new Promise((resolve) => setTimeout(resolve, 120));
+        if (options.signal.aborted) throw abortError();
+        return textResponse('resp-virginia', '{"text":"バージニア"}');
+      }
+      return textResponse('resp-oregon', '{"text":"オレゴン"}');
+    },
+  });
+
+  const result = await client({
+    mantleInput: { mode: 'initial', messages: [{ role: 'user', content: 'やあ' }] },
+    onTextDelta: (delta) => deltas.push(delta),
+  });
+  await new Promise((resolve) => setTimeout(resolve, 150));
+
+  assert.equal(result.responseId, 'resp-oregon');
+  assert.deepEqual(deltas, ['{"text":"オレゴン"}']);
+});
+
+test('hedge: no second request when Virginia answers in time', async () => {
+  let calls = 0;
+  const client = createMantleClient({
+    env: HEDGE_ENV,
+    apiKeyProvider: TEST_API_KEY_PROVIDER,
+    fetchImpl: async () => {
+      calls += 1;
+      return textResponse('resp-virginia', '{"text":"やあ"}');
+    },
+  });
+
+  const result = await client({ mantleInput: { mode: 'initial', messages: [{ role: 'user', content: 'やあ' }] } });
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  assert.equal(calls, 1);
+  assert.equal(result.region, 'us-east-1');
+});
+
+test('hedge: a tool continuation stays in the region that made the response, both requests', async () => {
+  const urls = [];
+  const client = createMantleClient({
+    env: HEDGE_ENV,
+    apiKeyProvider: TEST_API_KEY_PROVIDER,
+    fetchImpl: async (url, options) => {
+      urls.push(url);
+      if (urls.length === 1) {
+        return { ok: true, status: 200, headers: { get: () => '' }, body: silentBody(options.signal) };
+      }
+      return textResponse('resp-2', '{"text":"晴れ"}');
+    },
+  });
+
+  const result = await client({
+    mantleInput: { mode: 'followup', messages: [{ type: 'function_call_output', call_id: 'c1', output: '{}' }] },
+    previousResponseId: 'resp-oregon',
+    region: 'us-west-2',
+  });
+
+  assert.equal(urls.length, 2);
+  assert.ok(urls.every((url) => url.includes('us-west-2')));
+  assert.equal(result.region, 'us-west-2');
+});
+
+test('hedge: when both regions are silent, both stop and it asks once more (as before)', async () => {
+  const urls = [];
+  const stages = [];
+  const client = createMantleClient({
+    env: HEDGE_ENV,
+    apiKeyProvider: TEST_API_KEY_PROVIDER,
+    fetchImpl: async (url, options) => {
+      urls.push(url);
+      if (urls.length <= 2) {
+        return { ok: true, status: 200, headers: { get: () => '' }, body: silentBody(options.signal) };
+      }
+      return textResponse('resp-retry', '{"text":"おまたせ"}');
+    },
+  });
+
+  const result = await client({
+    mantleInput: { mode: 'initial', messages: [{ role: 'user', content: 'やあ' }] },
+    onWaiting: ({ stage }) => stages.push(stage),
+  });
+
+  assert.equal(urls.length, 3);
+  assert.ok(urls[2].includes('us-east-1'));
+  assert.equal(result.responseId, 'resp-retry');
+  assert.deepEqual(stages, ['slow', 'retry']);
+});
+
+test('hedge: if Virginia fails right away, Oregon is asked at once', async () => {
+  const urls = [];
+  const started = Date.now();
+  const client = createMantleClient({
+    env: { ...HEDGE_ENV, MANTLE_HEDGE_MS: '250', MANTLE_FIRST_OUTPUT_TIMEOUT_MS: '500' },
+    apiKeyProvider: TEST_API_KEY_PROVIDER,
+    fetchImpl: async (url) => {
+      urls.push(url);
+      if (url.includes('us-east-1')) {
+        return { ok: false, status: 503, headers: { get: () => '' }, text: async () => '{"message":"busy"}' };
+      }
+      return textResponse('resp-oregon', '{"text":"やあ"}');
+    },
+  });
+
+  const result = await client({ mantleInput: { mode: 'initial', messages: [{ role: 'user', content: 'やあ' }] } });
+  assert.equal(result.responseId, 'resp-oregon');
+  assert.ok(Date.now() - started < 250, 'did not wait for the hedge timer');
+});
+
+test('hedge: MANTLE_HEDGE_MS=0 turns it off', async () => {
+  const urls = [];
+  const client = createMantleClient({
+    env: { ...HEDGE_ENV, MANTLE_HEDGE_MS: '0' },
+    apiKeyProvider: TEST_API_KEY_PROVIDER,
+    fetchImpl: async (url, options) => {
+      urls.push(url);
+      if (urls.length === 1) {
+        return { ok: true, status: 200, headers: { get: () => '' }, body: silentBody(options.signal) };
+      }
+      return textResponse('resp-retry', '{"text":"やあ"}');
+    },
+  });
+
+  await client({ mantleInput: { mode: 'initial', messages: [{ role: 'user', content: 'やあ' }] } });
+  assert.equal(urls.length, 2);
+  assert.ok(urls.every((url) => url.includes('us-east-1')));
+});
