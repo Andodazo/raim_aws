@@ -95,6 +95,10 @@ tar -tf function.zip | Select-String "voice-config"
 
 ## 5. 環境変数（今回は追加不要）
 
+> 2026-11 追記: 継続モード（`previous_response_id` で会話をつなぐ作り）はやめたので、
+> 下の `FOLLOWUP_PERSONA_MODE` / `FOLLOWUP_FEW_SHOT_COUNT` はもう効きません。
+> 6.2 の継続モードの確認と、下の「sub とセッションの関係」も昔の作りの話です。
+
 今回の変更で追加した環境変数は 2 つですが、
 **どちらも未設定でも既定値で動作します**。
 

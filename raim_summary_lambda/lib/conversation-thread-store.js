@@ -116,8 +116,7 @@ async function listThreads(sub, options = {}, deps = {}) {
   // 取得サイズを抑えるため既定では除外する。
   if (!options.includeMessages) {
     params.ProjectionExpression =
-      '#sub, threadId, title, sessionSummary, lastResponseId, ' +
-      'lastResponseCreatedAt, sessionInputTokens, summarizedAtInputTokens, ' +
+      '#sub, threadId, title, sessionSummary, sessionInputTokens, ' +
       'turnCount, createdAt, updatedAt';
   }
 
@@ -190,8 +189,8 @@ async function scanIdleThreads(options = {}, deps = {}) {
 /**
  * スレッドの要約を保存する。
  *
- * 要約を保存したら、そのスレッドの累積トークンと往復数はリセットする。
- * 次の圧縮判定を新しいセッションとして数え直すため。
+ * 要約を保存したら、そのスレッドの往復数を 0 に戻す。
+ * 次の要約は、ここから何往復したかで決めるため。
  *
  * @param {string} sub
  * @param {string} threadId
@@ -220,13 +219,8 @@ async function saveThreadSummary(sub, threadId, summary, options = {}, deps = {}
   const values = { ':summary': String(summary).trim(), ':now': now };
 
   if (resetCounters) {
-    // 次の要約は「ここからどれだけ伸びたか」で判断する。
-    // usage.input_tokens は履歴込みの累計なので、
-    // カウンタを 0 に戻すのではなく、今の文脈サイズを基準点として残す。
-    setParts.push(
-      'summarizedAtInputTokens = if_not_exists(sessionInputTokens, :zero)',
-      'turnCount = :zero'
-    );
+    // 次の要約は「ここから何往復したか」で決める（Core の summary-trigger.js）
+    setParts.push('turnCount = :zero');
     values[':zero'] = 0;
   }
 
@@ -261,48 +255,6 @@ class ThreadDeletedError extends Error {
   constructor(threadId) {
     super(`thread was deleted: ${threadId}`);
     this.name = 'ThreadDeletedError';
-  }
-}
-
-/**
- * 圧縮に伴い Mantle のセッションを切り直す。
- *
- * lastResponseId をクリアすると、次の会話が初回モードになる。
- * 初回モードでは人格プロンプト全文 + few-shot + sessionSummary が送られるため、
- * 履歴の積み上がりがリセットされつつ文脈は要約で引き継がれる。
- */
-async function resetThreadSession(sub, threadId, deps = {}) {
-  if (!sub || !threadId) {
-    throw new Error('sub and threadId are required');
-  }
-
-  const client = deps.docClient || getDocClient();
-  const now = (deps.now ? deps.now() : new Date()).toISOString();
-
-  try {
-    const result = await client.send(
-      new UpdateCommand({
-        TableName: deps.tableName || TABLE_NAME,
-        Key: { sub, threadId },
-        UpdateExpression: [
-          'SET lastResponseId = :empty',
-          'lastResponseCreatedAt = :empty',
-          // 鎖を切ったので Mantle 側の文脈もゼロから積み直しになる
-          'sessionInputTokens = :zero',
-          'summarizedAtInputTokens = :zero',
-          'updatedAt = :now',
-        ].join(', '),
-        // 消されたスレッドを作り直さない
-        ConditionExpression: 'attribute_exists(threadId) AND attribute_not_exists(deletedAt)',
-        ExpressionAttributeValues: { ':empty': '', ':zero': 0, ':now': now },
-        ReturnValues: 'ALL_NEW',
-      })
-    );
-
-    return result.Attributes;
-  } catch (error) {
-    if (error?.name === 'ConditionalCheckFailedException') return null;
-    throw error;
   }
 }
 
@@ -471,7 +423,6 @@ module.exports = {
   listThreads,
   scanIdleThreads,
   saveThreadSummary,
-  resetThreadSession,
   toSummaryHistory,
   deriveTitleFromSummary,
   updateTitleFromSummary,

@@ -60,7 +60,6 @@ Core Lambdaへ上書きすることは想定していません。
 |---|---|
 | `raim_core_lambda/lib/mantle-client.js` | Mantle Responses API、API Key認証、SSE、`previous_response_id` |
 | `raim_core_lambda/lib/mantle-secret-provider.js` | Secrets ManagerからのAPI Key取得とキャッシュ |
-| `raim_core_lambda/lib/mantle-session-policy.js` | Mantle response IDの期限・失効判定 |
 | `raim_core_lambda/lib/titan-embedding-client.js` | Titan Text Embeddings V2の実呼び出し |
 | `raim_core_lambda/lib/scene-repository.js` | DynamoDB FewShotテーブルの読み取りと正規化 |
 | `raim_core_lambda/lib/user-session-store.js` | DynamoDB UserSessionの読み書きと会話継続状態 |
@@ -459,7 +458,7 @@ Core Lambdaはこのコードをそのまま移植したものではありませ
 | `local_core_reference/server.js` | `raim_core_lambda/index.js`、`raim_core_lambda/lib/sqs-core-handler.js`、`raim_core_lambda/lib/core-chat-service.js` | localではWebSocket受付から応答返却までを1ファイルで統括する。CoreではLambda入口、SQS処理、会話生成へ分割している |
 | `local_core_reference/lib/types.js` | `raim_core_lambda/lib/types.js`、`raim_core_lambda/lib/core-event.js`、`raim_core_lambda/lib/core-response.js`、`raim_core_lambda/lib/response-validator.js` | localでは通信型、入力検証、LLM出力補正をまとめている。Coreでは入力、出力、Mantle応答検証へ分割している |
 | `local_core_reference/lib/llm.js` | `raim_core_lambda/lib/mantle-client.js` | localのOllama呼び出しを、Bedrock Mantle Responses API呼び出しへ置き換えている |
-| `local_core_reference/lib/llm.js` のAPIキー・会話継続部分 | `raim_core_lambda/lib/mantle-secret-provider.js`、`raim_core_lambda/lib/mantle-session-policy.js` | APIキーはSecrets Managerから取得し、`previous_response_id`の期限・失効を管理する。localに同等のAWS処理はない |
+| `local_core_reference/lib/llm.js` のAPIキー・会話継続部分 | `raim_core_lambda/lib/mantle-secret-provider.js` | APIキーはSecrets Managerから取得する。会話は毎回、直近の会話を入力に入れて送る（2026-11 から `previous_response_id` で発言をつながない）。localに同等のAWS処理はない |
 | `local_core_reference/lib/embed.js` | `raim_core_lambda/lib/titan-embedding-client.js` | localのOllama `bge-m3`を、Titan Text Embeddings V2へ置き換えている |
 | `local_core_reference/lib/memory-store.js` | `raim_core_lambda/lib/user-session-store.js` | localはプロセス内Mapへ会話イベントを保存する。CoreはDynamoDBへ`sessionSummary`やMantle response IDを保存する |
 | `local_core_reference/lib/prompt-builder.js` | `raim_core_lambda/lib/prompt-builder.js`、`raim_core_lambda/lib/prompts/raim-system-prompt.js` | localで同居していた固定人格プロンプトと動的な入力組み立てを分離している |
@@ -480,7 +479,6 @@ Core Lambdaはこのコードをそのまま移植したものではありませ
 | `raim_core_lambda/lib/core-event.js` | Edge Lambda、SQS、Lambdaコンソールの入力形式をCore標準形式へ揃える |
 | `raim_core_lambda/lib/core-response.js` | Edge Lambdaへ返す成功・失敗レスポンスを統一する |
 | `raim_core_lambda/lib/mantle-secret-provider.js` | Mantle API KeyをSecrets Managerから取得・キャッシュする |
-| `raim_core_lambda/lib/mantle-session-policy.js` | Mantleの`previous_response_id`を再利用できるか判定する |
 
 ### 11.3 未実装・部分実装の機能
 

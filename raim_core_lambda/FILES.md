@@ -38,7 +38,6 @@ raim_core_lambda/
 │   ├── core-response.js              ← Edge Lambdaへ返す正常/エラーレスポンスを作る
 │   ├── mantle-client.js              ← Bedrock Mantle Responses APIをストリーミング呼び出しする
 │   ├── mantle-secret-provider.js     ← Mantle API KeyをSecrets Managerから取得する
-│   ├── mantle-session-policy.js      ← previous_response_idを使えるか判定する
 │   ├── prompt-builder.js             ← Mantleへ渡すsystem/user/few-shotメッセージを作る
 │   ├── request-state-store.js        ← SQSリクエストの冪等性・処理状態をDynamoDBで管理する
 │   ├── response-queue-publisher.js   ← テキスト/TTS/完了/エラーイベントをResponse Queueへ送る
@@ -140,12 +139,6 @@ raim_core_lambda/
 
   [3.15] user-session-store.js
        → core-chat-service.js にUserSessionを返す
-
-  [3.16] core-chat-service.js
-       → mantle-session-policy.js にprevious_response_id利用可否判定を依頼する
-
-  [3.17] mantle-session-policy.js
-       → core-chat-service.js にprevious_response_idを使うかどうかを返す
 
   [3.18] core-chat-service.js
        → scene-repository.js にScene候補一覧取得を依頼する
@@ -521,7 +514,6 @@ Core Lambdaの中心となる会話処理サービスです。
 - Mantleへ渡すプロンプト入力を作る
 - Mantleを呼び出して応答を受け取る
 - Mantleの応答JSONを検証する
-- `lastResponseId` などの会話継続情報をUserSessionへ保存する
 - SQS処理時はストリーミング中の差分をコールバックで外へ流す
 
 Core Lambdaの実処理はほぼこのファイルに集約されています。各AWSサービスへの細かいアクセスは専用ファイルへ分離しています。
@@ -552,7 +544,7 @@ Bedrock MantleのOpenAI互換Responses APIを呼び出すクライアントで�
 - Server-Sent Events形式のストリーミングレスポンスを解析する
 - テキスト差分を `onTextDelta` コールバックへ流す
 - 最終的な `response_id` と出力テキストを返す
-- `previous_response_id` が期限切れ・無効だった場合の情報を上位へ伝える
+- 5秒返事が無ければオレゴン（MANTLE_HEDGE_REGION）にも同じ頼みを送り、先に文字が来た方を使う
 
 MantleのHTTP通信の詳細はこのファイルに閉じ込めています。
 
@@ -570,18 +562,9 @@ Mantle API KeyをAWS Secrets Managerから取得します。
 
 API KeyをLambda環境変数へ平文で置かないための重要なファイルです。
 
-### `lib/mantle-session-policy.js`
-
-Mantleの `previous_response_id` を使ってよいかを判定します。
-
-主な役割:
-
-- UserSessionに保存された `lastResponseId` が存在するか確認する
-- `lastResponseExpiresAt` を見て期限切れかどうかを判断する
-- 期限内なら継続会話として `previous_response_id` を使う
-- 期限切れなら初回相当のプロンプトへ戻す
-
-Mantle側の会話継続状態に依存しすぎないための安全弁です。
+（`lib/mantle-session-policy.js` は 2026-11 に消しました。発言をまたいで `previous_response_id` で
+会話をつなぐのをやめ、毎回「人格・記憶・要約・直近15往復」を送るようにしたためです。
+1回の返事の中のツールの続きだけは、直前の `response_id` を使います。）
 
 ### `lib/prompt-builder.js`
 
@@ -769,12 +752,10 @@ DynamoDBのUserSessionテーブルを読み書きします。
 主な役割:
 
 - ユーザーごとの現在セッション情報を取得する
-- Mantleの `lastResponseId` を保存する
-- `lastResponseExpiresAt` を保存する
-- `sessionSummary` を保存・取得する
-- 会話継続に必要な状態をCore Lambdaから分離する
+- 開いているスレッド（activeThreadId）、最近の話しかけ（recentGreetings）を保存する
+- 会話の状態をCore Lambdaから分離する
 
-Mantleの `previous_response_id` を使うための状態管理ファイルです。
+以前は Mantle の `lastResponseId` もここに保存していましたが、2026-11 にやめました。
 
 ### `lib/types.js`
 

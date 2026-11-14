@@ -1,7 +1,5 @@
 'use strict';
 
-const { isResponseIdContinuationEnabled } = require('./mantle-session-policy');
-
 // ==============================================================================
 // 要約トリガー判定
 // ==============================================================================
@@ -9,46 +7,20 @@ const { isResponseIdContinuationEnabled } = require('./mantle-session-policy');
 // 「このスレッドを今、要約すべきか」を判定する純粋関数。
 // 実際の要約は Summary Lambda が行うため、ここでは判定だけを担う。
 //
-// 【判定方針】トークン数を主軸、往復数を安全弁（キャップ）として併用する。
+// 【判定方針】前の要約から何往復したかで決める。
 //
-//   - 前回要約したときから文脈が閾値ぶん伸びたら要約
-//     履歴の肥大を直接測る指標。目的（肥大の抑制）に直結する
-//   - または往復数が上限を超えたら要約
-//     短い発話ばかりでトークンが伸びない場合の保険。青天井を防ぐ
+// 毎回送る量は「人格・要約・記憶・直近の会話」でほぼ一定なので、文脈の伸び
+// （トークン数）では測れない。直近の会話は15往復送るので（prompt-builder.js）、
+// 10往復ごとに要約すれば重なりができ、要約の前の会話が抜けない。
+//
+// 以前は previous_response_id で会話をつないでいたので、文脈の伸び（トークン数）を
+// 主軸にしていた（SUMMARIZE_TOKEN_THRESHOLD / SUMMARIZE_MAX_TURNS）。2026-11 に消した。
 //
 // 「会話の切れ目」での判定は、切れ目の検出自体が非自明なため採用していない。
 // 放置されたスレッドは Summary Lambda の週次バッチが拾う。
-//
-// 【単位はスレッド】
-//
-// 値は ConversationThread の sessionInputTokens（今の文脈サイズ）と
-// summarizedAtInputTokens（前回要約時の文脈サイズ）、turnCount を見る。
-// ユーザー単位ではなくスレッド単位なのは、スレッドごとに履歴が独立しており、
-// 圧縮も再開もスレッド単位で完結するため。
+// 単位はスレッド（ConversationThread の turnCount。要約のたびに 0 に戻る）。
 
-// 前回の要約時点から文脈がこの量だけ伸びたら要約する。
-//
-// usage.input_tokens は履歴込みの値（= 今の文脈サイズ）なので、
-// 「絶対値が閾値を超えたか」で判定すると、一度超えた後は
-// 毎ターン発火し続けてしまう。前回要約時点との差で測る。
-//
-// 継続モードの1往復あたりの伸びが 450〜1500 程度のため、
-// 既定 8000 でおよそ 5〜15 往復に1回。
-function tokenThreshold(env) {
-  return Math.max(0, Number(env.SUMMARIZE_TOKEN_THRESHOLD || 8000));
-}
-
-// 往復数がこの値を超えたら、トークン数に関係なく要約する（安全弁）。
-function maxTurns(env) {
-  return Math.max(0, Number(env.SUMMARIZE_MAX_TURNS || 20));
-}
-
-// 発言をまたいで response_id を使わないとき（既定）、要約は往復数だけで決める。
-//
-// 毎回送る量は「人格・要約・記憶・直近の会話」でほぼ一定なので、文脈の伸び
-// （sessionInputTokens の差）では測れない。前の要約から何往復したかで決める。
-// 直近の会話は15往復送るので（prompt-builder.js）、10往復ごとに要約すれば重なりができ、
-// 要約の前の会話が抜けない。
+// 前の要約からこの往復数に達したら要約する
 function everyTurns(env) {
   const value = Number(env.SUMMARIZE_EVERY_TURNS ?? 10);
   return Number.isFinite(value) ? Math.max(0, value) : 10;
@@ -76,50 +48,19 @@ function shouldSummarize(thread, env = process.env) {
     return { shouldSummarize: false, reason: null };
   }
 
-  // 発言をまたいで response_id を使わないときは、往復数だけで決める
-  if (!isResponseIdContinuationEnabled(env)) {
-    const turns = Number(thread.turnCount) || 0;
-    const every = everyTurns(env);
-    if (every > 0 && turns >= every) {
-      return {
-        shouldSummarize: true,
-        reason: `every_turns (${turns} >= ${every})`,
-      };
-    }
-    return { shouldSummarize: false, reason: null };
-  }
-
-  const contextTokens = Number(thread.sessionInputTokens) || 0;
-  const baseline = Number(thread.summarizedAtInputTokens) || 0;
-  const growth = Math.max(0, contextTokens - baseline);
   const turns = Number(thread.turnCount) || 0;
-
-  const threshold = tokenThreshold(env);
-  const cap = maxTurns(env);
-
-  // 主軸: 前回要約時からの伸び
-  if (threshold > 0 && growth >= threshold) {
+  const every = everyTurns(env);
+  if (every > 0 && turns >= every) {
     return {
       shouldSummarize: true,
-      reason: `token_growth (${growth} >= ${threshold})`,
+      reason: `every_turns (${turns} >= ${every})`,
     };
   }
-
-  // 安全弁: 往復数
-  if (cap > 0 && turns >= cap) {
-    return {
-      shouldSummarize: true,
-      reason: `max_turns (${turns} >= ${cap})`,
-    };
-  }
-
   return { shouldSummarize: false, reason: null };
 }
 
 module.exports = {
   shouldSummarize,
   isSummarizationEnabled,
-  tokenThreshold,
-  maxTurns,
   everyTurns,
 };

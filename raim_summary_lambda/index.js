@@ -10,18 +10,20 @@
 // 【2つのトリガー】
 //
 //   1. SQS（Summary Request Queue）… Core Lambda からの即時依頼
-//      トークン数が閾値を超えた時点と、会話を切り替えた時点で Core が投げる。
-//      担当するのは「長くなったスレッドの圧縮」と、そのあとの userMemory の作り直し。
+//      前の要約から10往復したとき（SUMMARIZE_EVERY_TURNS）と、会話を切り替えたときに Core が投げる。
+//      要約を保存したあと、userMemory も作り直す。
 //
 //   2. EventBridge（週次）… 取りこぼしの回収
 //      a. 放置スレッドの要約
-//         閾値に届かないまま会話が止まったスレッドは SQS 経由では
-//         永遠に要約されない。週次で拾う。
+//         10往復に届かないまま会話が止まったスレッドは SQS 経由では
+//         要約されない。週次で拾う。
 //      b. userMemory の更新
 //         各スレッドの要約を集約し「この人はどんな人か」を作る。
 //         スレッドを跨いだ記憶はバッチ処理が向いている。
-//      c. response_id 失効前の保険
-//         Mantle の保持期間は30日。週次なら4回チャンスがある。
+//
+// 以前は Mantle の previous_response_id で会話をつないでいたため、文脈が
+// 15万トークンを超えたら鎖を切る処理（SUMMARY_RESET_*）があった。
+// 2026-11 から Core は毎回「要約・記憶・直近の会話」を送るので、切る処理は消した。
 //
 // 【安全装置】
 //
@@ -34,7 +36,6 @@ const {
   listThreads,
   scanIdleThreads,
   saveThreadSummary,
-  resetThreadSession,
   toSummaryHistory,
   updateTitleFromSummary,
 } = require('./lib/conversation-thread-store');
@@ -67,47 +68,6 @@ function idleDays(env) {
 function weeklyLimit(env) {
   // 1回の週次実行で処理する上限。暴走とタイムアウトの防止。
   return Number(env.SUMMARY_WEEKLY_LIMIT || 50);
-}
-
-function isSessionResetAllowed(env) {
-  // 鎖を切る機能そのものの ON/OFF。false にすると絶対に切らない。
-  return String(env.SUMMARY_RESET_SESSION || 'true').trim().toLowerCase() === 'true';
-}
-
-/**
- * Mantle のセッションを切る判断をする。
- *
- * 【要約の頻度と切る頻度を分ける理由】
- *
- * 30日以内なら previous_response_id で Mantle が完全な会話を持っている。
- * わざわざ鎖を切って圧縮版（要約）へ置き換えると、細部が落ちるだけで得がない。
- *
- * 一方で永久に切らないと Gemma 4 の 256K に到達する。
- *
- * そこで
- *   要約 … 5〜6往復ごと（タイトルと userMemory を新鮮に保つ）
- *   切る … 文脈が大きくなったときだけ
- * と分ける。
- *
- * 判定には sessionInputTokens を使う。
- * cumulativeInputTokens は要約のたびに 0 へ戻るため、
- * Mantle 側にどれだけ積み上がっているかを測れない。
- *
- * 既定 150000 の根拠: 1往復あたり約1500トークン送るので約100往復。
- * 応答分を足しても 256K に対して十分な余裕が残る。
- */
-function shouldResetSession(thread, env) {
-  if (!isSessionResetAllowed(env)) {
-    return false;
-  }
-
-  const threshold = Number(env.SUMMARY_RESET_TOKEN_THRESHOLD || 150000);
-  if (!Number.isFinite(threshold) || threshold <= 0) {
-    return false;
-  }
-
-  const used = Number(thread?.sessionInputTokens) || 0;
-  return used >= threshold;
 }
 
 // ─────────────────────────────────────────────
@@ -177,14 +137,6 @@ async function summarizeThread({ sub, threadId }, deps = {}) {
   // 挨拶から始まる会話だと一覧が「こんにちは」だらけになる。
   // 要約は既に生成済みなので、ここでの LLM 呼び出しは発生しない。
   await (deps.updateTitleFromSummary || updateTitleFromSummary)(sub, threadId, summary);
-
-  if (shouldResetSession(thread, env)) {
-    await (deps.resetThreadSession || resetThreadSession)(sub, threadId);
-    console.log(
-      `[Summary] session reset: sub=${sub} threadId=${threadId} ` +
-      `sessionInputTokens=${thread.sessionInputTokens || 0}`
-    );
-  }
 
   console.log(
     `[Summary] thread summarized: sub=${sub} threadId=${threadId} chars=${summary.length}`

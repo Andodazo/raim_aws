@@ -65,7 +65,6 @@
 // ==============================================================================
 
 const { getMantleApiKey } = require('./mantle-secret-provider');
-const { isResponseIdContinuationEnabled } = require('./mantle-session-policy');
 
 /**
  * 必須環境変数を読み取る。
@@ -290,10 +289,9 @@ function normalizeCreatedAt(value) {
 }
 
 /**
- * HTTPエラーを、mantle-session-policy.jsが判定できる形へ揃える。
+ * HTTPエラーを、上位層が判定できる形へ揃える。
  *
  * statusCode/code/messageを例外へ付けることで、上位層は次を判別できる。
- * - previous_response_id失効 → 状態をクリアして1回再試行
  * - 429/5xx → 一時障害としてretriable=true
  * - その他4xx → 設定・入力問題としてretriable=false
  */
@@ -855,7 +853,7 @@ function createMantleClient({
     // 2本目も同じリージョンに送る。
     //
     // [MANTLE_FIRST_OUTPUT_TIMEOUT_MS] たっても両方から何も来なければ、両方止めて1回だけ頼み直す（前と同じ）。
-    const hedgeRegion = params.previousResponseId || isResponseIdContinuationEnabled(env)
+    const hedgeRegion = params.previousResponseId
       ? primaryRegion
       : String(env.MANTLE_HEDGE_REGION || 'us-west-2').trim() || primaryRegion;
     const hedgeBaseUrl = hedgeRegion === primaryRegion ? primaryBaseUrl : mantleBaseUrlForRegion(hedgeRegion);

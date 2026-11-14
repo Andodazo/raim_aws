@@ -6,18 +6,11 @@ const { createCoreChatService } = require('../lib/core-chat-service');
 
 function createDependencies(calls) {
   return {
-    clearMantleResponseState: async (sub) => {
-      calls.push(['clear', sub]);
-    },
     getOrCreateUserSession: async (sub) => {
       calls.push(['session', sub]);
+      // 前の作りの名残り（lastResponseId）が残っていても使わない
       return { sessionSummary: 'summary', lastResponseId: 'previous-1' };
     },
-    getMantleSessionState: () => ({
-      usePreviousResponseId: true,
-      previousResponseId: 'previous-1',
-    }),
-    isMantleResponseExpiredError: () => false,
     listSceneCandidates: async () => [{ id: 'default', textCentroid: [1, 0] }],
     selectScene: ({ userText }) => ({ sceneId: 'default', userText }),
     getSceneById: async (sceneId) => ({ id: sceneId, few_shots: [] }),
@@ -47,9 +40,6 @@ function createDependencies(calls) {
     shouldSummarize: () => ({ shouldSummarize: false, reason: null }),
     dispatchSummarization: async () => true,
     getThread: async () => null,
-    updateMantleResponseState: async (sub, state) => {
-      calls.push(['save', sub, state]);
-    },
   };
 }
 
@@ -77,15 +67,9 @@ test('Core chat service runs the existing conversation flow and returns a Core r
     requestId: 'req-1',
   });
   assert.deepEqual(calls[0], ['session', 'user-1']);
-  assert.equal(calls[1][1].previousResponseId, 'previous-1');
-  assert.deepEqual(calls[2], [
-    'save',
-    'user-1',
-    {
-      responseId: 'response-1',
-      createdAt: '2026-06-24T00:00:00.000Z',
-    },
-  ]);
+  // 発言をまたいで response_id で続けない（毎回、会話を入力に入れて送る）
+  assert.equal(calls[1][1].previousResponseId, '');
+  assert.equal(calls.length, 2);
 });
 
 test('Core chat service resolves S3 images before the existing response flow', async () => {
@@ -165,44 +149,6 @@ test('Core chat service maps a model validation error without saving response st
   assert.equal(result.ok, false);
   assert.equal(result.code, 'LLM_ERROR');
   assert.equal(result.requestId, 'req-1');
-  assert.equal(calls.some(([name]) => name === 'save'), false);
-});
-
-test('Core chat service clears an expired response_id and retries once', async () => {
-  const calls = [];
-  const dependencies = createDependencies(calls);
-  let attempt = 0;
-  dependencies.isMantleResponseExpiredError = (error) => error.statusCode === 404;
-  dependencies.createMantleResponse = async ({ previousResponseId }) => {
-    attempt += 1;
-    calls.push(['model-attempt', previousResponseId]);
-
-    if (attempt === 1) {
-      const error = new Error('previous_response_id was not found');
-      error.statusCode = 404;
-      throw error;
-    }
-
-    return {
-      responseId: 'response-recovered',
-      createdAt: '2026-06-24T00:00:00.000Z',
-      rawText: '{}',
-    };
-  };
-  const handleCoreChat = createCoreChatService(dependencies);
-  const result = await handleCoreChat({
-    sub: 'user-1',
-    requestId: 'req-recovery',
-    text: 'hello',
-  });
-
-  assert.equal(result.ok, true);
-  assert.equal(attempt, 2);
-  assert.equal(calls.some(([name]) => name === 'clear'), true);
-  assert.deepEqual(
-    calls.filter(([name]) => name === 'model-attempt'),
-    [['model-attempt', 'previous-1'], ['model-attempt', '']]
-  );
 });
 
 test('Core chat service forwards Mantle text deltas to the caller in order', async () => {
@@ -236,7 +182,6 @@ test('Core chat service records the turn into the conversation thread', async ()
 
   const service = createCoreChatService({
     getOrCreateUserSession: async () => ({ sub: 'user-1' }),
-    getMantleSessionState: () => ({ canUsePreviousResponse: false, previousResponseId: '' }),
     listSceneCandidates: async () => [],
     selectScene: async () => ({ sceneId: 'default', similarity: 1 }),
     getSceneById: async () => ({ id: 'default', few_shots: [] }),
@@ -256,7 +201,6 @@ test('Core chat service records the turn into the conversation thread', async ()
       emotion: 'happy',
       intensity: 0.6,
     }),
-    updateMantleResponseState: async () => {},
     resolveThread: async () => ({ threadId: 'thread-x', thread: { title: '新しい会話' }, isNew: true }),
     ensureThreadTitle: async () => {},
     appendTurn: async (params) => { appended.push(params); },
@@ -276,15 +220,14 @@ test('Core chat service records the turn into the conversation thread', async ()
   assert.equal(appended[0].threadId, 'thread-x');
   assert.equal(appended[0].userMessage.text, 'こんにちは');
   assert.equal(appended[0].assistantMessage.text, 'あ、こんにちは');
-  // 要約トリガー用のトークン累積も渡っている
+  // 送った量（トークン）も渡っている
   assert.equal(appended[0].inputTokens, 1800);
-  assert.equal(appended[0].responseId, 'resp-1');
+  assert.equal('responseId' in appended[0], false);
 });
 
 test('Core chat service still answers when thread persistence fails', async () => {
   const service = createCoreChatService({
     getOrCreateUserSession: async () => ({ sub: 'user-1' }),
-    getMantleSessionState: () => ({ canUsePreviousResponse: false, previousResponseId: '' }),
     listSceneCandidates: async () => [],
     selectScene: async () => ({ sceneId: 'default', similarity: 1 }),
     getSceneById: async () => ({ id: 'default', few_shots: [] }),
@@ -299,7 +242,6 @@ test('Core chat service still answers when thread persistence fails', async () =
       ok: true, text: 'ok', emotions: { happy: 1 },
       overall_intensity: 1, emotion: 'happy', intensity: 1,
     }),
-    updateMantleResponseState: async () => {},
     resolveThread: async () => ({ threadId: 't', thread: null, isNew: false }),
     ensureThreadTitle: async () => {},
     // 保存が落ちても応答は返す
@@ -325,7 +267,6 @@ test('Core chat service dispatches a summary request when the thread grows', asy
 
   const service = createCoreChatService({
     getOrCreateUserSession: async () => ({ sub: 'user-1' }),
-    getMantleSessionState: () => ({ canUsePreviousResponse: false, previousResponseId: '' }),
     listSceneCandidates: async () => [],
     selectScene: async () => ({ sceneId: 'default', similarity: 1 }),
     getSceneById: async () => ({ id: 'default', few_shots: [] }),
@@ -341,7 +282,6 @@ test('Core chat service dispatches a summary request when the thread grows', asy
       ok: true, text: 'ok', emotions: { happy: 1 },
       overall_intensity: 1, emotion: 'happy', intensity: 1,
     }),
-    updateMantleResponseState: async () => {},
     resolveThread: async () => ({ threadId: 'thread-x', thread: null, isNew: false }),
     ensureThreadTitle: async () => {},
     // 更新後のスレッドが閾値を超えている状態を返す
@@ -373,7 +313,6 @@ test('Core chat service does not dispatch below the threshold', async () => {
 
   const service = createCoreChatService({
     getOrCreateUserSession: async () => ({ sub: 'user-1' }),
-    getMantleSessionState: () => ({ canUsePreviousResponse: false, previousResponseId: '' }),
     listSceneCandidates: async () => [],
     selectScene: async () => ({ sceneId: 'default', similarity: 1 }),
     getSceneById: async () => ({ id: 'default', few_shots: [] }),
@@ -389,7 +328,6 @@ test('Core chat service does not dispatch below the threshold', async () => {
       ok: true, text: 'ok', emotions: { happy: 1 },
       overall_intensity: 1, emotion: 'happy', intensity: 1,
     }),
-    updateMantleResponseState: async () => {},
     resolveThread: async () => ({ threadId: 't', thread: null, isNew: false }),
     ensureThreadTitle: async () => {},
     appendTurn: async () => ({ sessionInputTokens: 500, summarizedAtInputTokens: 0, turnCount: 1 }),
@@ -421,12 +359,6 @@ test('Core chat service feeds the thread summary into the prompt, not the user s
       sessionSummary: '',              // UserSession 側は空
       userMemory: '【事実】\n- タピオカが好き',
     }),
-    getMantleSessionState: () => ({
-      // 圧縮でリセットされた直後を想定（初回モードへ落ちる）
-      canUsePreviousResponse: false,
-      usePreviousResponseId: false,
-      previousResponseId: '',
-    }),
     listSceneCandidates: async () => [],
     selectScene: async () => ({ sceneId: 'default', similarity: 1 }),
     getSceneById: async () => ({ id: 'default', few_shots: [] }),
@@ -444,7 +376,6 @@ test('Core chat service feeds the thread summary into the prompt, not the user s
       ok: true, text: 'ok', emotions: { happy: 1 },
       overall_intensity: 1, emotion: 'happy', intensity: 1,
     }),
-    updateMantleResponseState: async () => {},
     resolveThread: async () => ({
       threadId: 'thread-x',
       thread: { sessionSummary: '【事実】\n- ユーザーは東京にいる' },
@@ -724,29 +655,8 @@ test('a failed summary request for the previous thread does not break the reply'
   assert.equal(result.text, 'やあ');
 });
 
-test('a newer memory is sent again in a continued conversation', async () => {
-  // 以前は記憶をスレッドの最初の1回しか渡さず、切り替えのあと作り直した記憶が届かなかった
-  const built = [];
-  const appended = [];
-  await runChat({
-    getOrCreateUserSession: async () => ({
-      userMemory: '【事実】\n- 猫を飼っている',
-      userMemoryUpdatedAt: '2026-11-06T03:00:00.000Z',
-    }),
-    resolveThread: async () => ({
-      threadId: 'thread-test',
-      thread: { memoryInjectedAt: '2026-11-01T00:00:00.000Z' },
-      isNew: false,
-    }),
-    buildMantleInput: (input) => { built.push(input); return input; },
-    appendTurn: async (params) => { appended.push(params); return {}; },
-  });
-
-  assert.equal(built[0].resendUserMemory, true);
-  assert.equal(appended[0].memoryInjectedAt, '2026-11-06T03:00:00.000Z');
-});
-
-test('the same memory is not sent twice in a continued conversation', async () => {
+test('the memory is passed on every turn and nothing about it is stored on the thread', async () => {
+  // 前は「続きの会話」で記憶を渡し直すかを版（memoryInjectedAt）で決めていた。今は毎回渡す
   const built = [];
   const appended = [];
   await runChat({
@@ -763,22 +673,10 @@ test('the same memory is not sent twice in a continued conversation', async () =
     appendTurn: async (params) => { appended.push(params); return {}; },
   });
 
-  assert.equal(built[0].resendUserMemory, false);
-  assert.equal(appended[0].memoryInjectedAt, '');
-});
-
-test('the first turn of a thread records the memory version it sent', async () => {
-  const appended = [];
-  await runChat({
-    getOrCreateUserSession: async () => ({
-      userMemory: '【事実】\n- 猫を飼っている',
-      userMemoryUpdatedAt: '2026-11-06T03:00:00.000Z',
-    }),
-    getMantleSessionState: () => ({ usePreviousResponseId: false, previousResponseId: '' }),
-    appendTurn: async (params) => { appended.push(params); return {}; },
-  });
-
-  assert.equal(appended[0].memoryInjectedAt, '2026-11-06T03:00:00.000Z');
+  assert.equal(built[0].userMemory, '【事実】\n- 猫を飼っている');
+  assert.equal('resendUserMemory' in built[0], false);
+  assert.equal('memoryInjectedAt' in appended[0], false);
+  assert.equal('responseId' in appended[0], false);
 });
 
 // 2026-11-13: Mantle が黙っている間、アプリは「考えているよ」のままだった

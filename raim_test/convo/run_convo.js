@@ -119,6 +119,15 @@ function applyEnvironment(options) {
 // Core の読み込みと、部品の差し替え
 // ─────────────────────────────────────────────
 
+function optionalLib(root, name) {
+  try {
+    return require(path.join(root, 'lib', name));
+  } catch (error) {
+    if (error?.code === 'MODULE_NOT_FOUND') return null;
+    throw error;
+  }
+}
+
 function loadCore(dir) {
   const root = path.resolve(expandHome(dir));
   const lib = (name) => require(path.join(root, 'lib', name));
@@ -128,7 +137,9 @@ function loadCore(dir) {
     createCoreChatService: lib('core-chat-service.js').createCoreChatService,
     buildMessageRecord: lib('conversation-thread-store.js').buildMessageRecord,
     deriveTitle: lib('conversation-thread-store.js').deriveTitle,
-    calculateResponseExpiresAt: lib('mantle-session-policy.js').calculateResponseExpiresAt,
+    // 2026-11 の片付けより前の Core だけにある（返事のIDをつないでいたころ）。無ければ使わない
+    calculateResponseExpiresAt: optionalLib(root, 'mantle-session-policy.js')?.calculateResponseExpiresAt
+      || ((createdAt) => createdAt),
     promptVersion: lib('prompts/raim-system-prompt.js').RAIM_SYSTEM_PROMPT_VERSION,
   };
 }
@@ -159,6 +170,7 @@ function createMemoryStore(core, { sub, userMemory = '', planner = [], recentGre
       updateRecentGreetings: async (_sub, list) => {
         session.recentGreetings = [...list];
       },
+      // 次の2つと appendTurn の responseId などは、2026-11 の片付けより前の Core を比べるときだけ使われる
       updateMantleResponseState: async (_sub, { responseId, createdAt }) => {
         session.lastResponseId = responseId;
         session.lastResponseCreatedAt = createdAt;
