@@ -182,3 +182,10 @@ test('updateTitleFromSummary prefers the model title', async () => {
   await updateTitleFromSummary('u1', 't1', '【事実】\n- ユーザーはカフェに行った', { docClient });
   assert.equal(commands[1].ExpressionAttributeValues[':title'], 'カフェに行った');
 });
+
+test('resolveThreadTitle keeps at most two topics, joined with と', () => {
+  const { resolveThreadTitle } = require('../lib/conversation-thread-store');
+  assert.equal(resolveThreadTitle({ title: '卒業制作の進捗, バイトの状況, 京都旅行' }), '卒業制作の進捗とバイトの状況');
+  assert.equal(resolveThreadTitle({ title: 'カフェ、チーズケーキ' }), 'カフェとチーズケーキ');
+  assert.equal(resolveThreadTitle({ title: '歯医者と甘いもの' }), '歯医者と甘いもの');
+});

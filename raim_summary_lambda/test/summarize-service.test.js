@@ -266,3 +266,10 @@ test('generateSummary gives an empty title when the model wrote none', async () 
   );
   assert.equal(result.title, '');
 });
+
+test('the title is capped at two topics and sad talks are not forced to one title', () => {
+  const { THREAD_INSTRUCTION } = require('../lib/summarize-service');
+  assert.ok(THREAD_INSTRUCTION.includes('3つ目は足さない'));
+  // 「気持ちを話した」に置き換えるのはコード（SENSITIVE_TITLE_WORDS）だけ
+  assert.ok(!THREAD_INSTRUCTION.includes('気持ちを話した'));
+});

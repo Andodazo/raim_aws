@@ -380,6 +380,14 @@ function resolveThreadTitle({ title = '', summary = '' } = {}) {
   if (!value) {
     return deriveTitleFromSummary(summary);
   }
+
+  // 話題は2つまで。3つ以上並んでいたら最初の2つだけ残す（前からある話題を残すので題名が変わりにくい）。
+  // 2026-11-15 の比べ直しで「卒業制作の進捗, バイトの状況, 京都旅行」と3つ並び、途中で切れていた。
+  const topics = value.split(/\s*[,、，/／]\s*/).filter(Boolean);
+  if (topics.length >= 2) {
+    value = topics.slice(0, 2).join('と');
+  }
+
   if (SENSITIVE_TITLE_WORDS.some((word) => value.includes(word))) {
     return SENSITIVE_TITLE;
   }
