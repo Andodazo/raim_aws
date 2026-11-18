@@ -1,0 +1,14 @@
+{
+  "name": "raim_cognito_account_link_lambda",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Account linking API for Google-federated Cognito users",
+  "main": "index.js",
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@aws-sdk/client-cognito-identity-provider": "^3.0.0",
+    "aws-jwt-verify": "^4.0.0"
+  }
+}
