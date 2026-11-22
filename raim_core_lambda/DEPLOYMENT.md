@@ -44,7 +44,7 @@ Invokeします。Tool Lambda、Backup Lambdaはこの実装範囲に含みま�
 | Queue | `RequestQueueName`, `ResponseQueueName`, 各DLQ名、visibility、retention、max receive count |
 | Mantle | `MantleApiKeySecretArn`, `MantleApiKeySecretJsonKey`, `MantleSecretRegion`, `MantleEndpointUrl`, `MantleModelId`, `MantleTimeoutMs`, `MantleMaxOutputTokens` |
 | Titan | `TitanRegion`, `TitanModelId`, `TitanInvokeResourceArn`, `TitanEmbeddingDimensions` |
-| Stream | `StreamChunkMinimumCharacters`, `RequestLeaseSeconds`, `RequestStateTtlSeconds` |
+| Stream | `StreamFirstChunkMinimumCharacters`, `StreamSentenceMaximumCharacters`, `RequestLeaseSeconds`, `RequestStateTtlSeconds` |
 
 ## Lambdaに設定する必須環境変数
 

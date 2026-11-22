@@ -349,3 +349,132 @@ test('記号だけのかたまりは読み上げない（文字は送る）', as
   assert.equal(deltas, 'そうなの。？');
   assert.equal(ttsCalls.length, 1);
 });
+
+// ─────────────────────────────────────────────
+// 文の区切り方（言葉の途中で切らない）
+// ─────────────────────────────────────────────
+
+function makeChunkPublisher(env = {}) {
+  const commands = [];
+  const publisher = createResponseQueuePublisher({
+    requestId: 'req-chunk',
+    connectionId: 'connection-1',
+    sub: 'user-1',
+    source: 'websocket',
+  }, {
+    client: { send: async (command) => commands.push(command.input) },
+    env: { RESPONSE_QUEUE_URL: 'https://sqs.example/response.fifo', ...env },
+  });
+  const deltas = () => commands
+    .map((command) => JSON.parse(command.MessageBody))
+    .filter((message) => message.type === 'stream.delta' && !message.isFiller)
+    .map((message) => message.textDelta);
+  return { publisher, deltas };
+}
+
+// LLM の文字は2〜3文字ずつ届く
+async function streamText(publisher, text, size = 2) {
+  for (let index = 0; index < text.length; index += size) {
+    await publisher.appendText(text.slice(index, index + size));
+  }
+}
+
+test('文字が少しずつ届いても、言葉の途中では切らず文の終わりで切る', async () => {
+  const { publisher, deltas } = makeChunkPublisher();
+  const text = '明日は歯医者の予定があるよ。11月22日の午後だね。';
+
+  await publisher.start();
+  await streamText(publisher, text, 3);
+  await publisher.completed({ text });
+
+  assert.deepEqual(deltas(), ['明日は歯医者の予定があるよ。', '11月22日の午後だね。']);
+});
+
+test('最初のかたまりだけ、6文字以上たまった「、」でも切る', async () => {
+  const { publisher, deltas } = makeChunkPublisher();
+  const text = 'そうだなあ、今日は晴れで、明日は雨だよ。';
+
+  await publisher.start();
+  await streamText(publisher, text);
+  await publisher.completed({ text });
+
+  assert.deepEqual(deltas(), ['そうだなあ、', '今日は晴れで、明日は雨だよ。']);
+});
+
+test('最初の「、」が6文字未満なら切らない', async () => {
+  const { publisher, deltas } = makeChunkPublisher();
+  const text = 'うん、そうだよ。';
+
+  await publisher.start();
+  await streamText(publisher, text);
+  await publisher.completed({ text });
+
+  assert.deepEqual(deltas(), ['うん、そうだよ。']);
+});
+
+test('「！？」や「」」は前の文に含める', async () => {
+  const { publisher, deltas } = makeChunkPublisher();
+  const text = 'ほんとに！？「うそでしょ。」って思った。';
+
+  await publisher.start();
+  await streamText(publisher, text, 1);
+  await publisher.completed({ text });
+
+  assert.deepEqual(deltas(), ['ほんとに！？', '「うそでしょ。」', 'って思った。']);
+});
+
+test('文の終わりが60文字来なければ、最後の「、」で切る（無ければ60文字で切る）', async () => {
+  const { publisher, deltas } = makeChunkPublisher();
+  const longWithComma = `${'あ'.repeat(30)}、${'い'.repeat(40)}。`;
+  const longWithoutComma = `${'う'.repeat(70)}。`;
+  const text = `はい。${longWithComma}${longWithoutComma}`;
+
+  await publisher.start();
+  await streamText(publisher, text, 3);
+  await publisher.completed({ text });
+
+  assert.deepEqual(deltas(), [
+    'はい。',
+    `${'あ'.repeat(30)}、`,
+    `${'い'.repeat(40)}。`,
+    'う'.repeat(60),
+    `${'う'.repeat(10)}。`,
+  ]);
+  assert.equal(deltas().join(''), text);
+});
+
+test('ツールの前置きの後の本文も、最初のかたまりは「、」で切る', async () => {
+  const { publisher, deltas } = makeChunkPublisher();
+  const text = '調べてみたら、東京は晴れだったよ。傘はいらないね。';
+
+  await publisher.start();
+  await streamText(publisher, 'うん、わかった。');
+  await publisher.toolCall({
+    toolName: 'get_weather',
+    description: '東京の天気を調べています',
+    introText: '天気見てくる',
+  });
+  await streamText(publisher, text);
+  await publisher.completed({ text });
+
+  assert.deepEqual(deltas(), [
+    'うん、わかった。',
+    '調べてみたら、',
+    '東京は晴れだったよ。',
+    '傘はいらないね。',
+  ]);
+});
+
+test('区切りの環境変数で、最初のかたまりと文の長さを変えられる', async () => {
+  const { publisher, deltas } = makeChunkPublisher({
+    STREAM_FIRST_CHUNK_MIN_CHARACTERS: '2',
+    STREAM_SENTENCE_MAX_CHARACTERS: '10',
+  });
+  const text = 'うん、それはとても大事なことだと思う。';
+
+  await publisher.start();
+  await streamText(publisher, text);
+  await publisher.completed({ text });
+
+  assert.deepEqual(deltas(), ['うん、', 'それはとても大事なこ', 'とだと思う。']);
+});
