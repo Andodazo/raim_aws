@@ -54,13 +54,28 @@ function createResponseQueuePublisher({
   const sqsClient = client || new SQSClient({
     region: env.AWS_REGION || 'ap-northeast-1',
   });
-  const minimumChunkCharacters = Math.max(
+  // 文字と声を送るかたまりの区切り方。
+  //
+  // 以前は「12文字たまったら区切り文字を待たずに切る」「、でも切る」作りで、
+  // LLM の文字が2〜3文字ずつ届くと「歯医者の予 / 定」「11月2 / 2日」のように
+  // 言葉の途中で切れ、TTS がかたまりごとに別の文として読むため読みが崩れていた。
+  //
+  // 今は次のように切る。
+  // - 基本は文の終わり（。！？!? と改行）だけで切る
+  // - 返事の最初のかたまりだけは、早く話し始めるために「、」でも切る
+  //   （STREAM_FIRST_CHUNK_MIN_CHARACTERS 文字以上たまってから）
+  // - 文の終わりが STREAM_SENTENCE_MAX_CHARACTERS 文字来なければ、
+  //   その範囲の最後の「、」で切る（無ければその文字数で切る）
+  //
+  // 旧 STREAM_CHUNK_MIN_CHARACTERS / STREAM_CHUNK_MAX_CHARACTERS は使わない。
+  // 古い値（12 / 30）が環境変数に残っていても新しい区切り方になるよう、名前を変えた。
+  const firstChunkMinimumCharacters = Math.max(
     1,
-    Number(env.STREAM_CHUNK_MIN_CHARACTERS || 12)
+    Number(env.STREAM_FIRST_CHUNK_MIN_CHARACTERS || 6)
   );
-  const maximumChunkCharacters = Math.max(
-    minimumChunkCharacters,
-    Number(env.STREAM_CHUNK_MAX_CHARACTERS || 30)
+  const sentenceMaximumCharacters = Math.max(
+    firstChunkMinimumCharacters,
+    Number(env.STREAM_SENTENCE_MAX_CHARACTERS || 60)
   );
   // TTS の再試行回数。0 にすると再試行しない。
   const audioRetryCount = Math.max(0, Number(env.TTS_RETRY_COUNT ?? 1));
@@ -77,6 +92,9 @@ function createResponseQueuePublisher({
   // この要求で何番目の client_action か（actionId に使う）
   let clientActionIndex = 0;
   let textBuffer = '';
+  // 次に出すかたまりが、返事（または前置きの後の本文）の最初かどうか。
+  // 最初のかたまりだけ「、」でも切って、早く声を出す。
+  let firstChunkPending = true;
   let audioDeliveryChain = Promise.resolve();
   // v14: tool intro を送ったら true。本文の最初のdeltaで bubble_break を発火して false に戻す。
   let bubbleBreakPending = false;
@@ -127,34 +145,73 @@ function createResponseQueuePublisher({
     return chunkId;
   }
 
-  function findSentenceEnd(value) {
-    return value.search(/[。！？!?、,\n]/);
+  // 文の終わり
+  const SENTENCE_END = /[。！？!?\n]/;
+  // 文の終わりのすぐ後に続いたら、前の文に含める文字。
+  // 「！？」「…。」「」」などを分けると「？」だけのかたまりができ、
+  // 読めない・余計な声が入る原因になる。
+  const SENTENCE_TAIL = /[。！？!?\n…‥」』）)】〕”’\s]/;
+  // 読点（最初のかたまりと、長すぎる文で使う）
+  const COMMA = /[、，,]/;
+
+  function lastCommaIndex(value) {
+    for (let index = value.length - 1; index >= 0; index -= 1) {
+      if (COMMA.test(value[index])) {
+        return index;
+      }
+    }
+    return -1;
   }
 
+  function cutTextBuffer(length) {
+    const chunk = textBuffer.slice(0, length);
+    textBuffer = textBuffer.slice(length);
+    return chunk;
+  }
+
+  /**
+   * バッファから次のかたまりを1つ取り出す。まだ切れないなら null。
+   * force は返事の終わりなど、残りを全部出してよいとき。
+   */
   function takeNextTextChunk(force = false) {
     if (!textBuffer) {
       return null;
     }
 
-    const sentenceEnd = findSentenceEnd(textBuffer);
-    const sentenceLength = sentenceEnd >= 0 ? sentenceEnd + 1 : 0;
+    const sentenceEnd = textBuffer.search(SENTENCE_END);
 
-    if (sentenceLength > 0 && sentenceLength <= maximumChunkCharacters) {
-      const chunk = textBuffer.slice(0, sentenceLength);
-      textBuffer = textBuffer.slice(sentenceLength);
-      return chunk;
+    // 最初のかたまりだけは、文の終わりより先にある「、」でも切る。
+    if (firstChunkPending) {
+      const limit = sentenceEnd >= 0 ? sentenceEnd : textBuffer.length;
+      for (let index = firstChunkMinimumCharacters - 1; index < limit; index += 1) {
+        if (COMMA.test(textBuffer[index])) {
+          return cutTextBuffer(index + 1);
+        }
+      }
     }
 
-    if (textBuffer.length >= maximumChunkCharacters) {
-      const chunk = textBuffer.slice(0, maximumChunkCharacters);
-      textBuffer = textBuffer.slice(maximumChunkCharacters);
-      return chunk;
+    if (sentenceEnd >= 0 && sentenceEnd < sentenceMaximumCharacters) {
+      let end = sentenceEnd + 1;
+      while (end < textBuffer.length && SENTENCE_TAIL.test(textBuffer[end])) {
+        end += 1;
+      }
+      // 文の終わりがバッファの最後にあるときは、「！？」や「」」が続くかもしれない。
+      // 次の文字が届くまで待つ（返事の終わりなら待たない）。
+      if (end < textBuffer.length || force) {
+        return cutTextBuffer(end);
+      }
+      return null;
     }
 
-    if (force || (sentenceEnd < 0 && textBuffer.length >= minimumChunkCharacters)) {
-      const chunk = textBuffer;
-      textBuffer = '';
-      return chunk;
+    // 文の終わりが来ないまま長くなったら、その範囲の最後の「、」で切る。
+    if (textBuffer.length >= sentenceMaximumCharacters) {
+      const head = textBuffer.slice(0, sentenceMaximumCharacters);
+      const comma = lastCommaIndex(head);
+      return cutTextBuffer(comma >= 0 ? comma + 1 : sentenceMaximumCharacters);
+    }
+
+    if (force) {
+      return cutTextBuffer(textBuffer.length);
     }
 
     return null;
@@ -296,8 +353,8 @@ function createResponseQueuePublisher({
     while ((chunk = takeNextTextChunk(force)) !== null) {
       // ツールの前置きセリフと本文を別吹き出しにする。
       await maybeSendBubbleBreak();
+      firstChunkPending = false;
       lastMessage = await publishTextChunk(chunk);
-      force = false;
     }
 
     return lastMessage;
@@ -399,6 +456,8 @@ function createResponseQueuePublisher({
       });
       enqueueAudio({ chunkId, text: line });
       bubbleBreakPending = true;
+      // 前置きの後の本文も、最初のかたまりは短く切って早く声を出す。
+      firstChunkPending = true;
     },
 
     async toolCall({ toolName, description, introText }) {
@@ -421,6 +480,8 @@ function createResponseQueuePublisher({
 
         // v14: introを送ったので、本文開始時にbubble_breakを挟む。
         bubbleBreakPending = true;
+        // 前置きの後の本文も、最初のかたまりは短く切って早く声を出す。
+        firstChunkPending = true;
       }
 
       return send('stream.tool', {

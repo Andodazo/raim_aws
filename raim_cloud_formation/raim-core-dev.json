@@ -135,9 +135,13 @@
       "Type": "String",
       "Default": "0.25"
     },
-    "StreamChunkMinimumCharacters": {
+    "StreamFirstChunkMinimumCharacters": {
       "Type": "String",
-      "Default": "12"
+      "Default": "6"
+    },
+    "StreamSentenceMaximumCharacters": {
+      "Type": "String",
+      "Default": "60"
     },
     "RequestLeaseSeconds": {
       "Type": "String",
@@ -396,11 +400,11 @@
             "MANTLE_REASONING_EFFORT": "low",
             "FACT_CHECK_SEARCH": "true",
             "SCENE_REASONING_EFFORTS": "",
-            "STREAM_CHUNK_MAX_CHARACTERS": "30",
             "TTS_AUDIO_FRAGMENT_BASE64_CHARACTERS": "24000",
             "REQUEST_LEASE_SECONDS": { "Ref": "RequestLeaseSeconds" },
             "REQUEST_STATE_TTL_SECONDS": { "Ref": "RequestStateTtlSeconds" },
-            "STREAM_CHUNK_MIN_CHARACTERS": { "Ref": "StreamChunkMinimumCharacters" },
+            "STREAM_FIRST_CHUNK_MIN_CHARACTERS": { "Ref": "StreamFirstChunkMinimumCharacters" },
+            "STREAM_SENTENCE_MAX_CHARACTERS": { "Ref": "StreamSentenceMaximumCharacters" },
             "MANTLE_API_KEY_SECRET_ARN": { "Ref": "MantleApiKeySecretArn" },
             "MANTLE_API_KEY_SECRET_JSON_KEY": { "Ref": "MantleApiKeySecretJsonKey" },
             "MANTLE_SECRET_REGION": { "Ref": "MantleSecretRegion" },
