@@ -14,12 +14,15 @@
 #
 # 関数・バケットを変えるとき:
 #   FUNCTION=raim-tts-sbv2-test BUCKET=raim-tts-sbv2-test-990442281360 bash cloudshell_test.sh function.zip
+#   PREFIX=models bash cloudshell_test.sh   # モデルが s3://<バケット>/models/raim_models.tar のとき（省略すると自分で探す）
 #
 # 本番の RAiM-* の関数には使わないこと（環境変数を書き換えるため）。
 set -euo pipefail
 
 FUNCTION="${FUNCTION:-raim-tts-sbv2-test}"
 BUCKET="${BUCKET:-raim-tts-sbv2-test-990442281360}"
+# raim_models.tar の場所（バケットの一番上なら空）。空のままなら自分で探す
+PREFIX="${PREFIX-auto}"
 ZIP="${1:-}"
 ROUNDS="${ROUNDS:-1 8 1 8}"
 REGION="${AWS_REGION:-ap-northeast-1}"
@@ -42,12 +45,29 @@ wait_updated() {
 }
 
 set_env() {
-  local parallel="$1"
+  local parallel="$1" vars="MODEL_S3_BUCKET=${BUCKET},MODEL_DOWNLOAD_PARALLEL=${parallel}"
+  [[ -n "$PREFIX" ]] && vars="${vars},MODEL_S3_PREFIX=${PREFIX}"
   aws lambda update-function-configuration --function-name "$FUNCTION" \
     --handler handler.handler \
-    --environment "Variables={MODEL_S3_BUCKET=${BUCKET},MODEL_DOWNLOAD_PARALLEL=${parallel}}" \
+    --environment "Variables={${vars}}" \
     >/dev/null
   wait_updated
+}
+
+# raim_models.tar がバケットのどこにあるか探す（一番上 → models/ の順）
+find_prefix() {
+  if [[ "$PREFIX" != "auto" ]]; then return; fi
+  for candidate in "" "models"; do
+    local key="raim_models.tar"
+    [[ -n "$candidate" ]] && key="${candidate}/raim_models.tar"
+    if aws s3api head-object --bucket "$BUCKET" --key "$key" >/dev/null 2>&1; then
+      PREFIX="$candidate"
+      log "モデル: s3://$BUCKET/$key"
+      return
+    fi
+  done
+  echo "s3://$BUCKET に raim_models.tar が見つかりません（一番上と models/ を見ました）。PREFIX=<フォルダ名> で指定してください" >&2
+  exit 1
 }
 
 # invoke <名前> <payload JSON> → $WORK/<名前>.json（返事）と $WORK/<名前>.log（ログの最後）
@@ -108,6 +128,8 @@ PY
   echo "関数: $FUNCTION  バケット: $BUCKET  リージョン: $REGION"
   echo
 } | tee "$RESULT"
+
+find_prefix
 
 # 1. コードの差し替え
 if [[ -n "$ZIP" ]]; then
