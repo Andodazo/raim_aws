@@ -96,6 +96,17 @@ CloudShell に function.zip と `tools/cloudshell_setup_prod.sh` を上げて `b
 バケット `raim-tts-models-<アカウント>`（公開なし、Core のロールだけ読める）と関数 `RAiM-TTS-SBV2-dev` を作り、Core のロールに呼ぶ許可を足して、温めと読み上げを1回試す。もうあるものは作り直さず、関数のコードと設定だけ更新する。
 Core の `TTS_FUNCTION_NAME` はこのスクリプトでは変えない（`raim_core_lambda/DEPLOYMENT.md`）。
 
+## 読み辞書だけ入れ替える
+
+辞書（`src/raim_user_dict.csv`）は S3 の `dict/raim_user_dict.csv` に置き、環境変数 `USER_DICT_S3_KEY` で読ませる。zip を作り直さずに直せる。
+
+1. csv を直す（1行 = 1語。読みはカタカナ、アクセントは「下がる位置/拍の数」。平らは 0）。リポジトリの csv も同じように直しておく（S3 の辞書が使えないときの予備になる）
+2. デスクトップで聞いて確かめる（`listen` の `python make_wavs.py --dict 直したcsv --out out_dict`）
+3. CloudShell に csv と `tools/cloudshell_update_dict.sh` を上げて `bash cloudshell_update_dict.sh raim_user_dict.csv`
+   - csv の形を確かめてから上げる。今の辞書は `dict/old/` に残る
+   - 環境変数 `DICT_VERSION` を変えて実行環境を作り直すので、次の呼び出しから新しい辞書になる
+   - S3 の辞書が壊れていても、zip に入れた辞書で動く（ログに `user dict from S3 failed`）
+
 ## テスト
 
 AWS のテスト用関数（raim-tts-sbv2-test）で一括テストするときは、CloudShell に function.zip と `tools/cloudshell_test.sh` を上げて `bash cloudshell_test.sh function.zip`。
