@@ -112,9 +112,33 @@ function createRequestQueuePublisher({ client, env = process.env } = {}) {
     }));
   }
 
+  /**
+   * アプリの起動時・再接続時に、Core へ TTS を温めてもらう（Core の processTtsWarmup）。
+   *
+   * 自作の声（SBV2）の TTS Lambda は、冷えた状態から最初の声まで約18秒かかる。
+   * つないだ時点で温め始めれば、話しかけるころには温まっている。
+   * Edge のロールは TTS Lambda を呼べないので、Core を通す（Core のロールは呼べる）。
+   */
+  async function publishTtsWarmup({ connectionId, sub }) {
+    const message = {
+      schemaVersion: REQUEST_SCHEMA_VERSION,
+      type: 'tts.warmup',
+      reason: 'connect',
+      createdAt: new Date().toISOString(),
+    };
+    const groupKey = connectionId || sub || 'tts-warmup';
+    await sqs.send(new SendMessageCommand({
+      QueueUrl: config.requestQueueUrl,
+      MessageBody: JSON.stringify(message),
+      MessageGroupId: groupKey.length <= 128 ? groupKey : hashForFifo(groupKey),
+      MessageDeduplicationId: hashForFifo(`tts-warmup\u0000${groupKey}`),
+    }));
+  }
+
   return {
     publishChatRequest,
     publishPlannerEnrich,
+    publishTtsWarmup,
   };
 }
 

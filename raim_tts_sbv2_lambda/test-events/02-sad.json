@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "type": "tts.synthesize",
+  "requestId": "test-req-2",
+  "chunkId": "test-req-2_chunk_0",
+  "text": "そっか、今日はもう休も。",
+  "voiceParams": { "speaker_id": 8, "emotionMix": { "sad": 0.5, "caring": 0.4 }, "emotionIntensity": 1.0 }
+}

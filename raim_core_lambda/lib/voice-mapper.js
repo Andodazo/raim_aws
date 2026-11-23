@@ -134,7 +134,30 @@ function getVoiceParams(emotion = 'neutral', intensity = 0.5) {
   };
 }
 
-function getVoiceParamsFromEmotions(emotions, overallIntensity = 1.0) {
+/**
+ * 感情の混ぜ方を、自作の声（SBV2）の TTS Lambda 向けに整える。
+ *
+ * VOICEVOX はつむぎ1人の声を数字で調整するだけなので、一番大きい感情しか使えない。
+ * 自作の声は感情ごとの声色（スタイル）を混ぜられるので、Core が出した混ぜ方を
+ * そのまま渡す。値が 0 以下・数字でない感情は捨てる。
+ * VOICEVOX の TTS Lambda は知らないキーを無視するので、両方に同じものを送ってよい。
+ */
+function normalizeEmotionMix(emotions) {
+  const mix = {};
+
+  if (emotions && typeof emotions === 'object' && !Array.isArray(emotions)) {
+    for (const [emotion, value] of Object.entries(emotions)) {
+      const number = Number(value);
+      if (typeof emotion === 'string' && emotion && Number.isFinite(number) && number > 0) {
+        mix[emotion] = round3(Math.min(1, number));
+      }
+    }
+  }
+
+  return Object.keys(mix).length > 0 ? mix : { neutral: 1 };
+}
+
+function dominantVoiceParams(emotions, overallIntensity) {
   if (!emotions || typeof emotions !== 'object' || Array.isArray(emotions)) {
     return getVoiceParams('neutral', 0.5);
   }
@@ -161,6 +184,16 @@ function getVoiceParamsFromEmotions(emotions, overallIntensity = 1.0) {
   );
 }
 
+function getVoiceParamsFromEmotions(emotions, overallIntensity = 1.0) {
+  const hasEmotions = Boolean(emotions) && typeof emotions === 'object' && !Array.isArray(emotions);
+  return {
+    ...dominantVoiceParams(emotions, overallIntensity),
+    // 自作の声（SBV2）用：感情の混ぜ方と全体の強さ
+    emotionMix: normalizeEmotionMix(emotions),
+    emotionIntensity: hasEmotions ? round3(clamp01(overallIntensity, 1.0)) : 0.5,
+  };
+}
+
 module.exports = {
   ACTIVE_PROFILE_NAME,
   resolveVoiceProfileName,
@@ -168,4 +201,5 @@ module.exports = {
   defaultVoiceParams,
   getVoiceParams,
   getVoiceParamsFromEmotions,
+  normalizeEmotionMix,
 };

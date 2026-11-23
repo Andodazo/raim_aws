@@ -227,3 +227,43 @@ test('after-reply tasks run after stream.completed and the request is marked com
   assert.deepEqual(result, { batchItemFailures: [] });
   assert.deepEqual(events, [['start'], ['completed'], ['marked'], ['action', 'planner.suggest']]);
 });
+
+test('tts.warmup は TTS を温めるだけで、会話の処理はしない', async () => {
+  const warmups = [];
+  let chatCalled = false;
+  const handler = createSqsCoreHandler({
+    createTtsClient: () => ({ warmup: async (job) => warmups.push(job) }),
+    normalizeCoreEvent: () => { chatCalled = true; throw new Error('should not be called'); },
+    claimRequest: async () => { chatCalled = true; return { claimed: false }; },
+  });
+
+  const result = await handler({
+    Records: [{ ...createRecord('warm-1'), body: JSON.stringify({ type: 'tts.warmup', reason: 'connect' }) }],
+  }, {});
+
+  assert.deepEqual(warmups, [{ reason: 'connect' }]);
+  assert.equal(chatCalled, false);
+  assert.deepEqual(result.batchItemFailures, []);
+});
+
+test('tts.warmup が失敗しても、メッセージは失敗にしない', async () => {
+  const handler = createSqsCoreHandler({
+    createTtsClient: () => ({ warmup: async () => { throw new Error('boom'); } }),
+  });
+
+  const result = await handler({
+    Records: [{ ...createRecord('warm-2'), body: JSON.stringify({ type: 'tts.warmup' }) }],
+  }, {});
+
+  assert.deepEqual(result.batchItemFailures, []);
+});
+
+test('TTS が未設定なら tts.warmup は何もしない', async () => {
+  const handler = createSqsCoreHandler({ createTtsClient: () => null });
+
+  const result = await handler({
+    Records: [{ ...createRecord('warm-3'), body: JSON.stringify({ type: 'tts.warmup' }) }],
+  }, {});
+
+  assert.deepEqual(result.batchItemFailures, []);
+});

@@ -99,6 +99,17 @@ function createWebSocketHandler({
       console.warn(`[Connection] could not register for sync (non-fatal): ${error.message}`);
     }
 
+    // 声の TTS を温め始める（アプリの起動時・バックグラウンドから戻ってつなぎ直したとき）。
+    // 失敗しても接続は通す。
+    try {
+      await getRequestPublisher().publishTtsWarmup?.({
+        connectionId: normalized.connectionId,
+        sub: normalized.sub,
+      });
+    } catch (error) {
+      console.warn(`[TTS] warmup request failed (non-fatal): ${error.message}`);
+    }
+
     return createOkResponse({
       type: 'connected',
       connectionId: normalized.connectionId,

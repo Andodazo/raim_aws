@@ -478,3 +478,100 @@ test('区切りの環境変数で、最初のかたまりと文の長さを変�
 
   assert.deepEqual(deltas(), ['うん、', 'それはとても大事なこ', 'とだと思う。']);
 });
+
+test('2つ目以降も、30文字を超える文は「、」で分ける', async () => {
+  const { publisher, deltas } = makeChunkPublisher();
+  const text = 'はい。今日は駅前のカフェに行ってみて、新しいケーキを食べてみたんだけど、すごくおいしかったよ。';
+
+  await publisher.start();
+  await streamText(publisher, text, 3);
+  await publisher.completed({ text });
+
+  assert.deepEqual(deltas(), [
+    'はい。',
+    '今日は駅前のカフェに行ってみて、',
+    // 残りは30文字以下なので、もう分けない
+    '新しいケーキを食べてみたんだけど、すごくおいしかったよ。',
+  ]);
+  assert.equal(deltas().join(''), text);
+});
+
+test('30文字以下の文は「、」で分けない', async () => {
+  const { publisher, deltas } = makeChunkPublisher();
+  const text = 'はい。それなら、明日やってみようか。';
+
+  await publisher.start();
+  await streamText(publisher, text, 3);
+  await publisher.completed({ text });
+
+  assert.deepEqual(deltas(), ['はい。', 'それなら、明日やってみようか。']);
+});
+
+test('STREAM_COMMA_SPLIT_MIN_CHARACTERS=0 なら2つ目以降は「、」で分けない', async () => {
+  const { publisher, deltas } = makeChunkPublisher({ STREAM_COMMA_SPLIT_MIN_CHARACTERS: '0' });
+  const text = 'はい。今日は駅前のカフェに行ってみて、新しいケーキを食べてみたんだけど、すごくおいしかったよ。';
+
+  await publisher.start();
+  await streamText(publisher, text, 3);
+  await publisher.completed({ text });
+
+  assert.deepEqual(deltas(), [
+    'はい。',
+    '今日は駅前のカフェに行ってみて、新しいケーキを食べてみたんだけど、すごくおいしかったよ。',
+  ]);
+});
+
+test('TTS は同時に呼ばず、前の合成が終わってから次を呼ぶ', async () => {
+  const commands = [];
+  const events = [];
+  const pending = [];
+  let active = 0;
+  let maxActive = 0;
+
+  const publisher = createResponseQueuePublisher({
+    requestId: 'req-serial',
+    connectionId: 'connection-1',
+    sub: 'user-1',
+    source: 'websocket',
+  }, {
+    client: { send: async (command) => commands.push(command.input) },
+    env: { RESPONSE_QUEUE_URL: 'https://sqs.example/response.fifo' },
+    ttsClient: {
+      synthesize: (request) => new Promise((resolve) => {
+        active += 1;
+        maxActive = Math.max(maxActive, active);
+        events.push(`start:${request.text}`);
+        pending.push(() => {
+          active -= 1;
+          events.push(`end:${request.text}`);
+          resolve({ ok: true, format: 'wav', contentType: 'audio/wav', audio: 'AAAA', audioByteLength: 3 });
+        });
+      }),
+    },
+  });
+
+  await publisher.start();
+  await streamText(publisher, 'ひとつめ。ふたつめ。みっつめ。', 5);
+
+  const finished = publisher.completed({ text: 'ひとつめ。ふたつめ。みっつめ。' });
+
+  // 合成を1つずつ終わらせる。終わらせるまで次は始まらない。
+  for (let round = 0; round < 3; round += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(pending.length, round + 1, `${round + 1}個目だけが始まっていること`);
+    pending[round]();
+  }
+  await finished;
+
+  assert.equal(maxActive, 1);
+  assert.deepEqual(events, [
+    'start:ひとつめ。', 'end:ひとつめ。',
+    'start:ふたつめ。', 'end:ふたつめ。',
+    'start:みっつめ。', 'end:みっつめ。',
+  ]);
+  const audioChunks = commands
+    .map((command) => JSON.parse(command.MessageBody))
+    .filter((message) => message.type === 'stream.audio')
+    .map((message) => message.chunkId);
+  assert.deepEqual([...new Set(audioChunks)], ['req-serial_chunk_0', 'req-serial_chunk_1', 'req-serial_chunk_2']);
+});

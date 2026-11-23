@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "type": "tts.synthesize",
+  "requestId": "test-req-1",
+  "chunkId": "test-req-1_chunk_0",
+  "text": "えっ、そんなに褒められると照れるんだけど。",
+  "voiceParams": { "speaker_id": 8, "emotionMix": { "happy": 0.6, "embarrassed": 0.3 }, "emotionIntensity": 0.8 }
+}

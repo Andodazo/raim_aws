@@ -30,6 +30,22 @@ const { defaultPlannerStore } = require('./planner/planner-store');
 const { writeEventExtras } = require('./planner/planner-writer');
 const { createMantleResponse } = require('./mantle-client');
 
+/**
+ * Edge が $connect のときに送る { type: 'tts.warmup' } か。違えば null。
+ */
+function parseTtsWarmupMessage(body) {
+  let message;
+  try {
+    message = typeof body === 'string' ? JSON.parse(body) : body;
+  } catch {
+    return null;
+  }
+  if (!message || message.type !== 'tts.warmup') {
+    return null;
+  }
+  return { reason: String(message.reason || '') };
+}
+
 function isSqsEvent(event) {
   return Array.isArray(event?.Records) &&
     event.Records.every((record) => record?.eventSource === 'aws:sqs');
@@ -82,7 +98,28 @@ function createSqsCoreHandler(dependencyOverrides = {}) {
     return { plannerEnrich: true };
   }
 
+  /**
+   * アプリの起動時・再接続時に Edge から届く。TTS Lambda を温めるだけ。
+   * 失敗しても会話には関係ないので、ログだけ残して終わる（再試行しない）。
+   */
+  async function processTtsWarmup(job) {
+    try {
+      const ttsClient = dependencies.createTtsClient();
+      if (ttsClient?.warmup) {
+        await ttsClient.warmup({ reason: job.reason });
+      }
+    } catch (error) {
+      console.warn(`[TTS] warmup failed (non-fatal): ${error.message}`);
+    }
+    return { ttsWarmup: true };
+  }
+
   async function processRecord(record, context) {
+    const warmupJob = parseTtsWarmupMessage(record.body);
+    if (warmupJob) {
+      return processTtsWarmup(warmupJob);
+    }
+
     // 手で足した予定の仕上げ（チャットではない）
     const enrichJob = parsePlannerEnrichMessage(record.body);
     if (enrichJob) {
@@ -282,4 +319,5 @@ module.exports = {
   createSqsCoreHandler,
   handleSqsBatch,
   isSqsEvent,
+  parseTtsWarmupMessage,
 };

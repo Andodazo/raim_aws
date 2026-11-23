@@ -23,7 +23,7 @@
     "TtsLambdaFunctionName": {
       "Type": "String",
       "Default": "RAiM-TTS-Lambda-dev",
-      "Description": "TTS Lambda function name invoked for each streamed text chunk."
+      "Description": "TTS Lambda function name invoked for each streamed text chunk. VOICEVOX: RAiM-TTS-Lambda-dev / own voice (SBV2): RAiM-TTS-SBV2-dev."
     },
     "UserSessionTableName": {
       "Type": "String",
@@ -142,6 +142,11 @@
     "StreamSentenceMaximumCharacters": {
       "Type": "String",
       "Default": "60"
+    },
+    "StreamCommaSplitMinimumCharacters": {
+      "Type": "String",
+      "Default": "30",
+      "Description": "Second and later chunks are split at a comma when the sentence is longer than this. 0 disables."
     },
     "RequestLeaseSeconds": {
       "Type": "String",
@@ -405,6 +410,7 @@
             "REQUEST_STATE_TTL_SECONDS": { "Ref": "RequestStateTtlSeconds" },
             "STREAM_FIRST_CHUNK_MIN_CHARACTERS": { "Ref": "StreamFirstChunkMinimumCharacters" },
             "STREAM_SENTENCE_MAX_CHARACTERS": { "Ref": "StreamSentenceMaximumCharacters" },
+            "STREAM_COMMA_SPLIT_MIN_CHARACTERS": { "Ref": "StreamCommaSplitMinimumCharacters" },
             "MANTLE_API_KEY_SECRET_ARN": { "Ref": "MantleApiKeySecretArn" },
             "MANTLE_API_KEY_SECRET_JSON_KEY": { "Ref": "MantleApiKeySecretJsonKey" },
             "MANTLE_SECRET_REGION": { "Ref": "MantleSecretRegion" },

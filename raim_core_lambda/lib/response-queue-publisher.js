@@ -77,6 +77,15 @@ function createResponseQueuePublisher({
     firstChunkMinimumCharacters,
     Number(env.STREAM_SENTENCE_MAX_CHARACTERS || 60)
   );
+  // 2つ目以降のかたまりも、文がこの文字数以上になるなら「、」で分ける。0 で分けない。
+  //
+  // TTS を順番に呼ぶようにしたので、短いかたまりの次に長い文が来ると、
+  // 長い文の合成が終わるまで声が途切れる（実測で約3秒）。長い文を分けて、
+  // 1回の合成を短くする。
+  const commaSplitMinimumCharacters = Math.max(
+    0,
+    Number(env.STREAM_COMMA_SPLIT_MIN_CHARACTERS ?? 30)
+  );
   // TTS の再試行回数。0 にすると再試行しない。
   const audioRetryCount = Math.max(0, Number(env.TTS_RETRY_COUNT ?? 1));
 
@@ -96,6 +105,8 @@ function createResponseQueuePublisher({
   // 最初のかたまりだけ「、」でも切って、早く声を出す。
   let firstChunkPending = true;
   let audioDeliveryChain = Promise.resolve();
+  // 合成も順番に1つずつにする（前の合成が終わってから次を始める）。
+  let audioSynthesisChain = Promise.resolve();
   // v14: tool intro を送ったら true。本文の最初のdeltaで bubble_break を発火して false に戻す。
   let bubbleBreakPending = false;
   const messageGroupId = requestId.length <= 128
@@ -186,6 +197,18 @@ function createResponseQueuePublisher({
       for (let index = firstChunkMinimumCharacters - 1; index < limit; index += 1) {
         if (COMMA.test(textBuffer[index])) {
           return cutTextBuffer(index + 1);
+        }
+      }
+    }
+
+    // 2つ目以降でも、文が長くなるなら「、」で分ける。
+    // 分けた前半が短すぎないよう、firstChunkMinimumCharacters 文字以上の位置の「、」だけ使う。
+    if (!firstChunkPending && commaSplitMinimumCharacters > 0) {
+      const sentenceLength = sentenceEnd >= 0 ? sentenceEnd + 1 : textBuffer.length;
+      if (sentenceLength > commaSplitMinimumCharacters) {
+        const comma = lastCommaIndex(textBuffer.slice(0, commaSplitMinimumCharacters));
+        if (comma + 1 >= firstChunkMinimumCharacters) {
+          return cutTextBuffer(comma + 1);
         }
       }
     }
@@ -287,9 +310,16 @@ function createResponseQueuePublisher({
       return;
     }
 
-    const ttsPromise = synthesizeWithRetry(chunkId, text);
+    // 合成は1つずつ順番に行い、送信もenqueue順に直列化する。
+    //
+    // 以前はenqueueした時点で全部のかたまりの合成を同時に始めていた。
+    // TTS Lambda は同時に呼ぶと呼んだ数だけ環境が要るので、2つ目以降が
+    // 冷えた環境に当たり、返事の途中で十数秒途切れていた
+    // （自作の声で実測：途中の途切れ 13.6秒 → 順番なら 0.7秒）。
+    // 前の合成が終われば次を始めるので、再生中に次の合成が進む。
+    const ttsPromise = audioSynthesisChain.then(() => synthesizeWithRetry(chunkId, text));
+    audioSynthesisChain = ttsPromise.then(() => undefined, () => undefined);
 
-    // 合成はenqueue時点で並列開始し、送信だけをenqueue順に直列化する。
     audioDeliveryChain = audioDeliveryChain.then(async () => {
       const result = await ttsPromise;
 

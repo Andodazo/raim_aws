@@ -40,7 +40,24 @@ test('uses the dominant Scene emotion for streamed TTS', () => {
     endPitch: 0.192,
     endLengthScale: 1.16,
     pauseScale: 0.84,
+    emotionMix: { happy: 0.8, caring: 0.2 },
+    emotionIntensity: 1,
   });
+});
+
+test('自作の声用に、感情の混ぜ方をそのまま渡す（0以下・数字でないものは捨てる）', () => {
+  const params = getVoiceParamsFromEmotions(
+    { happy: 0.6, embarrassed: 0.3, sad: 0, angry: 'x', excited: 1.5 },
+    0.7
+  );
+  assert.deepEqual(params.emotionMix, { happy: 0.6, embarrassed: 0.3, excited: 1 });
+  assert.equal(params.emotionIntensity, 0.7);
+});
+
+test('感情が無いときは neutral を 0.5 で渡す', () => {
+  const params = getVoiceParamsFromEmotions(null);
+  assert.deepEqual(params.emotionMix, { neutral: 1 });
+  assert.equal(params.emotionIntensity, 0.5);
 });
 
 // ── 12感情と人格に合わせたプロファイル ─────────────────

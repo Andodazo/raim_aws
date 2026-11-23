@@ -1,0 +1,4 @@
+build/raw/
+build/pkg/
+build/dist/
+__pycache__/
