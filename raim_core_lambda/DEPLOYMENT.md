@@ -178,4 +178,6 @@ Core は環境変数 `TTS_FUNCTION_NAME` の Lambda を呼ぶ。受け答えの�
 - 2つ目以降のかたまりも、文が `STREAM_COMMA_SPLIT_MIN_CHARACTERS`（既定30）文字を超えたら「、」で分ける。`0` で分けない。
 - Core は `voiceParams` に VOICEVOX 用の値と、自作の声用の `emotionMix`（感情の混ぜ方）・`emotionIntensity` を両方入れる。VOICEVOX は知らない値を無視する。
 - アプリがつないだとき（$connect：起動時・バックグラウンドから戻ったとき）、Edge が Request Queue に `{"type":"tts.warmup"}` を入れ、Core が TTS を返事を待たずに呼んで温める。
-- Core のロール（RAiM-ApiLambdaRole）が新しい関数を呼べることは、2026-11-23 にテスト用の関数名で確かめた。本番の関数名でも確かめること。
+- `RAiM-TTS-SBV2-dev` は `raim_tts_sbv2_lambda/tools/cloudshell_setup_prod.sh` で作る。Core のロール（RAiM-ApiLambdaRole）に呼ぶ許可は、関数の側（リソースベースのポリシー）で足す。
+- 出す順番は Core → Edge → `TTS_FUNCTION_NAME` の切り替え。Edge を先に出すと、古い Core が `tts.warmup` を知らずにエラーにする。
+- CloudFormation でこのスタックを出し直すときは、`TtsLambdaFunctionName` に使う声の関数名を渡す（既定は VOICEVOX）。

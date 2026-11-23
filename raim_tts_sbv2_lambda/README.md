@@ -90,6 +90,12 @@ arm64 は 10240MB で 2.65秒、それ以下のメモリでは生成が音声よ
 
 `build/raw`、`build/pkg`、`build/dist` はコミットしない。
 
+## 本番の関数を作る
+
+CloudShell に function.zip と `tools/cloudshell_setup_prod.sh` を上げて `bash cloudshell_setup_prod.sh function.zip`。
+バケット `raim-tts-models-<アカウント>`（公開なし、Core のロールだけ読める）と関数 `RAiM-TTS-SBV2-dev` を作り、Core のロールに呼ぶ許可を足して、温めと読み上げを1回試す。もうあるものは作り直さず、関数のコードと設定だけ更新する。
+Core の `TTS_FUNCTION_NAME` はこのスクリプトでは変えない（`raim_core_lambda/DEPLOYMENT.md`）。
+
 ## テスト
 
 AWS のテスト用関数（raim-tts-sbv2-test）で一括テストするときは、CloudShell に function.zip と `tools/cloudshell_test.sh` を上げて `bash cloudshell_test.sh function.zip`。
