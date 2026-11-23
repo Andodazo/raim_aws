@@ -31,6 +31,21 @@ class PreprocessTest(unittest.TestCase):
         for text in ("Wi-Fiとwebを見た", "I want it", "wwwの話"):
             self.assertEqual(raim_preprocess(text), text)
 
+    def test_誘いのくり返しは区切る(self):
+        cases = {
+            "行こっか。飲も飲も。": "行こっか。飲も！飲も！",
+            "遊ぼ遊ぼ！": "遊ぼ！遊ぼ！",
+            "食べよ食べよ、ね": "食べよ！食べよ！ね",
+            "帰ろ帰ろ？": "帰ろ！帰ろ？",
+        }
+        for source, expected in cases.items():
+            with self.subTest(source=source):
+                self.assertEqual(raim_preprocess(source), expected)
+
+    def test_かなだけのくり返しは変えない(self):
+        for text in ("そろそろ寝よ", "まあまあだね", "ねえねえ", "行こう行こう"):
+            self.assertEqual(raim_preprocess(text), text)
+
     def test_読むものがあるか(self):
         self.assertTrue(has_speakable_text("はい"))
         self.assertTrue(has_speakable_text("3"))
