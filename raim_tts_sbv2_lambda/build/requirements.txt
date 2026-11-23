@@ -1,0 +1,11 @@
+# 自作の声の TTS Lambda（x86_64 / Python 3.12）の依存。PyTorch は入れない（ONNX で推論する）。
+# onnxruntime 1.19〜1.22 は Lambda の arm64 で起動時に落ちる。1.32.0 は x86_64 / arm64 とも動作確認済み。
+onnxruntime==1.32.0
+numpy<2
+transformers==4.46.3
+pydantic>=2.0
+loguru
+pyopenjtalk-dict
+pyworld-prebuilt
+safetensors
+# num2words 0.5.14 は docopt（wheel なし）に依存するので、Dockerfile で --no-deps で別に入れる

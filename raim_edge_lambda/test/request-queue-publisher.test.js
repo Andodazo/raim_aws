@@ -42,3 +42,18 @@ test('a resend from the same person keeps the same deduplication id', async () =
   assert.equal(sent[0].MessageDeduplicationId, sent[1].MessageDeduplicationId);
   assert.ok(sent[0].MessageDeduplicationId.length <= 128);
 });
+
+test('publishTtsWarmup は tts.warmup を接続ごとのグループで送る', async () => {
+  const { publisher, sent } = capture();
+
+  await publisher.publishTtsWarmup({ connectionId: 'conn-001', sub: 'user-a' });
+
+  assert.equal(sent.length, 1);
+  const body = JSON.parse(sent[0].MessageBody);
+  assert.equal(body.type, 'tts.warmup');
+  assert.equal(body.reason, 'connect');
+  // 会話の中身や sub は入れない
+  assert.equal(body.sub, undefined);
+  assert.equal(sent[0].MessageGroupId, 'conn-001');
+  assert.ok(sent[0].MessageDeduplicationId);
+});

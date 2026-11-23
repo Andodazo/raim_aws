@@ -56,3 +56,21 @@ test('invokes TTS Lambda with the shared request contract', async () => {
 test('returns null when TTS Lambda is not configured', () => {
   assert.equal(createTtsClient({ env: {} }), null);
 });
+
+test('warmup は返事を待たずに tts.warmup を投げる', async () => {
+  let command;
+  const tts = createTtsClient({
+    client: { send: async (value) => { command = value; return { StatusCode: 202 }; } },
+    env: { TTS_FUNCTION_NAME: 'RAiM-TTS-SBV2-dev' },
+  });
+
+  await tts.warmup({ reason: 'connect' });
+
+  assert.equal(command.input.FunctionName, 'RAiM-TTS-SBV2-dev');
+  assert.equal(command.input.InvocationType, 'Event');
+  assert.deepEqual(JSON.parse(Buffer.from(command.input.Payload).toString()), {
+    schemaVersion: 1,
+    type: 'tts.warmup',
+    reason: 'connect',
+  });
+});

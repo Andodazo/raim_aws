@@ -475,3 +475,53 @@ test('$default answers with an error instead of crashing when the connection loo
 
   assert.equal(response.statusCode, 500);
 });
+
+test('$connect で TTS を温める依頼を Core へ送る', async () => {
+  const warmups = [];
+  const handler = createWebSocketHandler({
+    connectionStore: {
+      putConnection: async () => {},
+      getConnection: async () => null,
+      deleteConnection: async () => {},
+    },
+    sessionStore: { addConnection: async () => {} },
+    requestPublisher: {
+      publishTtsWarmup: async (job) => warmups.push(job),
+    },
+  });
+
+  const response = await handler({
+    requestContext: {
+      routeKey: '$connect',
+      connectionId: 'conn-warm',
+      authorizer: { claims: { sub: 'user-warm' } },
+    },
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(warmups, [{ connectionId: 'conn-warm', sub: 'user-warm' }]);
+});
+
+test('温める依頼が失敗しても $connect は通す', async () => {
+  const handler = createWebSocketHandler({
+    connectionStore: {
+      putConnection: async () => {},
+      getConnection: async () => null,
+      deleteConnection: async () => {},
+    },
+    sessionStore: { addConnection: async () => {} },
+    requestPublisher: {
+      publishTtsWarmup: async () => { throw new Error('sqs down'); },
+    },
+  });
+
+  const response = await handler({
+    requestContext: {
+      routeKey: '$connect',
+      connectionId: 'conn-warm2',
+      authorizer: { claims: { sub: 'user-warm' } },
+    },
+  });
+
+  assert.equal(response.statusCode, 200);
+});

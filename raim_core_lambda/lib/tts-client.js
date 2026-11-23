@@ -4,7 +4,8 @@
 // TTS Lambda client
 // ============================================================================
 //
-// Core Lambdaから、VOICEVOX Coreを実行するTTS Lambdaを同期Invokeする。
+// Core Lambdaから、TTS Lambda（VOICEVOX または自作の声 SBV2）を同期Invokeする。
+// どちらを呼ぶかは TTS_FUNCTION_NAME で切り替える。受け答えの形はどちらも同じ。
 // 呼び出し先が未設定のローカル実行ではnullを返し、既存のテキスト専用動作を
 // 維持できるようにする。
 
@@ -73,9 +74,30 @@ function createTtsClient({ client, env = process.env } = {}) {
     return response;
   }
 
+  /**
+   * TTS Lambda を温める（アプリの起動時・再接続時）。
+   *
+   * 自作の声（SBV2）は冷えた状態から最初の声まで約18秒かかるので、話しかけられる前に
+   * モデルを読み込ませておく。返事は待たない（InvocationType=Event）。
+   * VOICEVOX の TTS Lambda は tts.warmup を知らないのでエラーを返すが、
+   * 起動はするので同じように温まる（返事は捨てる）。
+   */
+  async function warmup({ reason = '' } = {}) {
+    await lambdaClient.send(new InvokeCommand({
+      FunctionName: functionName,
+      InvocationType: 'Event',
+      Payload: Buffer.from(JSON.stringify({
+        schemaVersion: 1,
+        type: 'tts.warmup',
+        reason: String(reason || ''),
+      })),
+    }));
+  }
+
   return {
     functionName,
     synthesize,
+    warmup,
   };
 }
 

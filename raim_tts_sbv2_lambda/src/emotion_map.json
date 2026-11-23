@@ -1,0 +1,17 @@
+{
+ "note": "Core の12感情 → 声のスタイル（neutral/happy/surprise/sad/angry）の混ぜ方と話し方。style_vector = mean + strength × Σ(感情の重み × style_weight × mix[スタイル] × (スタイル − mean))。length は大きいほどゆっくり、sdp_ratio はテンポの緩急、noise は声の揺れ・表情の幅（SBV2 の既定は 0.2 / 0.6）。下敷きは raim_core_lambda/voice-config.json の tsumugi_twitter。ダウナーな声なので、速さの変化は VOICEVOX の半分くらいに抑えた。2026-11-23 に安藤さんが試聴して決定（混ぜた感情もこの表から作る）。",
+ "emotions": {
+  "neutral":     {"mix": {"neutral": 1.0},                               "style_weight": 1.0, "length": 1.00, "sdp_ratio": 0.20, "noise": 0.60},
+  "thoughtful":  {"mix": {"neutral": 1.0, "sad": 0.25},                  "style_weight": 1.0, "length": 1.10, "sdp_ratio": 0.30, "noise": 0.50},
+  "caring":      {"mix": {"neutral": 0.7, "sad": 0.3, "happy": 0.2},      "style_weight": 0.9, "length": 1.08, "sdp_ratio": 0.25, "noise": 0.55},
+  "happy":       {"mix": {"happy": 1.0},                                 "style_weight": 1.0, "length": 0.94, "sdp_ratio": 0.25, "noise": 0.70},
+  "excited":     {"mix": {"happy": 1.0, "surprise": 0.4},                "style_weight": 1.0, "length": 0.88, "sdp_ratio": 0.35, "noise": 0.75},
+  "amused":      {"mix": {"happy": 0.7, "neutral": 0.3},                 "style_weight": 0.8, "length": 0.95, "sdp_ratio": 0.30, "noise": 0.65},
+  "playful":     {"mix": {"happy": 0.8, "angry": 0.2},                   "style_weight": 1.0, "length": 0.92, "sdp_ratio": 0.35, "noise": 0.70},
+  "curious":     {"mix": {"neutral": 0.5, "surprise": 0.4, "happy": 0.3}, "style_weight": 0.9, "length": 0.96, "sdp_ratio": 0.30, "noise": 0.65},
+  "surprised":   {"mix": {"surprise": 1.0},                              "style_weight": 1.0, "length": 0.90, "sdp_ratio": 0.30, "noise": 0.70},
+  "sad":         {"mix": {"sad": 1.0},                                   "style_weight": 1.0, "length": 1.12, "sdp_ratio": 0.20, "noise": 0.50},
+  "angry":       {"mix": {"angry": 1.0},                                 "style_weight": 1.0, "length": 0.95, "sdp_ratio": 0.25, "noise": 0.65},
+  "embarrassed": {"mix": {"happy": 0.5, "sad": 0.3, "neutral": 0.3},      "style_weight": 0.9, "length": 0.96, "sdp_ratio": 0.30, "noise": 0.60}
+ }
+}

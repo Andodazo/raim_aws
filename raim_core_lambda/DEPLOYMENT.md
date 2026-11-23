@@ -44,7 +44,7 @@ Invokeします。Tool Lambda、Backup Lambdaはこの実装範囲に含みま�
 | Queue | `RequestQueueName`, `ResponseQueueName`, 各DLQ名、visibility、retention、max receive count |
 | Mantle | `MantleApiKeySecretArn`, `MantleApiKeySecretJsonKey`, `MantleSecretRegion`, `MantleEndpointUrl`, `MantleModelId`, `MantleTimeoutMs`, `MantleMaxOutputTokens` |
 | Titan | `TitanRegion`, `TitanModelId`, `TitanInvokeResourceArn`, `TitanEmbeddingDimensions` |
-| Stream | `StreamFirstChunkMinimumCharacters`, `StreamSentenceMaximumCharacters`, `RequestLeaseSeconds`, `RequestStateTtlSeconds` |
+| Stream | `StreamFirstChunkMinimumCharacters`, `StreamSentenceMaximumCharacters`, `StreamCommaSplitMinimumCharacters`, `RequestLeaseSeconds`, `RequestStateTtlSeconds` |
 
 ## Lambdaに設定する必須環境変数
 
@@ -164,3 +164,18 @@ Core Lambdaは、Scene選択時に最初から全Sceneの`few_shots`を読みま
 まず`id`と`textCentroid`だけをScanし、類似度計算で選ばれた`sceneId`の
 レコードだけをGetItemで詳細取得します。そのため、Lambda実行ロールには
 `SCENE_TABLE_NAME`への`dynamodb:Scan`と`dynamodb:GetItem`の両方が必要です。
+
+## 声の切り替え（VOICEVOX / 自作の声）
+
+Core は環境変数 `TTS_FUNCTION_NAME` の Lambda を呼ぶ。受け答えの形はどちらも同じ。
+
+| 声 | `TTS_FUNCTION_NAME` |
+|---|---|
+| VOICEVOX（つむぎ） | `RAiM-TTS-Lambda-dev` |
+| 自作の声（ライム、SBV2） | `RAiM-TTS-SBV2-dev`（`raim_tts_sbv2_lambda`） |
+
+- TTS はどちらの声でも、かたまりごとに順番に1つずつ呼ぶ（同時に呼ぶと冷えた環境に当たり、途中で長く途切れるため）。
+- 2つ目以降のかたまりも、文が `STREAM_COMMA_SPLIT_MIN_CHARACTERS`（既定30）文字を超えたら「、」で分ける。`0` で分けない。
+- Core は `voiceParams` に VOICEVOX 用の値と、自作の声用の `emotionMix`（感情の混ぜ方）・`emotionIntensity` を両方入れる。VOICEVOX は知らない値を無視する。
+- アプリがつないだとき（$connect：起動時・バックグラウンドから戻ったとき）、Edge が Request Queue に `{"type":"tts.warmup"}` を入れ、Core が TTS を返事を待たずに呼んで温める。
+- Core のロール（RAiM-ApiLambdaRole）が新しい関数を呼べることは、2026-11-23 にテスト用の関数名で確かめた。本番の関数名でも確かめること。
