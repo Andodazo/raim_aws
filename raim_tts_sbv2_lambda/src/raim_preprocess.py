@@ -31,7 +31,14 @@ def raim_preprocess(text: str) -> str:
     # 単位
     t = t.replace("℃", "度").replace("°C", "度")
     t = re.sub(r"(\d)\s*[%％]", r"\1パーセント", t)
+    # 誘いのくり返し 飲も飲も → 飲も！飲も！（続けて書くとひと続きの「ノモノモ」になるため）。
+    # 漢字で始まり、オ段のかなで終わる短い言葉（行こ・遊ぼ・食べよ・帰ろ など）が2回続くときだけ。
+    # 「そろそろ」「まあまあ」「ねえねえ」のようなかなだけの言葉は変えない。
+    t = _REPEATED_INVITE.sub(lambda m: f"{m.group(1)}！{m.group(1)}{m.group(2) or '！'}", t)
     return t
+
+
+_REPEATED_INVITE = re.compile(r"([\u4e00-\u9fff][ぁ-ん]{0,2}[おこごそぞとどのほぼぽもよろ])\1(?:[。！!、]|([？?]))?")
 
 
 def has_speakable_text(text: str) -> bool:

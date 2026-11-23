@@ -46,7 +46,10 @@ class ResolveVoiceTest(unittest.TestCase):
         expected_length = EMOTION_MAP["happy"]["length"] * 2 / 3 + EMOTION_MAP["embarrassed"]["length"] / 3
         self.assertAlmostEqual(voice["length"], expected_length, places=3)
         # happy は happy の分と embarrassed の中の happy の分
-        expected_happy = 2 / 3 * 1.0 * 1.0 + 1 / 3 * 0.9 * 0.5
+        expected_happy = (
+            2 / 3 * EMOTION_MAP["happy"]["style_weight"] * 1.0
+            + 1 / 3 * EMOTION_MAP["embarrassed"]["style_weight"] * EMOTION_MAP["embarrassed"]["mix"]["happy"]
+        )
         self.assertAlmostEqual(voice["style_weights"]["happy"], expected_happy, places=3)
         self.assertIn("sad", voice["style_weights"])
 
