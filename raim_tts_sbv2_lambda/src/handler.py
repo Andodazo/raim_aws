@@ -198,13 +198,25 @@ class _quiet_native_output:
 def _install_user_dict():
     from style_bert_vits2.nlp.japanese import pyopenjtalk_worker as jtalk
 
+    bundled = os.path.join(SRC_DIR, "raim_user_dict.csv")
     csv_path = _user_dict_csv_path()
     compiled = "/tmp/raim_user.dic"
     # .dic は pyopenjtalk のバージョンに依存するので、csv から現地で作る。
     # 作るときに「emitting double-array …」の進み具合がたくさん出てログが埋まるので、その間だけ出力を捨てる
-    with _quiet_native_output():
-        jtalk.mecab_dict_index(csv_path, compiled)
-    jtalk.update_global_jtalk_with_user_dict(compiled)
+    try:
+        with _quiet_native_output():
+            jtalk.mecab_dict_index(csv_path, compiled)
+        jtalk.update_global_jtalk_with_user_dict(compiled)
+    except Exception as error:
+        if csv_path == bundled:
+            raise
+        # S3 の辞書が壊れていても声は止めない（zip に入れた版で動かす）
+        print(f"[TTS] user dict from S3 failed, using bundled: {type(error).__name__}", flush=True)
+        with _quiet_native_output():
+            jtalk.mecab_dict_index(bundled, compiled)
+        jtalk.update_global_jtalk_with_user_dict(compiled)
+        return
+    print(f"[TTS] user dict: {'s3' if csv_path != bundled else 'bundled'}", flush=True)
 
 
 def _load():

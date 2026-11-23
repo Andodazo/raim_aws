@@ -83,10 +83,18 @@ if aws lambda get-function --function-name "$FUNCTION" >/dev/null 2>&1; then
   log "関数はもうあるので、コードと設定を更新します"
   aws lambda update-function-code --function-name "$FUNCTION" --s3-bucket "$BUCKET" --s3-key "$KEY" >/dev/null
   wait_updated
+  # 環境変数は、辞書の設定（USER_DICT_S3_KEY など）を消さないよう、今の値に足す形で入れる
+  aws lambda get-function-configuration --function-name "$FUNCTION" --query 'Environment.Variables' --output json > /tmp/env_now.json
+  python3 - "$BUCKET" <<'PY' > /tmp/env_new.json
+import json, sys
+env = json.load(open("/tmp/env_now.json")) or {}
+env.update({"MODEL_S3_BUCKET": sys.argv[1], "MODEL_DOWNLOAD_PARALLEL": "1"})
+print(json.dumps({"Variables": env}))
+PY
   aws lambda update-function-configuration --function-name "$FUNCTION" \
     --runtime python3.12 --handler handler.handler --role "$CORE_ROLE" \
     --memory-size "$MEMORY" --timeout "$TIMEOUT" --ephemeral-storage "Size=$TMP_MB" \
-    --environment "$ENV" >/dev/null
+    --environment file:///tmp/env_new.json >/dev/null
 else
   log "関数を作ります"
   aws lambda create-function --function-name "$FUNCTION" \
