@@ -194,3 +194,27 @@ class DownloadTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BuildZipTest(unittest.TestCase):
+    def test_1ファイルのモジュールもパッケージ名で判定する(self):
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "build"))
+        from build_zip import DROP, package_name
+
+        for entry, expected in (
+            ("snapshot_restore_py.py", "snapshot_restore_py"),
+            ("runtime_client.cpython-312-x86_64-linux-gnu.so", "runtime_client"),
+            ("numba-0.60.0.dist-info", "numba"),
+            ("onnxruntime", "onnxruntime"),
+            ("six.py", "six"),
+        ):
+            self.assertEqual(package_name(entry), expected)
+        self.assertIn(package_name("snapshot_restore_py.py"), DROP)
+        self.assertIn(package_name("runtime_client.cpython-312-x86_64-linux-gnu.so"), DROP)
+
+
+class QuietOutputTest(unittest.TestCase):
+    def test_ブロックのあとは出力が戻る(self):
+        with handler._quiet_native_output():
+            os.write(1, b"hidden\n")
+        self.assertTrue(os.fstat(1))

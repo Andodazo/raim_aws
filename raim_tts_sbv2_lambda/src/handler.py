@@ -173,13 +173,37 @@ def _user_dict_csv_path():
     return os.path.join(SRC_DIR, "raim_user_dict.csv")
 
 
+class _quiet_native_output:
+    """C のライブラリが直接書く標準出力・標準エラーを、ブロックの間だけ捨てる。"""
+
+    def __enter__(self):
+        import sys
+
+        sys.stdout.flush()
+        sys.stderr.flush()
+        self.saved = [os.dup(1), os.dup(2)]
+        self.null = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(self.null, 1)
+        os.dup2(self.null, 2)
+        return self
+
+    def __exit__(self, *exc):
+        os.dup2(self.saved[0], 1)
+        os.dup2(self.saved[1], 2)
+        for fd in (*self.saved, self.null):
+            os.close(fd)
+        return False
+
+
 def _install_user_dict():
     from style_bert_vits2.nlp.japanese import pyopenjtalk_worker as jtalk
 
     csv_path = _user_dict_csv_path()
     compiled = "/tmp/raim_user.dic"
-    # .dic は pyopenjtalk のバージョンに依存するので、csv から現地で作る
-    jtalk.mecab_dict_index(csv_path, compiled)
+    # .dic は pyopenjtalk のバージョンに依存するので、csv から現地で作る。
+    # 作るときに「emitting double-array …」の進み具合がたくさん出てログが埋まるので、その間だけ出力を捨てる
+    with _quiet_native_output():
+        jtalk.mecab_dict_index(csv_path, compiled)
     jtalk.update_global_jtalk_with_user_dict(compiled)
 
 

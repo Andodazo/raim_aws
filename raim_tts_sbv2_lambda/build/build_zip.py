@@ -52,7 +52,16 @@ def dir_size(path):
 
 
 def package_name(entry):
-    return entry.split("-")[0].lower()
+    """site-packages の項目名からパッケージ名を取り出す。
+
+    以前は「-」の前だけで判定していたので、snapshot_restore_py.py や
+    runtime_client.cpython-312-x86_64-linux-gnu.so のような1ファイルのモジュールが外れなかった。
+    """
+    name = entry.split("-")[0]
+    for suffix in (".py", ".so", ".pyd"):
+        if name.endswith(suffix):
+            name = name[: -len(suffix)]
+    return name.split(".")[0].lower()
 
 
 def build_zip(site_packages, sbv2, out):
