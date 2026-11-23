@@ -20,3 +20,12 @@
 > BERT：ku-nlp/deberta-v2-large-japanese-char-wwm（CC BY-SA 4.0）。
 > 読み：Open JTalk（名古屋工業大学）、NAIST Japanese Dictionary（奈良先端科学技術大学院大学）。
 > TTS のソース：https://github.com/Andodazo/raim_aws/tree/main/raim_tts_sbv2_lambda
+
+## 声のモデル（学習した重み）を公開しない理由
+
+2026-11-23 に安藤が決めた。
+
+- 公開しているのは、このフォルダのプログラム（推論・前処理・ビルドの手順）。AGPL-3.0 のソース公開はこれで行う。
+- ライムの声のモデル（raim_D1v4 の重み、`raim_models.tar` の `raim_D1v4/`）は公開しない。重みは学習で作ったデータで、プログラムのソースではないと考えたため。
+- ライムの声はキャラクターそのものなので、誰でも同じ声を出せるようにはしない。
+- 事前学習モデルから学習した重みの扱いは解釈が分かれる。ライセンスの持ち主から求められたり、考えが変わったりしたら見直す。
