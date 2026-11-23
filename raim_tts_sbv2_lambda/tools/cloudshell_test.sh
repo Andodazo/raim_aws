@@ -191,7 +191,7 @@ echo | tee -a "$RESULT"
 echo "■ ログの [TTS] 行" | tee -a "$RESULT"
 cat "$WORK"/*.log | grep "\[TTS\]" | tee -a "$RESULT" || true
 
-# 後片付け：PARALLEL を既定（8）に戻す
-set_env 8
+# 後片付け：PARALLEL を既定（1）に戻す
+set_env 1
 echo
 log "おわり。結果は $RESULT、音声は say_*_${STAMP}.wav（右上の「アクション → ファイルのダウンロード」で取れる）"

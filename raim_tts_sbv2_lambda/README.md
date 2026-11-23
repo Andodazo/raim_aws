@@ -44,7 +44,7 @@ Core が感情を混ぜて出したら、その重みで設定を混ぜる（VOI
 | `MODEL_S3_BUCKET` | （必須） | モデル一式のバケット（本番 `raim-tts-models-990442281360`） |
 | `MODEL_S3_PREFIX` | 空 | `<prefix>/raim_models.tar` |
 | `PRELOAD` | `0` | `1` で初期化中に読み込む。SnapStart を使うときだけ `1`（ふつうは初期化10秒の制限があるので `0`） |
-| `MODEL_DOWNLOAD_PARALLEL` | `8` | tar を何本に分けて同時に落とすか（`1` で1本） |
+| `MODEL_DOWNLOAD_PARALLEL` | `1` | tar を何本に分けて同時に落とすか。Lambda では1本の方が速かった（1本 9.3秒、8本 11.4秒） |
 | `MODEL_DOWNLOAD_PART_MB` | `64` | 分けるときの1本の大きさ |
 | `USER_DICT_S3_KEY` | 空 | S3 の読み辞書 csv（無ければ zip の `raim_user_dict.csv`） |
 | `EMOTION_MIN_STRENGTH` | `0.5` | 感情の強さが低くても残す割合 |

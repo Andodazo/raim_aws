@@ -65,7 +65,7 @@ def _env_float(name, default):
 
 MAX_TEXT_CHARS = _env_int("MAX_TEXT_CHARS", 200)
 # S3 から tar を何本に分けて同時に落とすか（1 なら1本で順に読む）
-DOWNLOAD_PARALLEL = _env_int("MODEL_DOWNLOAD_PARALLEL", 8)
+DOWNLOAD_PARALLEL = _env_int("MODEL_DOWNLOAD_PARALLEL", 1)  # Lambda で測ると 1本 9.3秒 / 8本 11.4秒（2026-11-23）
 DOWNLOAD_PART_BYTES = _env_int("MODEL_DOWNLOAD_PART_MB", 64) * 1024 * 1024
 # 感情の強さが低くても、この割合までは感情を残す（voice_style.py）
 EMOTION_MIN_STRENGTH = _env_float("EMOTION_MIN_STRENGTH", 0.5)
