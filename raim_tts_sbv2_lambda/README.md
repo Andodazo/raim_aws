@@ -92,6 +92,11 @@ arm64 は 10240MB で 2.65秒、それ以下のメモリでは生成が音声よ
 
 ## テスト
 
+AWS のテスト用関数（raim-tts-sbv2-test）で一括テストするときは、CloudShell に function.zip と `tools/cloudshell_test.sh` を上げて `bash cloudshell_test.sh function.zip`。
+分割ダウンロード（MODEL_DOWNLOAD_PARALLEL 1 と 8）の比べ、感情つきの読み上げ、エラーの返し方をまとめて測る。
+
+手元のテスト：
+
 ```
 python -m unittest discover -s tests
 ```
