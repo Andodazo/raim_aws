@@ -31,7 +31,13 @@ function countWatchWords(replies, { minCount = 3, words = WATCH_WORDS } = {}) {
 
 // 文で読みが変わる漢字（声が読み分けられない。v6.10 で「ひらがなで書く」にした）。
 // プロンプトには例として書いていない。ここで出たかだけ見る
-const AMBIGUOUS_KANJI = ['辛', '一日', '上手', '下手', '方'];
+// 「方」は「やり方」「方向」のように読みが決まるものが多いので、「の方」「この方」の形だけ見る
+// 「辛」は「激辛」「辛口」のように読みが決まるものは除く
+const AMBIGUOUS_KANJI = ['一日', '上手', '下手'];
+const AMBIGUOUS_PATTERNS = [/(?<![激甘])辛(?!口)/, /[のこそあど]方(?![向法面針式角位])/];
+
+// 読みが決まっているのに、ひらがなにしすぎた言葉（v6.10 の最初のテストで出たもの）
+const OVER_HIRAGANA = ['おぼえ', 'なまえ', 'おしえ', 'こうがくいん', 'せんもんがっこう', 'こうぶん', 'さんぜん', 'せんえん', 'まんえん'];
 
 // 顔文字や記号（返事は読み上げるので使わない）
 const EMOTICON_PATTERN = /[（(][^（）()]{0,8}[＾^;；´`ω▽∀°ｰ゜][^（）()]{0,8}[）)]|[☆★♡♥❤✨]/;
@@ -70,7 +76,13 @@ function checkReply(reply, expect = {}) {
   if (/web_search|get_weather|tool_call/.test(text)) flags.push('ツール名');
   if (/^\s*[{[]|"text"\s*:/.test(text)) flags.push('JSONがそのまま出た');
   const ambiguous = AMBIGUOUS_KANJI.filter((word) => text.includes(word));
+  for (const pattern of AMBIGUOUS_PATTERNS) {
+    const match = text.match(pattern);
+    if (match) ambiguous.push(match[0]);
+  }
   if (ambiguous.length) flags.push(`読みが分かれる漢字（${ambiguous.join('、')}）`);
+  const overKana = OVER_HIRAGANA.filter((word) => text.includes(word));
+  if (overKana.length) flags.push(`ひらがなにしすぎ（${overKana.join('、')}）`);
 
   const maxChars = Number(expect.maxChars ?? 120);
   if (maxChars > 0 && text.length > maxChars) flags.push(`長い（${text.length}文字 > ${maxChars}）`);
@@ -143,6 +155,7 @@ function longestCommonSubstring(a, b) {
 
 module.exports = {
   AMBIGUOUS_KANJI,
+  OVER_HIRAGANA,
   MEME_WORDS,
   WATCH_WORDS,
   countWatchWords,
