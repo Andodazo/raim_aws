@@ -27,6 +27,34 @@ class PreprocessTest(unittest.TestCase):
             with self.subTest(source=source):
                 self.assertEqual(raim_preprocess(source), expected)
 
+    def test_辛は話の中身で読みを決める(self):
+        cases = {
+            "バイト辛かったんだね": "バイトつらかったんだね",
+            "何が辛いのか聞かせて": "何がつらいのか聞かせて",
+            "毎日シフトは辛すぎるよ": "毎日シフトはつらすぎるよ",
+            "カレーが辛い": "カレーがからい",
+            "激辛ラーメン、辛すぎたでしょ": "激辛ラーメン、からすぎたでしょ",
+            "辛いもの好きなんだ": "からいもの好きなんだ",
+            "辛口カレーいいね": "辛口カレーいいね",
+            "甘辛いタレ": "甘辛いタレ",
+            "もう少しの辛抱だよ": "もう少しの辛抱だよ",
+            "辛うじて間に合った": "辛うじて間に合った",
+        }
+        for source, expected in cases.items():
+            with self.subTest(source=source):
+                self.assertEqual(raim_preprocess(source), expected)
+
+    def test_来月の一日はついたち(self):
+        cases = {
+            "来月の一日から新学期": "来月のついたちから新学期",
+            "毎月1日はポイントデー": "毎月ついたちはポイントデー",
+            "今日は一日中ゲーム": "今日は一日中ゲーム",
+            "大変な一日だったね": "大変な一日だったね",
+        }
+        for source, expected in cases.items():
+            with self.subTest(source=source):
+                self.assertEqual(raim_preprocess(source), expected)
+
     def test_英単語の_w_は消さない(self):
         for text in ("Wi-Fiとwebを見た", "I want it", "wwwの話"):
             self.assertEqual(raim_preprocess(text), text)
