@@ -46,6 +46,9 @@ function createResponseQueuePublisher({
   env = process.env,
   ttsClient = null,
   getVoiceParams = () => null,
+  // 前置き・待ちのひとことなど、サーバーが決めたセリフの声。
+  // 渡されないときは本文と同じ getVoiceParams を使う（以前の動き）。
+  getFixedLineVoiceParams = null,
   // 今の人格（'bright' | 'downer'）。クライアントへ知らせる。
   // 駅アラームの声など、アプリ側で鳴らすセリフを人格に合わせるため。
   persona = '',
@@ -243,13 +246,13 @@ function createResponseQueuePublisher({
   /**
    * TTS を1回呼ぶ。
    */
-  function synthesizeOnce(chunkId, text) {
+  function synthesizeOnce(chunkId, text, fixedLine = false) {
     return Promise.resolve()
       .then(() => ttsClient.synthesize({
         requestId,
         chunkId,
         text,
-        voiceParams: getVoiceParams() || undefined,
+        voiceParams: (fixedLine && getFixedLineVoiceParams ? getFixedLineVoiceParams() : getVoiceParams()) || undefined,
       }))
       .catch((error) => ({ error }));
   }
@@ -262,8 +265,8 @@ function createResponseQueuePublisher({
    * error.retriable に載せて渡している。にもかかわらず呼び出し側が
    * 見ずに捨てていたため、1文まるごと無音になることがあった。
    */
-  async function synthesizeWithRetry(chunkId, text) {
-    const first = await synthesizeOnce(chunkId, text);
+  async function synthesizeWithRetry(chunkId, text, fixedLine = false) {
+    const first = await synthesizeOnce(chunkId, text, fixedLine);
 
     if (!isTtsFailure(first)) {
       return first;
@@ -281,7 +284,7 @@ function createResponseQueuePublisher({
       code: error.code,
     });
 
-    const second = await synthesizeOnce(chunkId, text);
+    const second = await synthesizeOnce(chunkId, text, fixedLine);
 
     if (!isTtsFailure(second)) {
       console.log(`[TTS] retry succeeded: chunkId=${chunkId}`);
@@ -305,7 +308,7 @@ function createResponseQueuePublisher({
     return Boolean(result?.error) || result?.ok === false;
   }
 
-  function enqueueAudio({ chunkId, text }) {
+  function enqueueAudio({ chunkId, text, fixedLine = false }) {
     if (!ttsClient || !hasSpeakableText(text)) {
       return;
     }
@@ -317,7 +320,7 @@ function createResponseQueuePublisher({
     // 冷えた環境に当たり、返事の途中で十数秒途切れていた
     // （自作の声で実測：途中の途切れ 13.6秒 → 順番なら 0.7秒）。
     // 前の合成が終われば次を始めるので、再生中に次の合成が進む。
-    const ttsPromise = audioSynthesisChain.then(() => synthesizeWithRetry(chunkId, text));
+    const ttsPromise = audioSynthesisChain.then(() => synthesizeWithRetry(chunkId, text, fixedLine));
     audioSynthesisChain = ttsPromise.then(() => undefined, () => undefined);
 
     audioDeliveryChain = audioDeliveryChain.then(async () => {
@@ -484,7 +487,8 @@ function createResponseQueuePublisher({
         chunkId,
         isFiller: true,
       });
-      enqueueAudio({ chunkId, text: line });
+      // 決まったセリフは、本文の感情がわかる前に話すので落ち着いた声で固定する
+      enqueueAudio({ chunkId, text: line, fixedLine: true });
       bubbleBreakPending = true;
       // 前置きの後の本文も、最初のかたまりは短く切って早く声を出す。
       firstChunkPending = true;
@@ -506,7 +510,10 @@ function createResponseQueuePublisher({
           chunkId,
           isFiller: true,
         });
-        enqueueAudio({ chunkId, text: introText });
+        // 本文の感情がわかる前に話すので、場面の感情（強さ最大）ではなく落ち着いた声で固定する。
+        // 以前は場面の既定の感情で話していたため、「それ気になる！」だけ声が高く、
+        // 検索のあとの本文（本当の感情）と声の高さがずれていた。
+        enqueueAudio({ chunkId, text: introText, fixedLine: true });
 
         // v14: introを送ったので、本文開始時にbubble_breakを挟む。
         bubbleBreakPending = true;

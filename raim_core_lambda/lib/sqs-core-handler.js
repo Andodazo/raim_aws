@@ -23,6 +23,8 @@ const { createResponseQueuePublisher } = require('./response-queue-publisher');
 const { StreamingChatJsonExtractor } = require('./streaming-chat-json-extractor');
 const { createTtsClient } = require('./tts-client');
 const { getVoiceParamsFromEmotions } = require('./voice-mapper');
+// 前置き・待ちのひとことの感情（本文の感情がわかる前に話すので、普段寄りに固定する）
+const FIXED_LINE_EMOTIONS = Object.freeze({ neutral: 0.7, curious: 0.3 });
 const { createChat } = require('./types');
 const { RAIM_PERSONA } = require('./prompts/raim-system-prompt');
 const { parsePlannerEnrichMessage, enrichPlannerItem } = require('./planner/planner-enrich');
@@ -156,6 +158,8 @@ function createSqsCoreHandler(dependencyOverrides = {}) {
 
     try {
       let voiceParams = dependencies.getVoiceParamsFromEmotions(null, 0.5);
+      // 前置き（調べてみるね など）と待ちのひとことの声。普段寄りで、少しだけ興味ありげ。
+      const fixedLineVoiceParams = dependencies.getVoiceParamsFromEmotions(FIXED_LINE_EMOTIONS, 0.3);
       // アプリで声を消しているときは読み上げを作らない。
       // 以前は消していても毎回 TTS を呼んでいた（料金と処理の無駄）。
       const ttsClient = input.speech === false ? null : dependencies.createTtsClient();
@@ -169,6 +173,7 @@ function createSqsCoreHandler(dependencyOverrides = {}) {
       }, {
         ttsClient,
         getVoiceParams: () => voiceParams,
+        getFixedLineVoiceParams: () => fixedLineVoiceParams,
         persona: dependencies.persona || RAIM_PERSONA,
       });
       const extractor = new StreamingChatJsonExtractor({
