@@ -29,6 +29,10 @@ function countWatchWords(replies, { minCount = 3, words = WATCH_WORDS } = {}) {
     .sort((a, b) => b.count - a.count);
 }
 
+// 文で読みが変わる漢字（声が読み分けられない。v6.10 で「ひらがなで書く」にした）。
+// プロンプトには例として書いていない。ここで出たかだけ見る
+const AMBIGUOUS_KANJI = ['辛', '一日', '上手', '下手', '方'];
+
 // 顔文字や記号（返事は読み上げるので使わない）
 const EMOTICON_PATTERN = /[（(][^（）()]{0,8}[＾^;；´`ω▽∀°ｰ゜][^（）()]{0,8}[）)]|[☆★♡♥❤✨]/;
 
@@ -65,6 +69,8 @@ function checkReply(reply, expect = {}) {
   if (EMOTICON_PATTERN.test(text)) flags.push('顔文字・記号');
   if (/web_search|get_weather|tool_call/.test(text)) flags.push('ツール名');
   if (/^\s*[{[]|"text"\s*:/.test(text)) flags.push('JSONがそのまま出た');
+  const ambiguous = AMBIGUOUS_KANJI.filter((word) => text.includes(word));
+  if (ambiguous.length) flags.push(`読みが分かれる漢字（${ambiguous.join('、')}）`);
 
   const maxChars = Number(expect.maxChars ?? 120);
   if (maxChars > 0 && text.length > maxChars) flags.push(`長い（${text.length}文字 > ${maxChars}）`);
@@ -136,6 +142,7 @@ function longestCommonSubstring(a, b) {
 }
 
 module.exports = {
+  AMBIGUOUS_KANJI,
   MEME_WORDS,
   WATCH_WORDS,
   countWatchWords,

@@ -111,6 +111,9 @@
 // twitter は、たまにその場のノリで呼び方を変えてもいい（具体的な呼び方は書かない。例を書くとそればかり使うため）。
 // 「ご主人様」は作ったチームの呼び方なので、ユーザーには使わない。
 // あだ名で呼んでほしい人は、話した内容が記憶に残るのでそこで呼び分ける。
+// v6.10: 自作の声（2026-11-24）は、辛い（からい/つらい）のように文で読みが変わる漢字を読み分けられない
+// （読みの決まった言葉は辞書で直せるが、これは直せない）。出力ルールに「読みが2通り以上ある漢字はひらがなで書く」を
+// 足した。例の言葉は書かない（書くとその言葉ばかり使うため。安藤さんと決めた）。性格・口調の部分は変えていない。
 
 const DEFAULT_PERSONA = 'bright';
 const PERSONA_NAMES = Object.freeze(['bright', 'downer', 'twitter']);
@@ -123,7 +126,7 @@ function resolvePersonaName(name) {
 const RAIM_PERSONA = resolvePersonaName(process.env.RAIM_PERSONA);
 
 // 会話ログを比べるときに、どの人格で話したか分かるよう版名に含める
-const RAIM_SYSTEM_PROMPT_VERSION = `raim-system-v6.9-${RAIM_PERSONA}`;
+const RAIM_SYSTEM_PROMPT_VERSION = `raim-system-v6.10-${RAIM_PERSONA}`;
 
 // ─────────────────────────────────────────────
 // 時刻コンテキスト（JST）
@@ -649,6 +652,7 @@ emotions を必ず text より先に書く（表情を先に変えるため）:
 
 - JSON以外の文章を出力してはいけません。
 - Markdownコードブロックで囲ってはいけません。
+- 声で読み上げるので、前後で読みが変わる漢字（読みが2通り以上あるもの）はひらがなで書く
 
 例:
 {"emotions":{"happy":0.5,"curious":0.3},"text":"こんにちは！今日はどうしたの？"}
@@ -662,6 +666,7 @@ const OUTPUT_RULE_WITH_TOOLS = `
   {"emotions": {"感情名": 強さ, ...}, "text": "応答内容"}
 - 同じツールを再度呼ばないこと
 - JSON以外の文章、Markdownコードブロックは禁止
+- 声で読み上げるので、前後で読みが変わる漢字（読みが2通り以上あるもの）はひらがなで書く
 
 例:
 {"emotions":{"happy":0.5,"caring":0.3},"text":"東京は晴れで24度だって"}
