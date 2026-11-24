@@ -107,6 +107,21 @@ Core の `TTS_FUNCTION_NAME` はこのスクリプトでは変えない（`raim_
    - 環境変数 `DICT_VERSION` を変えて実行環境を作り直すので、次の呼び出しから新しい辞書になる
    - S3 の辞書が壊れていても、zip に入れた辞書で動く（ログに `user dict from S3 failed`）
 
+## src の .py だけ入れ替える
+
+前処理（`raim_preprocess.py`）などの小さな直しは、zip を作り直さずに入れ替えられる（依存ライブラリはそのまま）。
+
+1. CloudShell に直した .py と `tools/cloudshell_update_code.sh` を上げて `bash cloudshell_update_code.sh raim_preprocess.py`
+   - 今動いているコードを落として、同じ名前のファイルだけ入れ替える。zip に無い名前なら止まる
+   - 前のコードは `s3://<バケット>/code/old/` に残る。最後に温めと読み上げを1回試す（声は `update_check.wav`）
+2. 戻すとき：`aws lambda update-function-code --function-name RAiM-TTS-SBV2-dev --s3-bucket <バケット> --s3-key code/old/<残したzip>`
+
+## 読みの前処理（辞書で直せないもの）
+
+- 「辛」：辞書は「辛い・辛さ・辛そう」をツラ、「辛かった・辛くて・辛すぎ」をカラと読む。同じ返事に食べ物や味の言葉があれば「から」、なければ「つら」にする（激辛・辛口・甘辛い・辛抱 などはそのまま）
+- 「来月の一日」「毎月1日」：辞書は「いちにち」と読むので「ついたち」にする（「12月1日」は辞書が読める）
+- 「方」「一日」：辞書がふだんの読み（ほう・いちにち）で読めるので何もしない（2026-11-24 に確かめた）
+
 ## テスト
 
 AWS のテスト用関数（raim-tts-sbv2-test）で一括テストするときは、CloudShell に function.zip と `tools/cloudshell_test.sh` を上げて `bash cloudshell_test.sh function.zip`。
