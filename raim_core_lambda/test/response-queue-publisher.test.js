@@ -575,3 +575,39 @@ test('TTS は同時に呼ばず、前の合成が終わってから次を呼ぶ'
     .map((message) => message.chunkId);
   assert.deepEqual([...new Set(audioChunks)], ['req-serial_chunk_0', 'req-serial_chunk_1', 'req-serial_chunk_2']);
 });
+
+test('前置きと待ちのひとことは、決まったセリフ用の落ち着いた声で読む', async () => {
+  const ttsCalls = [];
+  const publisher = createResponseQueuePublisher({
+    requestId: 'req-fixed',
+    connectionId: 'connection-1',
+    sub: 'user-1',
+    source: 'websocket',
+  }, {
+    client: { send: async () => {} },
+    env: { RESPONSE_QUEUE_URL: 'https://sqs.example/response.fifo' },
+    ttsClient: {
+      synthesize: async (request) => {
+        ttsCalls.push(request);
+        return { ok: true, audio: 'AAAA', audioByteLength: 3, format: 'wav', sampleRate: 24000 };
+      },
+    },
+    getVoiceParams: () => ({ voice: 'scene' }),
+    getFixedLineVoiceParams: () => ({ voice: 'calm' }),
+  });
+
+  await publisher.start();
+  await publisher.filler('ちょっと待ってね');
+  await publisher.toolCall({ toolName: 'web_search', description: '調べています', introText: 'それ気になる！少し待っててね' });
+  await publisher.appendText('東京は晴れだよ。');
+  await publisher.completed({ text: '東京は晴れだよ。' });
+
+  assert.deepEqual(
+    ttsCalls.map((call) => [call.text, call.voiceParams.voice]),
+    [
+      ['ちょっと待ってね', 'calm'],
+      ['それ気になる！少し待っててね', 'calm'],
+      ['東京は晴れだよ。', 'scene'],
+    ]
+  );
+});
