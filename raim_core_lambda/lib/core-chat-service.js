@@ -424,6 +424,9 @@ function createCoreChatService(dependencyOverrides = {}) {
     deferAfterReply,
     // SQS経路ではsqs-core-handlerが渡す。Mantle の返事が遅いときのひとこと（waiting-lines.js）を流す。
     onWaitingLine,
+    // SQS経路ではsqs-core-handlerが渡す。Mantle を待ってよい締め切り（epoch ms）。
+    // Lambda の残り時間から決める。0 なら締め切りなし（コンソールからの直接実行など）。
+    deadlineAt = 0,
   } = {}) {
     const notifyToolCall = typeof onToolCallStart === 'function'
       ? onToolCallStart
@@ -866,6 +869,7 @@ function createCoreChatService(dependencyOverrides = {}) {
         tools,
         reasoningEffort,
         onWaiting: speakWaiting,
+        deadlineAt,
       });
       lastMantleResponseId = response?.responseId || '';
       lastMantleRegion = response?.region || '';

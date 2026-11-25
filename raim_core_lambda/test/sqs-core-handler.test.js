@@ -2,7 +2,11 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { createSqsCoreHandler } = require('../lib/sqs-core-handler');
+const {
+  USER_FACING_ERROR_MESSAGE,
+  computeDeadlines,
+  createSqsCoreHandler,
+} = require('../lib/sqs-core-handler');
 
 function createRecord(messageId = 'message-1') {
   return {
@@ -266,4 +270,134 @@ test('TTS が未設定なら tts.warmup は何もしない', async () => {
   }, {});
 
   assert.deepEqual(result.batchItemFailures, []);
+});
+
+// ── Mantle 失敗のあと（2026-11-25: SQS のやり直しで接続が約3分止まっていた） ─────────
+
+function chatInput() {
+  return {
+    sub: 'user-1',
+    requestId: 'req-1',
+    connectionId: 'connection-1',
+    source: 'websocket',
+    text: 'hello',
+    images: [],
+  };
+}
+
+function quietly(fn) {
+  const originalError = console.error;
+  const originalWarn = console.warn;
+  console.error = () => {};
+  console.warn = () => {};
+  return Promise.resolve().then(fn).finally(() => {
+    console.error = originalError;
+    console.warn = originalWarn;
+  });
+}
+
+test('stream.start を送ったあとの失敗は、日本語のエラーを送って SQS にやり直させない', async () => {
+  const events = [];
+  const handler = createSqsCoreHandler({
+    normalizeCoreEvent: chatInput,
+    claimRequest: async () => ({ claimed: true, requestKey: 'user-1#req-1' }),
+    createResponseQueuePublisher: () => ({
+      start: async () => events.push(['start']),
+      appendText: async () => {},
+      completed: async () => events.push(['completed']),
+      error: async (result) => events.push(['error', result.code, result.message]),
+    }),
+    handleCoreChat: async () => {
+      const error = new Error('Mantle request timed out');
+      error.coreErrorCode = 'LLM_TIMEOUT';
+      error.retriable = true;
+      throw error;
+    },
+    markRequestCompleted: async () => events.push(['marked']),
+    markRequestFailed: async () => events.push(['failed']),
+  });
+
+  const result = await quietly(() => handler({ Records: [createRecord('m-1')] }, { awsRequestId: 'inv-1' }));
+
+  assert.deepEqual(result, { batchItemFailures: [] });
+  assert.deepEqual(events, [
+    ['start'],
+    ['error', 'LLM_TIMEOUT', USER_FACING_ERROR_MESSAGE],
+    ['failed'],
+  ]);
+});
+
+test('stream.start を送る前の失敗は、これまでどおり SQS にやり直させる', async () => {
+  const handler = createSqsCoreHandler({
+    normalizeCoreEvent: chatInput,
+    claimRequest: async () => ({ claimed: true, requestKey: 'user-1#req-1' }),
+    createResponseQueuePublisher: () => ({
+      start: async () => { throw new Error('SQS unavailable'); },
+      error: async () => {},
+    }),
+    handleCoreChat: async () => { throw new Error('should not be called'); },
+    markRequestCompleted: async () => {},
+    markRequestFailed: async () => {},
+  });
+
+  const result = await quietly(() => handler({ Records: [createRecord('m-2')] }, {}));
+  assert.deepEqual(result, { batchItemFailures: [{ itemIdentifier: 'm-2' }] });
+});
+
+test('ok:false の返事も、アプリに出す文は日本語にする（消した会話はそのまま）', async () => {
+  const sent = [];
+  const makeHandler = (coreResult) => createSqsCoreHandler({
+    normalizeCoreEvent: chatInput,
+    claimRequest: async () => ({ claimed: true, requestKey: 'user-1#req-1' }),
+    createResponseQueuePublisher: () => ({
+      start: async () => {},
+      appendText: async () => {},
+      completed: async () => {},
+      error: async (result) => sent.push([result.code, result.message]),
+    }),
+    handleCoreChat: async () => coreResult,
+    markRequestCompleted: async () => {},
+    markRequestFailed: async () => {},
+  });
+
+  await makeHandler({ ok: false, code: 'INVALID_RESPONSE', message: 'Model response was invalid' })({ Records: [createRecord()] }, {});
+  await makeHandler({ ok: false, code: 'THREAD_DELETED', message: 'Conversation thread was deleted' })({ Records: [createRecord()] }, {});
+
+  assert.deepEqual(sent, [
+    ['INVALID_RESPONSE', USER_FACING_ERROR_MESSAGE],
+    ['THREAD_DELETED', 'Conversation thread was deleted'],
+  ]);
+});
+
+test('Lambda の残り時間から締め切りを決め、handleCoreChat と publisher に渡す', async () => {
+  let chatDeadline = null;
+  let publisherOptions = null;
+  const handler = createSqsCoreHandler({
+    normalizeCoreEvent: chatInput,
+    claimRequest: async () => ({ claimed: true, requestKey: 'user-1#req-1' }),
+    createResponseQueuePublisher: (request, options) => {
+      publisherOptions = options;
+      return { start: async () => {}, appendText: async () => {}, completed: async () => {}, error: async () => {} };
+    },
+    handleCoreChat: async (input, options) => {
+      chatDeadline = options.deadlineAt;
+      return { ok: true, type: 'chat', requestId: input.requestId, text: 'やあ' };
+    },
+    markRequestCompleted: async () => {},
+    markRequestFailed: async () => {},
+  });
+
+  const before = Date.now();
+  await handler({ Records: [createRecord()] }, { getRemainingTimeInMillis: () => 60000 });
+
+  assert.ok(chatDeadline >= before + 52000 - 50 && chatDeadline <= Date.now() + 52000);
+  assert.ok(publisherOptions.audioDeadlineAt >= before + 58000 - 50 && publisherOptions.audioDeadlineAt <= Date.now() + 58000);
+});
+
+test('computeDeadlines: 残り時間がわからなければ締め切りなし、環境変数で取り置きを変えられる', () => {
+  assert.deepEqual(computeDeadlines({}), { deadlineAt: 0, audioDeadlineAt: 0 });
+  assert.deepEqual(
+    computeDeadlines({ getRemainingTimeInMillis: () => 30000 }, { CORE_DEADLINE_RESERVE_MS: '5000', CORE_AUDIO_RESERVE_MS: '1000' }, 1000),
+    { deadlineAt: 26000, audioDeadlineAt: 30000 }
+  );
 });

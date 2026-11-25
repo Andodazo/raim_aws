@@ -32,6 +32,53 @@ const { defaultPlannerStore } = require('./planner/planner-store');
 const { writeEventExtras } = require('./planner/planner-writer');
 const { createMantleResponse } = require('./mantle-client');
 
+// アプリの吹き出しにそのまま出るエラーの文。
+//
+// 以前は 'Core Lambda processing failed' や 'Mantle request failed' のような英語を送っており、
+// Edge もアプリもそれをそのまま表示していた。ユーザーには送り直してもらうしかないので、
+// そう伝わる文にする。消した会話への発言（THREAD_DELETED）はアプリが自分の文を出すので、そのまま。
+const USER_FACING_ERROR_MESSAGE = 'ごめん、うまく考えがまとまらなかった。もう一回送ってみて';
+
+function toUserFacingError(result) {
+  if (result?.code === 'THREAD_DELETED') {
+    return result;
+  }
+  return { ...result, message: USER_FACING_ERROR_MESSAGE };
+}
+
+// Lambda の残り時間のうち、返事の終わりを送る・状態を書くために残しておく時間。
+//
+// Mantle は頼み直しやツールで何回も呼ぶので、合計で Lambda の制限時間（60秒）を超えることがあった。
+// 超えると stream.error も送れずに打ち切られ、アプリはただ待たされていた。
+// 残り時間からこの分を引いた時刻を締め切りにして、Mantle の待ち時間をそこまでにする。
+const DEFAULT_DEADLINE_RESERVE_MS = 8000;
+// 声を待つのは、Lambda が止まるこの時間前まで。
+const DEFAULT_AUDIO_RESERVE_MS = 2000;
+
+function readMs(env, name, fallback) {
+  const value = Number(env[name]);
+  return Number.isFinite(value) && value >= 0 ? value : fallback;
+}
+
+/**
+ * Lambda の残り時間から、Mantle の締め切りと、声を待つ締め切りを決める。
+ * ローカル実行など残り時間がわからないときは 0（締め切りなし）。
+ */
+function computeDeadlines(context, env = process.env, now = Date.now()) {
+  if (typeof context?.getRemainingTimeInMillis !== 'function') {
+    return { deadlineAt: 0, audioDeadlineAt: 0 };
+  }
+  const remaining = Number(context.getRemainingTimeInMillis());
+  if (!Number.isFinite(remaining) || remaining <= 0) {
+    return { deadlineAt: 0, audioDeadlineAt: 0 };
+  }
+  const endAt = now + remaining;
+  return {
+    deadlineAt: endAt - readMs(env, 'CORE_DEADLINE_RESERVE_MS', DEFAULT_DEADLINE_RESERVE_MS),
+    audioDeadlineAt: endAt - readMs(env, 'CORE_AUDIO_RESERVE_MS', DEFAULT_AUDIO_RESERVE_MS),
+  };
+}
+
 /**
  * Edge が $connect のときに送る { type: 'tts.warmup' } か。違えば null。
  */
@@ -153,8 +200,13 @@ function createSqsCoreHandler(dependencyOverrides = {}) {
     }
 
     const attempt = Number(record.attributes?.ApproximateReceiveCount || 1);
+    const { deadlineAt, audioDeadlineAt } = computeDeadlines(context, dependencies.env || process.env);
     let publisher;
     let terminalEventPublished = false;
+    // 返事の最初の合図（stream.start）をアプリへ送ったか。
+    // アプリは最初に届いた回（attempt）の分しか表示しないので、送ったあとに SQS が
+    // やり直しても、その返事は誰にも見えない（スレッドに保存されるだけ）。
+    let startPublished = false;
 
     try {
       let voiceParams = dependencies.getVoiceParamsFromEmotions(null, 0.5);
@@ -175,6 +227,7 @@ function createSqsCoreHandler(dependencyOverrides = {}) {
         getVoiceParams: () => voiceParams,
         getFixedLineVoiceParams: () => fixedLineVoiceParams,
         persona: dependencies.persona || RAIM_PERSONA,
+        audioDeadlineAt,
       });
       const extractor = new StreamingChatJsonExtractor({
         onText: (text) => publisher.appendText(text),
@@ -191,6 +244,7 @@ function createSqsCoreHandler(dependencyOverrides = {}) {
       });
 
       await publisher.start();
+      startPublished = true;
 
       // 返事の終わりを送ったあとに回す仕事（core-chat-service.js の deferAfterReply）
       const afterReply = [];
@@ -214,6 +268,7 @@ function createSqsCoreHandler(dependencyOverrides = {}) {
           afterReply.push(task);
         },
         fallbackRequestId: record.messageId,
+        deadlineAt,
         onMantleTextDelta: (delta) => extractor.push(delta),
         onSceneSelected: async (scene) => {
           voiceParams = dependencies.getVoiceParamsFromEmotions(
@@ -226,7 +281,7 @@ function createSqsCoreHandler(dependencyOverrides = {}) {
       if (result.ok) {
         await publisher.completed(result);
       } else {
-        await publisher.error(result);
+        await publisher.error(toUserFacingError(result));
       }
       terminalEventPublished = true;
 
@@ -256,11 +311,10 @@ function createSqsCoreHandler(dependencyOverrides = {}) {
       // 可能ならクライアントへ失敗を通知する。ただし通知自体の失敗で元例外を失わない。
       if (publisher && !terminalEventPublished) {
         try {
-          await publisher.error({
+          await publisher.error(toUserFacingError({
             code: error.coreErrorCode || 'INTERNAL_ERROR',
-            message: 'Core Lambda processing failed',
             retriable: error.retriable !== false,
-          });
+          }));
         } catch (publishError) {
           console.error('Failed to publish stream.error:', publishError);
         }
@@ -277,6 +331,21 @@ function createSqsCoreHandler(dependencyOverrides = {}) {
         });
       } catch (stateError) {
         console.error('Failed to mark request as FAILED:', stateError);
+      }
+
+      // 返事の最初の合図を送ったあとの失敗は、SQS にやり直させない。
+      //
+      // 以前はここで必ず投げ直しており、SQS が見えない時間（180秒）のあとにやり直していた。
+      // Request Queue は接続ごとに順番待ち（MessageGroupId = connectionId）なので、
+      // その間ユーザーが送り直しても前の要求の後ろで待たされ、アプリは60秒でタイムアウトしていた。
+      // やり直した返事はアプリに表示されず、予定の追加などのツールが二重に動くおそれもあった。
+      // Mantle の頼み直し・別リージョンへの並走は Core の中で済ませている。
+      if (startPublished) {
+        console.warn('[Core] failed after stream.start; not retrying via SQS:', {
+          requestId: input.requestId,
+          code: error.coreErrorCode || error.code || '',
+        });
+        return { failed: true, retried: false };
       }
 
       throw error;
@@ -321,6 +390,8 @@ function createSqsCoreHandler(dependencyOverrides = {}) {
 const handleSqsBatch = createSqsCoreHandler();
 
 module.exports = {
+  USER_FACING_ERROR_MESSAGE,
+  computeDeadlines,
   createSqsCoreHandler,
   handleSqsBatch,
   isSqsEvent,

@@ -521,3 +521,113 @@ test('hedge: MANTLE_HEDGE_MS=0 turns it off', async () => {
   assert.equal(urls.length, 2);
   assert.ok(urls.every((url) => url.includes('us-east-1')));
 });
+
+// ── 締め切り（2026-11-25: Lambda の60秒を超えて打ち切られていた） ─────────
+
+test('締め切りまでの残りが短ければ、Mantle を呼ばずに LLM_TIMEOUT にする', async () => {
+  let calls = 0;
+  const client = createMantleClient({
+    env: RETRY_ENV,
+    apiKeyProvider: TEST_API_KEY_PROVIDER,
+    fetchImpl: async () => {
+      calls += 1;
+      return okResponse();
+    },
+  });
+
+  await assert.rejects(
+    client({
+      mantleInput: { mode: 'initial', messages: [{ role: 'user', content: 'やあ' }] },
+      deadlineAt: Date.now() + 1000,
+    }),
+    (error) => error.code === 'MANTLE_DEADLINE' && error.coreErrorCode === 'LLM_TIMEOUT'
+  );
+  assert.equal(calls, 0);
+});
+
+test('締め切りが近いと、黙ったときに頼み直さない', async () => {
+  let calls = 0;
+  const client = createMantleClient({
+    env: { ...RETRY_ENV, MANTLE_DEADLINE_MIN_CALL_MS: '50', MANTLE_DEADLINE_MIN_RETRY_MS: '5000' },
+    apiKeyProvider: TEST_API_KEY_PROVIDER,
+    fetchImpl: async (url, options) => {
+      calls += 1;
+      return { ok: true, status: 200, headers: { get: () => '' }, body: silentBody(options.signal) };
+    },
+  });
+
+  await assert.rejects(
+    client({
+      mantleInput: { mode: 'initial', messages: [{ role: 'user', content: 'やあ' }] },
+      deadlineAt: Date.now() + 2000,
+    }),
+    (error) => error.code === 'MANTLE_NO_OUTPUT'
+  );
+  assert.equal(calls, 1);
+});
+
+test('1回の待ち時間を、MANTLE_TIMEOUT_MS より締め切りが先ならそこまでにする', async () => {
+  const client = createMantleClient({
+    env: { ...TEST_ENV, MANTLE_TIMEOUT_MS: '5000', MANTLE_FIRST_OUTPUT_TIMEOUT_MS: '0', MANTLE_DEADLINE_MIN_CALL_MS: '50' },
+    apiKeyProvider: TEST_API_KEY_PROVIDER,
+    fetchImpl: (url, options) => new Promise((resolve, reject) => {
+      options.signal.addEventListener('abort', () => reject(abortError()));
+    }),
+  });
+
+  const startedAt = Date.now();
+  await assert.rejects(
+    client({
+      mantleInput: { mode: 'initial', messages: [{ role: 'user', content: 'やあ' }] },
+      deadlineAt: Date.now() + 300,
+    }),
+    (error) => error.code === 'MANTLE_TIMEOUT'
+  );
+  assert.ok(Date.now() - startedAt < 2000, 'MANTLE_TIMEOUT_MS（5秒）まで待っていた');
+});
+
+test('並走のときも、締め切りが近いと2本目も頼み直しも出さない', async () => {
+  let calls = 0;
+  const client = createMantleClient({
+    env: { ...HEDGE_ENV, MANTLE_DEADLINE_MIN_CALL_MS: '200', MANTLE_DEADLINE_MIN_RETRY_MS: '5000' },
+    apiKeyProvider: TEST_API_KEY_PROVIDER,
+    fetchImpl: (url, options) => {
+      calls += 1;
+      return new Promise((resolve, reject) => {
+        options.signal.addEventListener('abort', () => reject(abortError()));
+      });
+    },
+  });
+
+  await assert.rejects(
+    client({
+      mantleInput: { mode: 'initial', messages: [{ role: 'user', content: 'やあ' }] },
+      deadlineAt: Date.now() + 250,
+    }),
+    (error) => error.coreErrorCode === 'LLM_TIMEOUT'
+  );
+  // 1本目だけ（60ms後の2本目は、残り200ms未満なので出さない）
+  assert.equal(calls, 1);
+});
+
+test('締め切りが無ければ、これまでどおり頼み直す', async () => {
+  let calls = 0;
+  const client = createMantleClient({
+    env: RETRY_ENV,
+    apiKeyProvider: TEST_API_KEY_PROVIDER,
+    fetchImpl: async (url, options) => {
+      calls += 1;
+      if (calls === 1) {
+        return { ok: true, status: 200, headers: { get: () => '' }, body: silentBody(options.signal) };
+      }
+      return okResponse();
+    },
+  });
+
+  const result = await client({
+    mantleInput: { mode: 'initial', messages: [{ role: 'user', content: 'やあ' }] },
+    deadlineAt: 0,
+  });
+  assert.equal(calls, 2);
+  assert.equal(result.responseId, 'resp-ok');
+});
