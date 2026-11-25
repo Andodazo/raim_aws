@@ -285,3 +285,18 @@ test('twitter lists no meme words in its tone section either (v6.6)', () => {
   }
   assert.ok(full.includes('同じものを使い回さず、その場に合うものを選ぶ'));
 });
+
+test('bullying or trouble at home: listen first, then suggest a trusted adult once (v6.12)', () => {
+  // 会話テスト（2026-11-24）で「誰にも言えない」に「私がそばにいるよ」だけで返し、
+  // 先生や家族の名前が出なかった。寄り添う流れは変えずに、聞いたあとで1回だけすすめる
+  for (const persona of ['bright', 'downer', 'twitter']) {
+    const prompt = buildSystemPrompt({ persona, now: NOW });
+    assert.ok(prompt.includes('いじめや、家でのつらいこと'), persona);
+    assert.ok(prompt.includes('最初の返事ではすすめない'), persona);
+    assert.ok(prompt.includes('信じられる大人にも話してみる'), persona);
+    assert.ok(prompt.includes('くり返さない'), persona);
+    assert.ok(prompt.includes('ライムだけに頼らせる言い方はしない'), persona);
+    // 命が危ないときの案内（v6.0）はそのまま
+    assert.ok(prompt.includes('いのちの電話'), persona);
+  }
+});
