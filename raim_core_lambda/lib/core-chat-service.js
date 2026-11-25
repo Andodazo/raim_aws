@@ -99,6 +99,12 @@ const {
   isFactCheckEnabled,
   resolveSceneReasoningEffort,
 } = require('./fact-check');
+const {
+  isCareNudgeEnabled,
+  detectCareNudge,
+  buildCareNudgeNote,
+  softenExclusiveWording,
+} = require('./care-nudge');
 const { defaultPlannerStore } = require('./planner/planner-store');
 const {
   PLANNER_FEATURE,
@@ -413,6 +419,8 @@ function createCoreChatService(dependencyOverrides = {}) {
     onMantleStreamEvent,
     onMantleTextDelta,
     onSceneSelected,
+    // ケアの指示を足した往復で呼ぶ（care-nudge.js）。SQS経路では、吹き出しと声の言葉を置きかえるのに使う
+    onCareNudge,
     // SQS経路ではsqs-core-handlerが渡す。
     // Lambdaコンソールからの直接実行では未指定となり、既定の何もしない実装が使われる。
     onToolCallStart,
@@ -539,6 +547,20 @@ function createCoreChatService(dependencyOverrides = {}) {
       isFactQuestion(input.text);
     if (factCheck) {
       console.log(`[FactCheck] search requested: sceneId=${selectedScene?.id || ''}`);
+    }
+
+    // 3-d. いじめや家のつらい話を一人で抱えているなら、今回の返事で1回だけ
+    // 信じられる大人にもすすめるよう指示を足す（care-nudge.js。プロンプトだけでは出なかった）
+    const careNudge = !input.greeting && isCareNudgeEnabled(dependencies.env || process.env)
+      ? detectCareNudge({ history: threadContext.thread?.messages || [], userText: input.text })
+      : null;
+    if (careNudge) {
+      console.log(careNudge.kind === 'suggest'
+        ? `[Care] suggest trusted adult: home=${careNudge.home}`
+        : `[Care] ${careNudge.kind}`);
+      if (typeof onCareNudge === 'function') {
+        await onCareNudge(careNudge);
+      }
     }
 
     // Scene ごとの reasoning effort（SCENE_REASONING_EFFORTS。未設定なら通常どおり）
@@ -803,6 +825,8 @@ function createCoreChatService(dependencyOverrides = {}) {
       features: input.features,
       conversationGap,
       factCheck,
+      // 信じられる大人にもすすめる指示（足さないときは空）
+      careNote: careNudge ? buildCareNudgeNote(careNudge) : '',
       // この会話の履歴。同じ発言が前にもあれば、そのときの返事を添えるのに使う
       history: threadContext.thread?.messages || [],
       // アプリを開いたときは、ライムから話しかける
@@ -1258,6 +1282,15 @@ function createCoreChatService(dependencyOverrides = {}) {
       });
     }
 
+    // 5-a. ケアの指示を足した往復では、「私にだけ」のような言い方を取ってから記録・返す（care-nudge.js）
+    if (careNudge && typeof output.text === 'string') {
+      const softened = softenExclusiveWording(output.text);
+      if (softened !== output.text) {
+        console.log('[Care] softened exclusive wording');
+        output.text = softened;
+      }
+    }
+
     // 5-b. 終わったことを聞いたら（本人が先に話したときも）、もう聞かないように印を付ける。
     // 会話の途中は「流れが合えば」なので、返事で聞いていなければ次の往復に持ち越す
     let followUpMeta = null;
@@ -1302,6 +1335,8 @@ function createCoreChatService(dependencyOverrides = {}) {
               : undefined,
             tools: toolLog,
             factCheck,
+            // 足したケアの指示（suggest は次からくり返さない。refused は断られた。onlyLime は「ライムしかいない」。care-nudge.js）
+            ...(careNudge ? { care: careNudge.kind } : {}),
             promptVersion: mantleInput?.promptVersion || '',
             mode: mantleInput?.mode || '',
             reasoningEffort: reasoningEffort ||

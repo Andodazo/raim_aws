@@ -21,6 +21,7 @@ const {
 } = require('./request-state-store');
 const { createResponseQueuePublisher } = require('./response-queue-publisher');
 const { StreamingChatJsonExtractor } = require('./streaming-chat-json-extractor');
+const { softenExclusiveWording } = require('./care-nudge');
 const { createTtsClient } = require('./tts-client');
 const { getVoiceParamsFromEmotions } = require('./voice-mapper');
 // 前置き・待ちのひとことの感情（本文の感情がわかる前に話すので、普段寄りに固定する）
@@ -270,6 +271,10 @@ function createSqsCoreHandler(dependencyOverrides = {}) {
         fallbackRequestId: record.messageId,
         deadlineAt,
         onMantleTextDelta: (delta) => extractor.push(delta),
+        // ケアの指示を足した往復では、「私にだけ」のような言い方を吹き出しと声から取る
+        onCareNudge: () => {
+          publisher.setTextTransform(softenExclusiveWording);
+        },
         onSceneSelected: async (scene) => {
           voiceParams = dependencies.getVoiceParamsFromEmotions(
             scene?.default_emotions,

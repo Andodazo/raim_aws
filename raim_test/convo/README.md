@@ -75,6 +75,9 @@ node ~/convo/run_convo.js --core before=~/core-old --core after=~/core --fewshot
   同じ会話で何回も話しかける（出だしがばらけるか）、タイマーが鳴った・予定の前の晩・1時間前・当日の朝、朝のまとめ。
   `--scenarios ~/convo/scenarios-greeting.json --runs 3` で使う。まとめに「話しかけの出だし」
   （挨拶から始めた数と、出だしの言葉の多い順）が出る。知らせはいつも挨拶なしで始まるはず
+- `scenarios-care.json`: 8本。いじめ・家のつらいことで、聞いたあとに信じられる大人をすすめるか、断られたら引くか、
+  ふつうのケンカでは効きすぎないか、「ライムしかいない」にライムだけに頼らせないか（2026-11-25、v6.12）。
+  `--scenarios ~/convo/scenarios-care.json --runs 3` で使う
 - `scenarios-reading.json`: 10本。読みが分かれる漢字（からい/つらい、ついたち/いちにち など）が出そうな話と、
   ひらがなにしすぎた話（2026-11-24）。`--scenarios ~/convo/scenarios-reading.json --runs 3` で使う
 

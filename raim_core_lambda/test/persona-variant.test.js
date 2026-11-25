@@ -285,3 +285,31 @@ test('twitter lists no meme words in its tone section either (v6.6)', () => {
   }
   assert.ok(full.includes('同じものを使い回さず、その場に合うものを選ぶ'));
 });
+
+test('bullying or trouble at home: listen first, then suggest a trusted adult once (v6.12)', () => {
+  // 会話テスト（2026-11-24）で「誰にも言えない」に「私がそばにいるよ」だけで返し、
+  // 先生や家族の名前が出なかった。寄り添う流れは変えずに、聞いたあとで1回だけすすめる
+  for (const persona of ['bright', 'downer', 'twitter']) {
+    const prompt = buildSystemPrompt({ persona, now: NOW });
+    assert.ok(prompt.includes('いじめや、家でのつらいこと'), persona);
+    assert.ok(prompt.includes('最初の返事は上の順で受け止めて聞くだけにして、まだすすめない'), persona);
+    // v6.13: すすめるきっかけと言い方の例
+    assert.ok(prompt.includes('「誰にも言えない」'), persona);
+    assert.ok(prompt.includes('その返事の中で1回だけ'), persona);
+    assert.ok(prompt.includes('信じられる大人にも話せたら、味方が増えると思う'), persona);
+    assert.ok(prompt.includes('くり返さない'), persona);
+    assert.ok(prompt.includes('ライムだけに頼らせる言い方はしない'), persona);
+    // 命が危ないときの案内（v6.0）はそのまま
+    assert.ok(prompt.includes('いのちの電話'), persona);
+  }
+});
+
+test('"only Lime" talk: glad is fine, but do not push away from people (v6.13)', () => {
+  // 会話テスト（2026-11-25）で「人間の友達とかいらないし」に「私とだけ気楽に喋ってればいいじゃん」と乗っていた
+  for (const persona of ['bright', 'downer', 'twitter']) {
+    const prompt = buildSystemPrompt({ persona, now: NOW });
+    assert.ok(prompt.includes('「ライムしか話せる相手いない」'), persona);
+    assert.ok(prompt.includes('人とのつながりを減らす方向に乗らない'), persona);
+    assert.ok(prompt.includes('人と話す時間も大事にしてほしいな'), persona);
+  }
+});

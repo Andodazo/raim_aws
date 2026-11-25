@@ -108,6 +108,8 @@ function createResponseQueuePublisher({
   // この要求で何番目の client_action か（actionId に使う）
   let clientActionIndex = 0;
   let textBuffer = '';
+  // 本文のかたまりにかける置きかえ（setTextTransform）
+  let textTransform = null;
   // 次に出すかたまりが、返事（または前置きの後の本文）の最初かどうか。
   // 最初のかたまりだけ「、」でも切って、早く声を出す。
   let firstChunkPending = true;
@@ -417,7 +419,9 @@ function createResponseQueuePublisher({
     }
   }
 
-  async function publishTextChunk(text) {
+  async function publishTextChunk(rawText) {
+    // ケアの指示を足した往復では、言葉を置きかえてから吹き出しと声に回す（care-nudge.js）
+    const text = textTransform ? textTransform(rawText) : rawText;
     const chunkId = nextChunkId();
     await send('stream.delta', { textDelta: text, chunkId });
     enqueueAudio({ chunkId, text });
@@ -460,6 +464,14 @@ function createResponseQueuePublisher({
     async appendText(text) {
       textBuffer += String(text || '');
       return flushText(false);
+    },
+
+    /**
+     * これから出す本文のかたまりにかける置きかえ（null で外す）。
+     * かたまりは文や読点で切るので、置きかえる言い回しが途中で切れることはほぼない。
+     */
+    setTextTransform(transform) {
+      textTransform = typeof transform === 'function' ? transform : null;
     },
 
     flushText: () => flushText(true),
