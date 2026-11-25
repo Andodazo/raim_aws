@@ -481,7 +481,8 @@ async function runScenario({ core, scenario, runIndex, fake }) {
       waiting,
       firstTextMs,
       sceneId,
-      mode: lastAssistant?.meta?.mode || '',
+      // 大人にもすすめる指示を足した往復は「+care」と出す（v6.14, care-nudge.js）
+      mode: (lastAssistant?.meta?.mode || '') + (lastAssistant?.meta?.careNudge ? '+care' : ''),
       ms: Date.now() - started,
       flags,
     });

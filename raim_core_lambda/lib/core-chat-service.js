@@ -99,6 +99,11 @@ const {
   isFactCheckEnabled,
   resolveSceneReasoningEffort,
 } = require('./fact-check');
+const {
+  isCareNudgeEnabled,
+  detectCareNudge,
+  buildCareNudgeNote,
+} = require('./care-nudge');
 const { defaultPlannerStore } = require('./planner/planner-store');
 const {
   PLANNER_FEATURE,
@@ -541,6 +546,15 @@ function createCoreChatService(dependencyOverrides = {}) {
       console.log(`[FactCheck] search requested: sceneId=${selectedScene?.id || ''}`);
     }
 
+    // 3-d. いじめや家のつらい話を一人で抱えているなら、今回の返事で1回だけ
+    // 信じられる大人にもすすめるよう指示を足す（care-nudge.js。プロンプトだけでは出なかった）
+    const careNudge = !input.greeting && isCareNudgeEnabled(dependencies.env || process.env)
+      ? detectCareNudge({ history: threadContext.thread?.messages || [], userText: input.text })
+      : null;
+    if (careNudge) {
+      console.log(`[Care] suggest trusted adult: home=${careNudge.home}`);
+    }
+
     // Scene ごとの reasoning effort（SCENE_REASONING_EFFORTS。未設定なら通常どおり）
     const reasoningEffort = resolveSceneReasoningEffort(
       selectedScene?.id,
@@ -803,6 +817,8 @@ function createCoreChatService(dependencyOverrides = {}) {
       features: input.features,
       conversationGap,
       factCheck,
+      // 信じられる大人にもすすめる指示（足さないときは空）
+      careNote: careNudge ? buildCareNudgeNote(careNudge) : '',
       // この会話の履歴。同じ発言が前にもあれば、そのときの返事を添えるのに使う
       history: threadContext.thread?.messages || [],
       // アプリを開いたときは、ライムから話しかける
@@ -1302,6 +1318,8 @@ function createCoreChatService(dependencyOverrides = {}) {
               : undefined,
             tools: toolLog,
             factCheck,
+            // 大人にもすすめる指示を足したか（次からはくり返さない。care-nudge.js）
+            ...(careNudge ? { careNudge: true } : {}),
             promptVersion: mantleInput?.promptVersion || '',
             mode: mantleInput?.mode || '',
             reasoningEffort: reasoningEffort ||

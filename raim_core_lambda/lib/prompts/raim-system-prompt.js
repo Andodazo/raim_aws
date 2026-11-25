@@ -126,6 +126,9 @@
 // すすめるきっかけ（「誰にも言えない」「もう行きたくない」など）と、言い方の例を書いた。この例はうつってよい。
 // 「ライムしか話せる相手いない」「人間の友達いらない」に、v6.10 も v6.12 も「私とだけ喋ってればいい」と乗っていたので、
 // うれしいと伝えてよいが、人とのつながりを減らす方向には乗らない、を足した。3人格共通（安藤さんと決めた）。
+// v6.14: v6.13 の会話テスト（2026-11-25、各3回）で、「ライムしかいない」は3回とも直ったが、大人をすすめたのは
+// 12回中1回だけだった。プロンプトの文は変えずに、条件がそろったときだけサーバー側から「今回の返事で1回すすめる」
+// 指示を今回の発言のすぐ前に足すようにした（lib/care-nudge.js。fact-check.js と同じ考え方）。
 
 const DEFAULT_PERSONA = 'bright';
 const PERSONA_NAMES = Object.freeze(['bright', 'downer', 'twitter']);
@@ -138,7 +141,7 @@ function resolvePersonaName(name) {
 const RAIM_PERSONA = resolvePersonaName(process.env.RAIM_PERSONA);
 
 // 会話ログを比べるときに、どの人格で話したか分かるよう版名に含める
-const RAIM_SYSTEM_PROMPT_VERSION = `raim-system-v6.13-${RAIM_PERSONA}`;
+const RAIM_SYSTEM_PROMPT_VERSION = `raim-system-v6.14-${RAIM_PERSONA}`;
 
 // ─────────────────────────────────────────────
 // 時刻コンテキスト（JST）
