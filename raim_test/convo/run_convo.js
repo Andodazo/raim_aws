@@ -45,6 +45,7 @@ function parseArgs(argv) {
     out: '',
     persona: '',
     region: '',
+    fewshots: [],
   };
 
   for (let i = 0; i < argv.length; i++) {
@@ -66,6 +67,13 @@ function parseArgs(argv) {
     else if (arg === '--out') options.out = next();
     else if (arg === '--persona') options.persona = next();
     else if (arg === '--region') options.region = next();
+    else if (arg === '--fewshot') {
+      const value = next();
+      const eq = value.indexOf('=');
+      options.fewshots.push(eq > 0
+        ? { label: value.slice(0, eq), file: value.slice(eq + 1) }
+        : { label: null, file: value });
+    }
     else if (arg === '--help' || arg === '-h') options.help = true;
     else throw new Error(`知らない引数です: ${arg}`);
   }
@@ -82,6 +90,7 @@ node run_convo.js --core <Core の zip を展開したフォルダ> [オプシ�
   --only <文字>       id かタグにこの文字を含む台本だけ流す
   --runs <n>          同じ台本を n 回流す（返事のぶれを見る）
   --concurrency <n>   同時に流す台本の数（既定 3）
+  --fewshot <file> または --fewshot <名前>=<file>   会話例を DynamoDB ではなく手元の scenes.json から使う
   --persona <name>    人格（bright / downer / twitter）。既定は環境変数のまま
   --region <name>     AWS のリージョン（既定 ap-northeast-1）
   --out <file>        結果のファイル名（既定 convo-report-<日時>.txt と .json）
@@ -116,6 +125,46 @@ function applyEnvironment(options) {
 }
 
 // ─────────────────────────────────────────────
+// 手元の会話例（--fewshot）
+// ─────────────────────────────────────────────
+//
+// 会話例は本番の DynamoDB（RAiM-FewShot-dev）にあり、入れ替えるとすぐ本番が変わる。
+// 反映する前に会話テストで比べられるよう、raim_test/fewshot/scenes.json を読んで、
+// Scene の few_shots / few_shots_downer / few_shots_twitter だけを手元のものに差し替える（2026-11-24）。
+// Scene の選び方（textCentroid）や説明は DynamoDB のまま。
+
+function loadLocalFewShots(file) {
+  const data = JSON.parse(fs.readFileSync(expandHome(file), 'utf8'));
+  const byId = {};
+  for (const scene of data.scenes || []) {
+    const shots = scene.shots || [];
+    const pick = (persona) => shots
+      .filter((shot) => shot[persona] && shot[persona].raim)
+      .map((shot) => ({
+        user: shot.user,
+        raim: shot[persona].raim,
+        emotions: shot[persona].emotions,
+        ...(typeof shot[persona].overall_intensity === 'number'
+          ? { overall_intensity: shot[persona].overall_intensity }
+          : {}),
+      }));
+    byId[scene.id] = {
+      few_shots: pick('bright'),
+      few_shots_downer: pick('downer'),
+      few_shots_twitter: pick('twitter'),
+    };
+  }
+  return byId;
+}
+
+function withLocalFewShots(getSceneById, byId) {
+  return async (id) => {
+    const scene = await getSceneById(id);
+    return scene && byId[scene.id] ? { ...scene, ...byId[scene.id] } : scene;
+  };
+}
+
+// ─────────────────────────────────────────────
 // Core の読み込みと、部品の差し替え
 // ─────────────────────────────────────────────
 
@@ -141,6 +190,7 @@ function loadCore(dir) {
     calculateResponseExpiresAt: optionalLib(root, 'mantle-session-policy.js')?.calculateResponseExpiresAt
       || ((createdAt) => createdAt),
     promptVersion: lib('prompts/raim-system-prompt.js').RAIM_SYSTEM_PROMPT_VERSION,
+    getSceneById: lib('scene-repository.js').getSceneById,
   };
 }
 
@@ -348,6 +398,7 @@ async function runScenario({ core, scenario, runIndex, fake }) {
   const handle = core.createCoreChatService({
     ...store.dependencies,
     ...(fake ? createFakeDependencies() : {}),
+    ...(core.localFewShots && !fake ? { getSceneById: withLocalFewShots(core.getSceneById, core.localFewShots) } : {}),
   });
 
   const steps = [];
@@ -484,7 +535,7 @@ function formatReport({ cores, scenarios, byCore, startedAt, options }) {
   lines.push(`会話テスト ${startedAt}`);
   lines.push(`人格: ${process.env.RAIM_PERSONA || 'bright'}  台本: ${scenarios.length}本 × ${options.runs}回${options.fake ? '  （--fake: ニセの返事）' : ''}`);
   for (const core of cores) {
-    lines.push(`Core${core.label ? ` [${core.label}]` : ''}: ${core.root}  (${core.promptVersion})`);
+    lines.push(`Core${core.label ? ` [${core.label}]` : ''}: ${core.root}  (${core.promptVersion})${core.fewshotFile ? `  会話例: ${core.fewshotFile}` : ''}`);
   }
   lines.push('');
 
@@ -623,6 +674,16 @@ async function main() {
     label: options.cores.length > 1 ? (c.label || `core${i + 1}`) : c.label,
     ...loadCore(c.dir),
   }));
+  // --fewshot <file> は全部の Core、--fewshot <名前>=<file> はその名前の Core だけに使う
+  for (const { label, file } of options.fewshots) {
+    const targets = cores.filter((core) => label === null || core.label === label);
+    if (!targets.length) throw new Error(`--fewshot ${label}= の Core がありません`);
+    const byId = loadLocalFewShots(file);
+    for (const core of targets) {
+      core.localFewShots = byId;
+      core.fewshotFile = file;
+    }
+  }
 
   // Core のログ（[Greeting] など）は結果に混ぜない。会話文はもともとログに出ない
   const write = (text) => process.stderr.write(`${text}\n`);

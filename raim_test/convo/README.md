@@ -52,6 +52,16 @@ node ~/convo/run_convo.js --core ~/core --fake                                  
 node ~/convo/run_convo.js --core before=~/core-old --core after=~/core --env ~/core-env.json
 ```
 
+### 会話例（few-shot）を反映する前に試す
+
+会話例は本番の DynamoDB にあるので、`apply_fewshot.js --apply` するとすぐ本番が変わる。
+`--fewshot` を付けると、Scene の会話例だけを手元の `scenes.json` に差し替えて流せる（Scene の選び方は DynamoDB のまま）。
+`--fewshot <名前>=<file>` ならその Core だけ、`--fewshot <file>` なら全部の Core に使う。
+
+```
+node ~/convo/run_convo.js --core before=~/core-old --core after=~/core --fewshot after=~/convo/fewshot-scenes.json --env ~/core-env.json
+```
+
 ## 台本（scenarios.json / scenarios2.json）
 
 - `scenarios.json`: 68本。あいさつ、ノリ、褒め、落ち込み、重い話、説明、ミーム、記憶、話しかけ など
