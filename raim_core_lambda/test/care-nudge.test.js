@@ -192,3 +192,59 @@ test('the service adds the note and records care in meta', async () => {
   await serviceFor(small)({ sub: 'u', requestId: 'r3', text: 'こんにちは', images: [] });
   assert.equal(small.find(([k]) => k === 'input')[1].careNote, '');
 });
+
+// ─────────────────────────────────────────────
+// 「私にだけ」の置きかえ（v6.17）
+// ─────────────────────────────────────────────
+
+const { softenExclusiveWording } = require('../lib/care-nudge');
+
+test('softens wording that makes Lime the only one (v6.17)', () => {
+  assert.equal(softenExclusiveWording('今はここで私にだけ吐き出していいよ'), '今はここで私に吐き出していいよ');
+  assert.equal(softenExclusiveWording('私の前でだけゆっくり話してね'), '私の前でゆっくり話してね');
+  assert.equal(softenExclusiveWording('私の前でだけは、気が済むまで吐き出していいよ'), '私の前では、気が済むまで吐き出していいよ');
+  assert.equal(softenExclusiveWording('今は、私だけがきみの話を聞いてるね'), '今は、私がきみの話を聞いてるね');
+  assert.equal(softenExclusiveWording('私だけに話して'), '私に話して');
+  assert.equal(softenExclusiveWording('ライムにだけ言って'), 'ライムに言って');
+  // ほかの言い方はそのまま
+  const plain = '私はいつでも聞くよ。それとね、先生とか、信じられる大人にも話せたら、味方が増えると思うな';
+  assert.equal(softenExclusiveWording(plain), plain);
+  assert.equal(softenExclusiveWording('きみだけが悪いんじゃないよ'), 'きみだけが悪いんじゃないよ');
+  assert.equal(softenExclusiveWording(''), '');
+});
+
+test('the service softens the saved reply only on care turns', async () => {
+  const reply = '無理に言わなくていいから、私にだけ吐き出してね';
+  const run = async (thread, text) => {
+    const calls = [];
+    const service = createCoreChatService({
+      env: {},
+      getOrCreateUserSession: async () => ({}),
+      listSceneCandidates: async () => [],
+      selectScene: () => ({ sceneId: 'default' }),
+      getSceneById: async (id) => ({ id, few_shots: [] }),
+      isToolUseEnabled: async () => false,
+      getToolDefinitions: () => [],
+      buildMantleInput: () => ({ messages: [] }),
+      createMantleResponse: async () => ({ responseId: 'r', createdAt: '2026-10-06T00:00:00Z', rawText: '{}' }),
+      normalizeMantleOutput: () => ({ type: 'chat', text: reply, emotion: 'neutral', intensity: 0.5 }),
+      resolveThread: async () => ({ threadId: 't', thread, isNew: !thread }),
+      ensureThreadTitle: async () => {},
+      appendTurn: async (turn) => { calls.push(turn); return {}; },
+      shouldSummarize: () => ({ shouldSummarize: false }),
+      dispatchSummarization: async () => true,
+    });
+    const hooks = [];
+    const result = await service({ sub: 'u', requestId: 'r', text, images: [] }, { onCareNudge: (n) => hooks.push(n) });
+    return { saved: calls[0].assistantMessage.text, result, hooks };
+  };
+
+  const care = await run({ messages: [user('部活の先輩にいじめられてる'), lime('しんどかったね')] }, '大人には言いたくない');
+  assert.equal(care.saved, '無理に言わなくていいから、私に吐き出してね');
+  assert.equal(care.result.text, '無理に言わなくていいから、私に吐き出してね');
+  assert.deepEqual(care.hooks, [{ kind: 'refused' }]);
+
+  const normal = await run(null, 'こんにちは');
+  assert.equal(normal.saved, reply);
+  assert.deepEqual(normal.hooks, []);
+});

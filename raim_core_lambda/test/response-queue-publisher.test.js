@@ -677,3 +677,30 @@ test('締め切りまでに合成が終われば、これまでどおり声を�
   const types = commands.map((command) => JSON.parse(command.MessageBody).type);
   assert.deepEqual(types, ['stream.start', 'stream.delta', 'stream.audio', 'stream.completed']);
 });
+
+test('setTextTransform rewrites text chunks before bubbles and voice (care turns)', async () => {
+  const commands = [];
+  const client = { send: async (command) => commands.push(command.input) };
+  const publisher = createResponseQueuePublisher({
+    requestId: 'req-care',
+    connectionId: 'connection-1',
+    sub: 'user-1',
+    source: 'websocket',
+  }, {
+    client,
+    env: { RESPONSE_QUEUE_URL: 'https://sqs.example/response.fifo', STREAM_CHUNK_MIN_CHARACTERS: '5' },
+  });
+
+  await publisher.start();
+  publisher.setTextTransform((text) => text.replace('私にだけ', '私に'));
+  await publisher.appendText('無理しなくていいよ。');
+  await publisher.appendText('私にだけ吐き出してね');
+  await publisher.completed({ text: '無理しなくていいよ。私に吐き出してね', emotion: 'neutral', intensity: 0.5 });
+
+  const deltas = commands
+    .map((command) => JSON.parse(command.MessageBody))
+    .filter((message) => message.type === 'stream.delta')
+    .map((message) => message.textDelta)
+    .join('');
+  assert.equal(deltas, '無理しなくていいよ。私に吐き出してね');
+});

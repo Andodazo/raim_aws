@@ -32,6 +32,11 @@
 // 「うれしいと伝えてよいが、人とのつながりを減らす方向に乗らない」指示を足す（v6.16）。
 // プロンプト（v6.13）だけだと、3回中1回「私とゆっくり話してればいいじゃん」に戻っていた。
 //
+// v6.17: それでも「私にだけ」「私の前でだけ」は指示で禁止しても 9回中2回出た（Gemma のくせ）。
+// これまでの会話テストでは、いじめや断りの場面でしか出ておらず、ふつうの会話（約1,000返事）では0回。
+// そこで、ケアの指示を足した往復だけ、返事の言葉を置きかえる（softenExclusiveWording）。
+// 吹き出し・声（response-queue-publisher.js）と会話の記録（core-chat-service.js）の両方にかける。
+//
 // 【環境変数】
 // CARE_NUDGE  'true'（既定）で有効、'false' で無効
 
@@ -159,8 +164,29 @@ function buildCareNudgeNote({ kind = 'suggest', home = false } = {}) {
   ].filter(Boolean).join('\n');
 }
 
+// ライムだけに頼らせる言い方を、ふつうの言い方にする。
+// 「私にだけ（は）」→「私に（は）」、「私の前でだけ（は）」→「私の前で（は）」、「私だけが」→「私が」
+const EXCLUSIVE_REPLACEMENTS = [
+  [/(私|わたし|ライム)(にだけ|だけに)/g, '$1に'],
+  [/(私|わたし|ライム)の前でだけ/g, '$1の前で'],
+  [/(私|わたし|ライム)だけが/g, '$1が'],
+];
+
+/**
+ * ケアの指示を足した往復の返事から、ライムだけに頼らせる言い方を取る。
+ * ふつうの会話には使わない（呼び出し側が、ケアの指示を足した往復だけでかける）。
+ */
+function softenExclusiveWording(text) {
+  let value = String(text ?? '');
+  for (const [pattern, replacement] of EXCLUSIVE_REPLACEMENTS) {
+    value = value.replace(pattern, replacement);
+  }
+  return value;
+}
+
 module.exports = {
   isCareNudgeEnabled,
   detectCareNudge,
   buildCareNudgeNote,
+  softenExclusiveWording,
 };

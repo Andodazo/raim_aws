@@ -135,6 +135,8 @@
 // v6.16: v6.15 のテストで3回中1回ずつ残った、「言ったらもっとひどくなりそう」への「私にだけ」、断りへの「私だけがきみの話を
 // 聞いてる」、「人間の友達いらない」への「私とゆっくり話してればいいじゃん」に対して、こわがっている発言も断りと同じ扱いにし、
 // 「ライムしかいない」の往復にも指示を足すようにした（lib/care-nudge.js）。ふつうの会話に反応しないよう、言葉はしぼっている。
+// v6.17: 「私にだけ」「私の前でだけ」は指示で禁止しても9回中2回出たので、ケアの指示を足した往復だけ、返事の言葉を
+// 「私に」「私の前で」に置きかえるようにした（lib/care-nudge.js の softenExclusiveWording）。ふつうの会話にはかけない。
 
 const DEFAULT_PERSONA = 'bright';
 const PERSONA_NAMES = Object.freeze(['bright', 'downer', 'twitter']);
@@ -147,7 +149,7 @@ function resolvePersonaName(name) {
 const RAIM_PERSONA = resolvePersonaName(process.env.RAIM_PERSONA);
 
 // 会話ログを比べるときに、どの人格で話したか分かるよう版名に含める
-const RAIM_SYSTEM_PROMPT_VERSION = `raim-system-v6.16-${RAIM_PERSONA}`;
+const RAIM_SYSTEM_PROMPT_VERSION = `raim-system-v6.17-${RAIM_PERSONA}`;
 
 // ─────────────────────────────────────────────
 // 時刻コンテキスト（JST）
