@@ -708,3 +708,18 @@ test('a slow Mantle makes ライム say a waiting line once per stage, but not f
   ]);
   assert.deepEqual(await run({ text: '', greeting: true }), []);
 });
+
+test('Core chat service passes the deadline to every Mantle call', async () => {
+  const calls = [];
+  const handleCoreChat = createCoreChatService(createDependencies(calls));
+  await handleCoreChat({
+    sub: 'user-1',
+    requestId: 'req-deadline',
+    text: 'こんにちは',
+    images: [],
+  }, { deadlineAt: 123456 });
+
+  const modelCalls = calls.filter(([name]) => name === 'model');
+  assert.ok(modelCalls.length >= 1);
+  assert.ok(modelCalls.every(([, input]) => input.deadlineAt === 123456));
+});

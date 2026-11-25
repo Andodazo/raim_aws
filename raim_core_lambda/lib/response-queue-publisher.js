@@ -52,6 +52,10 @@ function createResponseQueuePublisher({
   // 今の人格（'bright' | 'downer'）。クライアントへ知らせる。
   // 駅アラームの声など、アプリ側で鳴らすセリフを人格に合わせるため。
   persona = '',
+  // 声を待つ締め切り（epoch ms）。0 なら締め切りなし。
+  // Lambda が打ち切られる前に、残りの声をあきらめて stream.completed を送るため。
+  audioDeadlineAt = 0,
+  now = () => Date.now(),
 } = {}) {
   const queueUrl = requiredEnvironmentValue(env, 'RESPONSE_QUEUE_URL');
   const sqsClient = client || new SQSClient({
@@ -108,6 +112,9 @@ function createResponseQueuePublisher({
   // 最初のかたまりだけ「、」でも切って、早く声を出す。
   let firstChunkPending = true;
   let audioDeliveryChain = Promise.resolve();
+  // 締め切りで声をあきらめたら true。あとから合成が終わっても送らない
+  // （Lambda の環境は次の要求で使い回されるので、古い声が別の返事に混ざらないように）。
+  let audioAbandoned = false;
   // 合成も順番に1つずつにする（前の合成が終わってから次を始める）。
   let audioSynthesisChain = Promise.resolve();
   // v14: tool intro を送ったら true。本文の最初のdeltaで bubble_break を発火して false に戻す。
@@ -326,6 +333,10 @@ function createResponseQueuePublisher({
     audioDeliveryChain = audioDeliveryChain.then(async () => {
       const result = await ttsPromise;
 
+      if (audioAbandoned) {
+        return;
+      }
+
       if (isTtsFailure(result)) {
         const error = result.error || new Error(result.message || 'TTS failed');
         console.warn('TTS failed; continuing text stream:', {
@@ -353,6 +364,9 @@ function createResponseQueuePublisher({
       }
 
       for (let partIndex = 0; partIndex < parts.length; partIndex += 1) {
+        if (audioAbandoned) {
+          return;
+        }
         await send('stream.audio', {
           chunkId,
           format: result.format || 'wav',
@@ -371,6 +385,36 @@ function createResponseQueuePublisher({
         message: error.message,
       });
     });
+  }
+
+  /**
+   * 送り待ちの声を、締め切りまで待つ。
+   *
+   * 以前は締め切りなしで待っており、声の合成が長引くと Lambda が先に打ち切られ、
+   * stream.completed が届かずアプリの吹き出しが止まったままになり得た。
+   */
+  async function waitForAudio() {
+    if (!(audioDeadlineAt > 0)) {
+      await audioDeliveryChain;
+      return;
+    }
+    const waitMs = audioDeadlineAt - now();
+    if (waitMs <= 0) {
+      audioAbandoned = true;
+      return;
+    }
+    let timer = null;
+    const timedOut = await Promise.race([
+      audioDeliveryChain.then(() => false),
+      new Promise((resolve) => { timer = setTimeout(() => resolve(true), waitMs); }),
+    ]);
+    clearTimeout(timer);
+    if (timedOut) {
+      audioAbandoned = true;
+      console.warn('[TTS] audio not finished before the deadline; sending completed without it:', {
+        requestId,
+      });
+    }
   }
 
   async function publishTextChunk(text) {
@@ -421,7 +465,7 @@ function createResponseQueuePublisher({
     flushText: () => flushText(true),
 
     async drainAudio() {
-      await audioDeliveryChain;
+      await waitForAudio();
     },
 
     /**
@@ -446,7 +490,7 @@ function createResponseQueuePublisher({
       await flushText(true);
       // 本文がdeltaで一度も流れなかった場合でも、introの後に区切りを入れる。
       await maybeSendBubbleBreak();
-      await audioDeliveryChain;
+      await waitForAudio();
       return send('stream.completed', {
         text: result.text,
         // 会話スレッドの識別子。クライアントはこれを保持し、次回の送信で送り返す。

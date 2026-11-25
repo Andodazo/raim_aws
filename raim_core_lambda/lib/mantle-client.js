@@ -36,6 +36,10 @@
 //   先に文字が来た方を使う（並走）。既定値 5000ms（0 で並走しない）
 // - MANTLE_HEDGE_REGION: 並走の2本目を送るリージョン。既定値 us-west-2（オレゴン）
 // - MANTLE_MAX_OUTPUT_TOKENS: 最大出力token数。既定値 1024
+// - MANTLE_DEADLINE_MIN_CALL_MS: 締め切り（deadlineAt）までの残りがこれより短ければ、呼ばずに
+//   LLM_TIMEOUT にする。既定値 3000ms
+// - MANTLE_DEADLINE_MIN_RETRY_MS: 締め切りまでの残りがこれより短ければ、黙ったときの頼み直しをしない。
+//   既定値 10000ms
 //
 // APIキーはログやエラーdetailsへ出さないこと。
 //
@@ -545,6 +549,19 @@ function createCancelledError() {
   return error;
 }
 
+/**
+ * 締め切り（Lambda の残り時間から決めた時刻）までに Mantle が間に合わないときのエラー。
+ * 呼び出し側（sqs-core-handler）は stream.error を送って、SQS にはやり直させない。
+ */
+function createDeadlineError(remainingMs) {
+  const error = new Error(`Mantle deadline reached (${Math.max(0, Math.round(remainingMs))}ms left)`);
+  error.name = 'MantleDeadlineError';
+  error.code = 'MANTLE_DEADLINE';
+  error.coreErrorCode = 'LLM_TIMEOUT';
+  error.retriable = true;
+  return error;
+}
+
 /** リージョン名から Mantle の base URL を作る */
 function mantleBaseUrlForRegion(region) {
   return `https://bedrock-mantle.${String(region).trim()}.api.aws/openai/v1`;
@@ -605,6 +622,8 @@ function createMantleClient({
     baseUrl: baseUrlOverride = '',
     claim = null,
     cancelSignal = null,
+    // 締め切りから決めた、この1回の上限（ms）。0 なら MANTLE_TIMEOUT_MS どおり。
+    timeoutLimitMs = 0,
   }) {
     if (!mantleInput || typeof mantleInput !== 'object') {
       throw new Error('mantleInput is required');
@@ -624,7 +643,11 @@ function createMantleClient({
 
     const apiKeyHeader = String(env.MANTLE_API_KEY_HEADER || 'Authorization').trim();
     const apiKeyPrefix = String(env.MANTLE_API_KEY_PREFIX ?? 'Bearer').trim();
-    const timeoutMs = numberSetting(env, 'MANTLE_TIMEOUT_MS', 30000);
+    const configuredTimeoutMs = numberSetting(env, 'MANTLE_TIMEOUT_MS', 30000);
+    // 締め切りが近ければ、そこまでしか待たない（Lambda に打ち切られる前に stream.error を送るため）
+    const timeoutMs = timeoutLimitMs > 0
+      ? Math.max(1, Math.min(configuredTimeoutMs, timeoutLimitMs))
+      : configuredTimeoutMs;
     // 2. Mantleが応答しない場合にLambda実行時間を使い切らないよう、
     // AbortControllerでHTTP通信単体のタイムアウトを設ける。
     const controller = new AbortController();
@@ -804,10 +827,35 @@ function createMantleClient({
    * onWaiting({ stage }) は、待たせているときに呼ぶ（stage: 'slow' は少し遅いとき、'retry' は頼み直すとき）。
    * ライムに「待ってね」と言わせるのに使う。
    */
-  return async function createMantleResponse({ onWaiting = null, region = '', ...params }) {
+  return async function createMantleResponse({
+    onWaiting = null,
+    region = '',
+    // Mantle を待ってよい締め切り（epoch ms）。0 なら締め切りなし。
+    //
+    // 以前は締め切りが無く、「15秒黙ったら頼み直す」「1回30秒まで」をツールの数だけ重ねると
+    // Core Lambda の60秒を超え、stream.error も送れずに打ち切られていた。
+    deadlineAt = 0,
+    ...rawParams
+  }) {
     const firstOutputMs = numberSetting(env, 'MANTLE_FIRST_OUTPUT_TIMEOUT_MS', 15000);
     const slowNoticeMs = numberSetting(env, 'MANTLE_SLOW_NOTICE_MS', 8000);
     const hedgeMs = numberSetting(env, 'MANTLE_HEDGE_MS', 5000);
+    const minCallMs = numberSetting(env, 'MANTLE_DEADLINE_MIN_CALL_MS', 3000);
+    const minRetryMs = numberSetting(env, 'MANTLE_DEADLINE_MIN_RETRY_MS', 10000);
+    const remainingMs = () => (deadlineAt > 0 ? deadlineAt - Date.now() : Infinity);
+    // 呼ぶ直前に残り時間を確かめ、この1回の上限を締め切りまでにする
+    const withDeadline = (extra = {}) => {
+      const remaining = remainingMs();
+      if (remaining < minCallMs) {
+        throw createDeadlineError(remaining);
+      }
+      return Number.isFinite(remaining)
+        ? { ...rawParams, ...extra, timeoutLimitMs: remaining }
+        : { ...rawParams, ...extra };
+    };
+    // 黙ったときに頼み直してよいか（締め切りまで十分残っているか）
+    const canRetry = () => remainingMs() >= minRetryMs;
+    const params = rawParams;
     const notify = (stage) => {
       if (typeof onWaiting !== 'function') return;
       Promise.resolve()
@@ -820,25 +868,28 @@ function createMantleClient({
     const withRegion = (result, regionName) => ({ ...result, region: regionName });
 
     if (firstOutputMs <= 0) {
-      const result = await sendOnce({ ...params, baseUrl: primaryBaseUrl, slowNoticeMs, onSlow: () => notify('slow') });
+      const result = await sendOnce(withDeadline({ baseUrl: primaryBaseUrl, slowNoticeMs, onSlow: () => notify('slow') }));
       return withRegion(result, primaryRegion);
     }
 
     if (hedgeMs <= 0 || hedgeMs >= firstOutputMs) {
       try {
-        const result = await sendOnce({
-          ...params,
+        const result = await sendOnce(withDeadline({
           baseUrl: primaryBaseUrl,
           firstOutputMs,
           slowNoticeMs: slowNoticeMs < firstOutputMs ? slowNoticeMs : 0,
           onSlow: () => notify('slow'),
-        });
+        }));
         return withRegion(result, primaryRegion);
       } catch (error) {
         if (error.code !== 'MANTLE_NO_OUTPUT') throw error;
+        if (!canRetry()) {
+          console.warn(`[Mantle] nothing in ${firstOutputMs}ms; too close to the deadline to ask again`);
+          throw error;
+        }
         console.warn(`[Mantle] nothing in ${firstOutputMs}ms; asking once more`);
         notify('retry');
-        return withRegion(await sendOnce({ ...params, baseUrl: primaryBaseUrl }), primaryRegion);
+        return withRegion(await sendOnce(withDeadline({ baseUrl: primaryBaseUrl })), primaryRegion);
       }
     }
 
@@ -857,6 +908,9 @@ function createMantleClient({
       ? primaryRegion
       : String(env.MANTLE_HEDGE_REGION || 'us-west-2').trim() || primaryRegion;
     const hedgeBaseUrl = hedgeRegion === primaryRegion ? primaryBaseUrl : mantleBaseUrlForRegion(hedgeRegion);
+
+    // 1本目を出す前に、締め切りに間に合うか確かめる（間に合わなければここで投げる）
+    withDeadline();
 
     const outcome = await new Promise((resolve) => {
       const attempts = [];
@@ -889,9 +943,19 @@ function createMantleClient({
           }
           held.push([kind, args]);
         };
+        let sendParams;
+        try {
+          sendParams = withDeadline({ baseUrl });
+        } catch (error) {
+          attempt.promise = Promise.resolve();
+          attempt.done = true;
+          attempt.error = error;
+          attempts.push(attempt);
+          if (attempts.every((a) => a.done)) finish({ error: attempts[0].error || error });
+          return attempt;
+        }
         attempt.promise = sendOnce({
-          ...params,
-          baseUrl,
+          ...sendParams,
           cancelSignal: cancel.signal,
           onStreamEvent: (...args) => pass('event', args),
           onTextDelta: (...args) => pass('delta', args),
@@ -964,9 +1028,13 @@ function createMantleClient({
     if (outcome.result) return withRegion(outcome.result, outcome.regionName);
     if (outcome.error) throw outcome.error;
 
+    if (!canRetry()) {
+      console.warn(`[Mantle] nothing in ${firstOutputMs}ms from any region; too close to the deadline to ask again`);
+      throw createDeadlineError(remainingMs());
+    }
     console.warn(`[Mantle] nothing in ${firstOutputMs}ms from any region; asking once more`);
     notify('retry');
-    return withRegion(await sendOnce({ ...params, baseUrl: primaryBaseUrl }), primaryRegion);
+    return withRegion(await sendOnce(withDeadline({ baseUrl: primaryBaseUrl })), primaryRegion);
   };
 }
 

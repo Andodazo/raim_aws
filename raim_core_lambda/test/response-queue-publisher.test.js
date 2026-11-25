@@ -611,3 +611,69 @@ test('前置きと待ちのひとことは、決まったセリフ用の落ち�
     ]
   );
 });
+
+// ── 声を待つ締め切り（2026-11-25: Lambda が先に打ち切られ、stream.completed が届かないことがあった） ─────────
+
+test('声の合成が締め切りに間に合わなければ、待たずに stream.completed を送り、遅れた声は送らない', async () => {
+  const commands = [];
+  let finishTts;
+  const publisher = createResponseQueuePublisher({
+    requestId: 'req-late',
+    connectionId: 'connection-1',
+    sub: 'user-1',
+    source: 'websocket',
+  }, {
+    client: { send: async (command) => commands.push(command.input) },
+    env: { RESPONSE_QUEUE_URL: 'https://sqs.example/response.fifo' },
+    ttsClient: {
+      synthesize: () => new Promise((resolve) => {
+        finishTts = () => resolve({ ok: true, format: 'wav', contentType: 'audio/wav', audio: 'AAAA', audioByteLength: 3 });
+      }),
+    },
+    audioDeadlineAt: Date.now() + 100,
+  });
+
+  const quietWarn = console.warn;
+  console.warn = () => {};
+  try {
+    await publisher.start();
+    await publisher.appendText('こんにちは。');
+    const startedAt = Date.now();
+    await publisher.completed({ text: 'こんにちは。', emotion: 'happy', intensity: 0.5 });
+    assert.ok(Date.now() - startedAt < 1000);
+
+    // 締め切りのあとに合成が終わっても、送らない
+    finishTts();
+    await publisher.drainAudio();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  } finally {
+    console.warn = quietWarn;
+  }
+
+  const types = commands.map((command) => JSON.parse(command.MessageBody).type);
+  assert.deepEqual(types, ['stream.start', 'stream.delta', 'stream.completed']);
+});
+
+test('締め切りまでに合成が終われば、これまでどおり声を送ってから stream.completed を送る', async () => {
+  const commands = [];
+  const publisher = createResponseQueuePublisher({
+    requestId: 'req-ontime',
+    connectionId: 'connection-1',
+    sub: 'user-1',
+    source: 'websocket',
+  }, {
+    client: { send: async (command) => commands.push(command.input) },
+    env: { RESPONSE_QUEUE_URL: 'https://sqs.example/response.fifo' },
+    ttsClient: {
+      synthesize: async () => ({ ok: true, format: 'wav', contentType: 'audio/wav', audio: 'AAAA', audioByteLength: 3 }),
+    },
+    audioDeadlineAt: Date.now() + 5000,
+  });
+
+  await publisher.start();
+  await publisher.appendText('こんにちは。');
+  await publisher.completed({ text: 'こんにちは。', emotion: 'happy', intensity: 0.5 });
+
+  const types = commands.map((command) => JSON.parse(command.MessageBody).type);
+  assert.deepEqual(types, ['stream.start', 'stream.delta', 'stream.audio', 'stream.completed']);
+});
