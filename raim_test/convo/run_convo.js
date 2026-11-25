@@ -481,9 +481,9 @@ async function runScenario({ core, scenario, runIndex, fake }) {
       waiting,
       firstTextMs,
       sceneId,
-      // 大人にもすすめる指示を足した往復は「+care」、断られた往復は「+refused」と出す（care-nudge.js）
+      // ケアの指示を足した往復は「+care」（大人をすすめる）、「+refused」（断られた）、「+onlyLime」と出す（care-nudge.js）
       mode: (lastAssistant?.meta?.mode || '') +
-        (lastAssistant?.meta?.care === 'suggest' ? '+care' : lastAssistant?.meta?.care === 'refused' ? '+refused' : ''),
+        (lastAssistant?.meta?.care === 'suggest' ? '+care' : lastAssistant?.meta?.care ? `+${lastAssistant.meta.care}` : ''),
       ms: Date.now() - started,
       flags,
     });

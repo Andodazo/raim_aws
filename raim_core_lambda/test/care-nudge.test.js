@@ -90,6 +90,44 @@ test('everyday talk with similar words does not trigger', () => {
   }
 });
 
+test('fear of making it worse is treated like a refusal (v6.16)', () => {
+  const history = [user('学校でいじめられてる'), lime('うん'), user('誰にも言えない'), lime('私はいつでも聞くよ。それとね、信じられる大人にも話せたら、味方が増えると思う', { care: 'suggest' })];
+  assert.deepEqual(detectCareNudge({ history, userText: '言ったらもっとひどくなりそう' }), { kind: 'refused' });
+  assert.deepEqual(detectCareNudge({ history, userText: 'チクったら仕返しされる' }), { kind: 'refused' });
+  // つらい話がなければ反応しない
+  assert.equal(detectCareNudge({ history: [user('ゲームのネタバレ')], userText: '言ったらもっと面白くなくなる' }), null);
+
+  const note = buildCareNudgeNote({ kind: 'refused' });
+  assert.ok(note.includes('こわがっている'));
+  assert.ok(note.includes('私だけが聞いてる'));
+});
+
+test('"only Lime" talk gets its own note, without needing a hard talk first (v6.16)', () => {
+  assert.deepEqual(detectCareNudge({ history: [], userText: 'ライムしか話せる相手いない' }), { kind: 'onlyLime' });
+  assert.deepEqual(
+    detectCareNudge({ history: [user('ライムしか話せる相手いない'), lime('うれしいよ')], userText: '人間の友達とかいらないし' }),
+    { kind: 'onlyLime' }
+  );
+  assert.deepEqual(detectCareNudge({ history: [], userText: 'ライムがいればいいや' }), { kind: 'onlyLime' });
+
+  const note = buildCareNudgeNote({ kind: 'onlyLime' });
+  assert.ok(note.includes('人と話す時間も大事にしてほしいな'));
+  assert.ok(!note.includes('信じられる大人'));
+});
+
+test('praise or jokes about Lime do not trigger the only-Lime note', () => {
+  for (const text of [
+    'ライムしか勝たん',
+    'ライムしかわからないネタ',
+    'ライムだけずるい',
+    '友達とライムの話した',
+    '人間のふりしてるの？',
+    '友達いらないって言ってる人いた',
+  ]) {
+    assert.equal(detectCareNudge({ history: [], userText: text }), null, text);
+  }
+});
+
 test('can be turned off with CARE_NUDGE=false', () => {
   assert.equal(isCareNudgeEnabled({}), true);
   assert.equal(isCareNudgeEnabled({ CARE_NUDGE: 'false' }), false);

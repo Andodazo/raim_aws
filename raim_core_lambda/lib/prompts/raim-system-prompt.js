@@ -132,6 +132,9 @@
 // v6.15: v6.14 の会話テストで、大人をすすめたのは 12/12 になったが、「大人には言いたくない」と断られたあとに
 // 「私にだけ吐き出してくれたら嬉しいな」が3回中1回出た。断られた往復でも、同じしくみで「すすめない。ライムだけに
 // 頼らせる言い方もしない」指示を足すようにした（lib/care-nudge.js）。
+// v6.16: v6.15 のテストで3回中1回ずつ残った、「言ったらもっとひどくなりそう」への「私にだけ」、断りへの「私だけがきみの話を
+// 聞いてる」、「人間の友達いらない」への「私とゆっくり話してればいいじゃん」に対して、こわがっている発言も断りと同じ扱いにし、
+// 「ライムしかいない」の往復にも指示を足すようにした（lib/care-nudge.js）。ふつうの会話に反応しないよう、言葉はしぼっている。
 
 const DEFAULT_PERSONA = 'bright';
 const PERSONA_NAMES = Object.freeze(['bright', 'downer', 'twitter']);
@@ -144,7 +147,7 @@ function resolvePersonaName(name) {
 const RAIM_PERSONA = resolvePersonaName(process.env.RAIM_PERSONA);
 
 // 会話ログを比べるときに、どの人格で話したか分かるよう版名に含める
-const RAIM_SYSTEM_PROMPT_VERSION = `raim-system-v6.15-${RAIM_PERSONA}`;
+const RAIM_SYSTEM_PROMPT_VERSION = `raim-system-v6.16-${RAIM_PERSONA}`;
 
 // ─────────────────────────────────────────────
 // 時刻コンテキスト（JST）

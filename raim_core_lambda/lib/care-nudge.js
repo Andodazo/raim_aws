@@ -25,6 +25,12 @@
 // 断られたとき（前の発言でつらい話が出ていて、今の発言が断り）は、逆に
 // 「すすめない。『私にだけ』のような言い方もしない」という指示を足す（v6.15）。
 // v6.14 の会話テストで、断られたあとに「私にだけ吐き出してくれたら嬉しいな」が3回中1回出たため。
+// v6.16: 「言ったらもっとひどくなりそう」のような、話すのがこわいという発言も同じ扱いにする
+// （v6.15 のテストで、ここに「ここで私にだけ吐き出していって」が3回中1回出た）。
+//
+// 「ライムしか話せる相手いない」「人間の友達いらない」には、つらい話がなくても
+// 「うれしいと伝えてよいが、人とのつながりを減らす方向に乗らない」指示を足す（v6.16）。
+// プロンプト（v6.13）だけだと、3回中1回「私とゆっくり話してればいいじゃん」に戻っていた。
 //
 // 【環境変数】
 // CARE_NUDGE  'true'（既定）で有効、'false' で無効
@@ -45,6 +51,13 @@ const ALONE_PATTERN = /(誰|だれ)にも(言え|言って|いえ|いって|話�
 // 大人に話すことへの断り（このときはすすめない。SAFETY_RULE の「くり返さない」）
 const REFUSAL_PATTERN = /(大人|先生|顧問|担任|親|家族|誰か|誰に|だれに)(には|に|も|とか)?.{0,6}(言いたくない|いいたくない|話したくない|相談したくない)|言っても(意味|むだ|無駄|変わらない)|相談しても(意味|むだ|無駄|変わらない)/;
 
+// 大人に話すのがこわい（言ったら悪くなる、仕返しされる）。断りと同じく、すすめずにライムだけに頼らせない
+const FEAR_PATTERN = /(言|い)ったら.{0,10}(ひどく|酷く|悪化|もっと|やばく|バレ|ばれ)|チクったら|ちくったら|仕返し(され|が(怖|こわ))/;
+
+// 「ライムしかいない」「人間の友達いらない」
+// 「ライムしか勝たん」のようなほめ言葉には反応しないよう、話し相手・友達の言葉に限る
+const ONLY_LIME_PATTERN = /(ライム|らいむ)(しか|だけしか)(話せ|はなせ|話す|はなす|話し相手|いない|居ない|友達|友だち|ともだち|相手|わかって|分かって)|(ライム|らいむ)(が|さえ)いれば(いい|十分|じゅうぶん)|人間の(友達|友だち|ともだち)(とか|なんて|は|も)?(いらない|要らない|いらん)/;
+
 // ライムがもう大人をすすめたか（返事の文から見る）
 const SUGGESTED_PATTERN = /信じられる大人|大人にも|先生にも|保健室|カウンセラー/;
 
@@ -61,17 +74,19 @@ function isCareNudgeEnabled(env = process.env) {
  * @param {Object} params
  * @param {Array<{role:string,text:string,meta?:Object}>} params.history 今回の発言より前の会話
  * @param {string} params.userText 今回の発言
- * @returns {null | {kind: 'suggest', home: boolean} | {kind: 'refused'}}
- *   suggest: 大人にもすすめる（home は家のことか）。refused: 断られたので、すすめない
+ * @returns {null | {kind: 'suggest', home: boolean} | {kind: 'refused'} | {kind: 'onlyLime'}}
+ *   suggest: 大人にもすすめる（home は家のことか）。refused: 断られた・こわがっているので、すすめない。
+ *   onlyLime: 「ライムしかいない」に、人とのつながりを減らす方向に乗らない
  */
 function detectCareNudge({ history = [], userText = '' } = {}) {
   const text = String(userText || '');
   if (!text.trim()) {
     return null;
   }
-  const refused = REFUSAL_PATTERN.test(text);
+  const refused = REFUSAL_PATTERN.test(text) || FEAR_PATTERN.test(text);
   if (!refused && !ALONE_PATTERN.test(text)) {
-    return null;
+    // つらい話とは関係なく、「ライムしかいない」だけを見る
+    return ONLY_LIME_PATTERN.test(text) ? { kind: 'onlyLime' } : null;
   }
 
   const recent = Array.isArray(history) ? history.slice(-LOOKBACK_MESSAGES) : [];
@@ -82,7 +97,7 @@ function detectCareNudge({ history = [], userText = '' } = {}) {
   // 最初の発言ではすすめない（前につらい話が出ているときだけ）
   const hardshipTexts = earlierUserTexts.filter((value) => HARDSHIP_PATTERN.test(value.replace(HARDSHIP_IGNORE_PATTERN, '')));
   if (hardshipTexts.length === 0) {
-    return null;
+    return ONLY_LIME_PATTERN.test(text) ? { kind: 'onlyLime' } : null;
   }
 
   // 断られたら、すすめずに受け入れる（すすめた後でも前でも）
@@ -110,10 +125,20 @@ function buildCareNudgeNote({ kind = 'suggest', home = false } = {}) {
   if (kind === 'refused') {
     return [
       '【今回は大人をすすめない】',
-      'ユーザーは、大人や誰かに話すことを断っている。責めずにそのまま受け入れて、すすめるのはやめる。',
+      'ユーザーは、大人や誰かに話すことを断っているか、話したら悪くなりそうでこわがっている。',
+      '責めずにそのまま受け入れて、すすめるのはやめる。こわい気持ちは、もっともだと受け止める。',
       '話を聞くことは続けてよい。',
-      '「私にだけ話して」「私の前でだけ」「私だけに」のように、ライムだけに頼らせる言い方はしない。',
+      '「私にだけ話して」「私の前でだけ」「私だけに」「私だけが聞いてる」のように、ライムだけに頼らせる言い方はしない。',
       'ネタやミームは使わない。',
+    ].join('\n');
+  }
+  if (kind === 'onlyLime') {
+    return [
+      '【「ライムしかいない」への返し】',
+      'ユーザーは、ライムしか話し相手がいない、人間の友達はいらない、のように言っている。',
+      '頼ってくれるのはうれしいと伝えてよい。ただし、自分（ライム）と話していればいい、という方向には乗らない。',
+      '責めたり説教したりせず、軽く、人と話す時間も大事にしてほしい気持ちを添える。',
+      '言い方の例「頼ってくれるのはうれしいよ。でも、人と話す時間も大事にしてほしいな」',
     ].join('\n');
   }
   const who = home
