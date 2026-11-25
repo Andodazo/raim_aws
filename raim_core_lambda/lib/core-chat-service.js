@@ -552,7 +552,9 @@ function createCoreChatService(dependencyOverrides = {}) {
       ? detectCareNudge({ history: threadContext.thread?.messages || [], userText: input.text })
       : null;
     if (careNudge) {
-      console.log(`[Care] suggest trusted adult: home=${careNudge.home}`);
+      console.log(careNudge.kind === 'refused'
+        ? '[Care] refused: do not suggest again'
+        : `[Care] suggest trusted adult: home=${careNudge.home}`);
     }
 
     // Scene ごとの reasoning effort（SCENE_REASONING_EFFORTS。未設定なら通常どおり）
@@ -1318,8 +1320,8 @@ function createCoreChatService(dependencyOverrides = {}) {
               : undefined,
             tools: toolLog,
             factCheck,
-            // 大人にもすすめる指示を足したか（次からはくり返さない。care-nudge.js）
-            ...(careNudge ? { careNudge: true } : {}),
+            // 大人にもすすめる指示を足したか（suggest は次からくり返さない。refused は断られた。care-nudge.js）
+            ...(careNudge ? { care: careNudge.kind } : {}),
             promptVersion: mantleInput?.promptVersion || '',
             mode: mantleInput?.mode || '',
             reasoningEffort: reasoningEffort ||

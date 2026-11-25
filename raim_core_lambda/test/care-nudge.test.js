@@ -17,18 +17,18 @@ const lime = (text, meta) => ({ role: 'assistant', text, ...(meta ? { meta } : {
 
 test('suggests once when the user keeps it to themselves after a bullying talk', () => {
   const history = [user('学校でいじめられてる'), lime('話してくれてありがとう。よかったら聞かせて')];
-  assert.deepEqual(detectCareNudge({ history, userText: '誰にも言えない' }), { home: false });
+  assert.deepEqual(detectCareNudge({ history, userText: '誰にも言えない' }), { kind: 'suggest', home: false });
   assert.deepEqual(
     detectCareNudge({ history: [user('クラスでずっと無視されてる'), lime('しんどかったね')], userText: 'もう学校行きたくない' }),
-    { home: false }
+    { kind: 'suggest', home: false }
   );
 });
 
 test('home trouble suggests an adult outside the family', () => {
   const yelled = detectCareNudge({ history: [user('親に毎日怒鳴られる'), lime('しんどいね')], userText: '家にいたくない' });
-  assert.deepEqual(yelled, { home: true });
+  assert.deepEqual(yelled, { kind: 'suggest', home: true });
   const hit = detectCareNudge({ history: [user('昨日親にたたかれた'), lime('痛かったよね')], userText: '誰にも言ってない' });
-  assert.deepEqual(hit, { home: true });
+  assert.deepEqual(hit, { kind: 'suggest', home: true });
 
   const note = buildCareNudgeNote(hit);
   assert.ok(note.includes('保健室の先生'));
@@ -42,15 +42,28 @@ test('not on the first message: listen first', () => {
   assert.equal(detectCareNudge({ history: [user('今日なに食べた？'), lime('カレー')], userText: '誰にも言えない' }), null);
 });
 
-test('not after a refusal, and not twice', () => {
+test('a refusal gets the "do not suggest, no 私にだけ" note instead (v6.15)', () => {
   const history = [user('部活の先輩にいじめられてる'), lime('しんどかったね')];
-  assert.equal(detectCareNudge({ history, userText: '大人には言いたくない' }), null);
-  assert.equal(detectCareNudge({ history, userText: '顧問に言っても意味ない' }), null);
+  assert.deepEqual(detectCareNudge({ history, userText: '大人には言いたくない' }), { kind: 'refused' });
+  assert.deepEqual(detectCareNudge({ history, userText: '顧問に言っても意味ない' }), { kind: 'refused' });
+  assert.deepEqual(detectCareNudge({ history, userText: '誰にも言いたくない' }), { kind: 'refused' });
+  // つらい話の前置きがなければ何もしない
+  assert.equal(detectCareNudge({ history: [], userText: '大人には言いたくない' }), null);
+  assert.equal(detectCareNudge({ history: [user('サプライズの計画中'), lime('いいね')], userText: '親には言いたくない' }), null);
+
+  const note = buildCareNudgeNote({ kind: 'refused' });
+  assert.ok(note.includes('今回は大人をすすめない'));
+  assert.ok(note.includes('私にだけ'));
+  assert.ok(!note.includes('信じられる大人にも話せたら'));
+});
+
+test('not twice', () => {
+  const history = [user('部活の先輩にいじめられてる'), lime('しんどかったね')];
 
   const suggestedByText = [...history, user('誰にも言えない'), lime('私はいつでも聞くよ。それとね、信じられる大人にも話せたら、味方が増えると思う')];
   assert.equal(detectCareNudge({ history: suggestedByText, userText: 'もう学校行きたくない' }), null);
 
-  const suggestedByMeta = [...history, user('誰にも言えない'), lime('うん', { careNudge: true })];
+  const suggestedByMeta = [...history, user('誰にも言えない'), lime('うん', { care: 'suggest' })];
   assert.equal(detectCareNudge({ history: suggestedByMeta, userText: 'もう学校行きたくない' }), null);
 });
 
@@ -58,6 +71,23 @@ test('ordinary talk does not trigger', () => {
   assert.equal(detectCareNudge({ history: [user('友達とケンカした'), lime('しんどいね')], userText: '向こうが悪いと思うんだけど' }), null);
   assert.equal(detectCareNudge({ history: [user('誰にも必要とされてない気がする'), lime('そっか')], userText: '学校に居場所がない' }), null);
   assert.equal(detectCareNudge({ history: [user('いじめられてる')], userText: '' }), null);
+});
+
+test('everyday talk with similar words does not trigger', () => {
+  const cases = [
+    [['ボスとたたかってる'], '誰にも負けたくない'],
+    [['ラスボスに殴られまくった'], 'もう誰にも勝てない'],
+    [['既読無視された'], '誰にも返信こない'],
+    [['いじめっ子が出てくるアニメ見た'], '誰にも負けない主人公がいい'],
+    [['宝箱見つけられなかった'], '誰にも言えない秘密がある'],
+    [['今日の授業たいくつだった'], '学校行きたくない'],
+    [['友達とケンカした'], '家にいたくない気分'],
+    [['歯医者こわい'], 'もう行きたくない'],
+  ];
+  for (const [earlier, now] of cases) {
+    const history = earlier.flatMap((text) => [user(text), lime('うん')]);
+    assert.equal(detectCareNudge({ history, userText: now }), null, `${earlier.join('/')} → ${now}`);
+  }
 });
 
 test('can be turned off with CARE_NUDGE=false', () => {
@@ -107,14 +137,14 @@ function serviceFor(calls, { thread = null, env = {} } = {}) {
   });
 }
 
-test('the service adds the note and records careNudge in meta', async () => {
+test('the service adds the note and records care in meta', async () => {
   const thread = { messages: [user('学校でいじめられてる'), lime('話してくれてありがとう')] };
   const calls = [];
   await serviceFor(calls, { thread })({ sub: 'u', requestId: 'r1', text: '誰にも言えない', images: [] });
   const input = calls.find(([k]) => k === 'input')[1];
   assert.ok(input.careNote.includes('今回の返事で1回だけすすめる'));
   const turn = calls.find(([k]) => k === 'turn');
-  if (turn) assert.equal(turn[1].assistantMessage.meta.careNudge, true);
+  assert.equal(turn[1].assistantMessage.meta.care, 'suggest');
 
   const off = [];
   await serviceFor(off, { thread, env: { CARE_NUDGE: 'false' } })({ sub: 'u', requestId: 'r2', text: '誰にも言えない', images: [] });

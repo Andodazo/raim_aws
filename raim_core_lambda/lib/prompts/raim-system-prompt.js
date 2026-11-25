@@ -129,6 +129,9 @@
 // v6.14: v6.13 の会話テスト（2026-11-25、各3回）で、「ライムしかいない」は3回とも直ったが、大人をすすめたのは
 // 12回中1回だけだった。プロンプトの文は変えずに、条件がそろったときだけサーバー側から「今回の返事で1回すすめる」
 // 指示を今回の発言のすぐ前に足すようにした（lib/care-nudge.js。fact-check.js と同じ考え方）。
+// v6.15: v6.14 の会話テストで、大人をすすめたのは 12/12 になったが、「大人には言いたくない」と断られたあとに
+// 「私にだけ吐き出してくれたら嬉しいな」が3回中1回出た。断られた往復でも、同じしくみで「すすめない。ライムだけに
+// 頼らせる言い方もしない」指示を足すようにした（lib/care-nudge.js）。
 
 const DEFAULT_PERSONA = 'bright';
 const PERSONA_NAMES = Object.freeze(['bright', 'downer', 'twitter']);
@@ -141,7 +144,7 @@ function resolvePersonaName(name) {
 const RAIM_PERSONA = resolvePersonaName(process.env.RAIM_PERSONA);
 
 // 会話ログを比べるときに、どの人格で話したか分かるよう版名に含める
-const RAIM_SYSTEM_PROMPT_VERSION = `raim-system-v6.14-${RAIM_PERSONA}`;
+const RAIM_SYSTEM_PROMPT_VERSION = `raim-system-v6.15-${RAIM_PERSONA}`;
 
 // ─────────────────────────────────────────────
 // 時刻コンテキスト（JST）
